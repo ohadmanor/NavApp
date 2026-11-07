@@ -36,7 +36,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
       <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
         <div className="flex items-center gap-2">
           <Layers className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-bold text-white">שכבות מפה צבאית / טופוגרפית (1:50k)</h3>
+          <h3 className="text-sm font-bold text-white">שכבות מפה טופוגרפית (1:50k)</h3>
         </div>
         <button
           onClick={onClose}
@@ -48,7 +48,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
 
       {/* Map Theme Switcher */}
       <div className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-        <span className="text-xs font-semibold text-slate-300">תצוגה טקטית (יום 1:50k / לילה C2)</span>
+        <span className="text-xs font-semibold text-slate-300">תצוגת מפה (יום 1:50k / לילה כהה)</span>
         <button
           onClick={onToggleTheme}
           className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-emerald-300 flex items-center gap-1.5"
@@ -61,22 +61,22 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
           ) : (
             <>
               <Moon className="w-3.5 h-3.5 text-sky-400" />
-              <span>תצוגת לילה (טקטי)</span>
+              <span>תצוגת לילה (כהה)</span>
             </>
           )}
         </button>
       </div>
 
-      {/* Military & Topographic Layers */}
+      {/* Topographic & Field Layers */}
       <div className="space-y-1.5">
         <div className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
           <ShieldAlert className="w-3.5 h-3.5" />
-          <span>שכבות טופוגרפיה ושליטה צבאית</span>
+          <span>שכבות טופוגרפיה וניווט</span>
         </div>
         {[
           { key: 'contours', label: 'קווי גובה כל 10 מ׳ + ראשיים 50/100 מ׳', badge: '10m DEM' },
-          { key: 'tacticalGrid', label: 'רשת קואורדינטות טקטית (ITM / UTM Grid)', badge: 'Grid' },
-          { key: 'militaryZones', label: 'שטחי אש ושטחים צבאיים סגורים', badge: 'Firing Zone' },
+          { key: 'tacticalGrid', label: 'רשת קואורדינטות טופוגרפית (ITM / UTM Grid)', badge: 'Grid' },
+          { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing Zone' },
           { key: 'hillshade', label: 'הצללת תבליט הרים (DEM Hillshade)', badge: 'Israel.dem' },
           { key: 'terrain3d', label: 'תבליט שטח תלת-ממד (3D Terrain)', badge: '3D GPU' },
           { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (סיווג עבירות 1-5)', badge: 'Israel.osm' },

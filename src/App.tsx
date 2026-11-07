@@ -924,14 +924,14 @@ export const App: React.FC = () => {
         </button>
       </div>
 
-      {/* Military Tactical HUD Bar (ITM / 8-Digit IDF Grid / UTM 36N / 10m DEM Altitude) */}
+      {/* Tactical HUD Bar (ITM / 8-Digit Grid / UTM 36N / 10m DEM Altitude) */}
       <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none bg-slate-950/95 backdrop-blur-md border border-amber-500/40 rounded-2xl px-4 py-1.5 text-xs font-mono text-slate-100 flex flex-wrap items-center justify-center gap-3 shadow-2xl">
         <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
           <Mountain className="w-3.5 h-3.5" />
           <span>גובה: {cursorCoords.ele !== null ? `${cursorCoords.ele}m` : '---'} (קווי גובה: 10m)</span>
         </span>
         <span className="text-slate-600">|</span>
-        <span className="text-amber-300 font-bold" title="8-Digit Military Grid Reference (נ.צ. צבאי)">
+        <span className="text-amber-300 font-bold" title="8-Digit Grid Reference (נ.צ. 8 ספרות)">
           נ.צ. {milCoords.idfGrid8Digit}
         </span>
         <span className="text-slate-600 hidden sm:inline">|</span>

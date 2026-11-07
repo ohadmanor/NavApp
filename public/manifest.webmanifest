@@ -1,5 +1,5 @@
 {
-  "name": "NavApp — ניווט שטח טופוגרפי צבאי 1:50,000",
+  "name": "NavApp — ניווט שטח טופוגרפי 1:50,000",
   "short_name": "NavApp IL",
   "description": "מערכת ניווט שטח טופוגרפית 100% אופליין מבוססת MapLibre GL JS ו-PMTiles (Israel.dem + Israel.osm)",
   "lang": "he-IL",
