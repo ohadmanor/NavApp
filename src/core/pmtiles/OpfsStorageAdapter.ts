@@ -36,7 +36,8 @@ export class OpfsStorageAdapter {
   static async saveOrReplaceFromStream(
     fileName: string,
     sourceUrlOrBlob: string | Blob,
-    onProgress?: (loadedBytes: number, totalBytes: number) => void
+    onProgress?: (loadedBytes: number, totalBytes: number) => void,
+    signal?: AbortSignal
   ): Promise<File> {
     const dir = await this.getMapsDirHandle();
     const tempFileName = `${fileName}.tmp`;
@@ -45,7 +46,7 @@ export class OpfsStorageAdapter {
 
     try {
       if (typeof sourceUrlOrBlob === 'string') {
-        const response = await fetch(sourceUrlOrBlob);
+        const response = await fetch(sourceUrlOrBlob, { signal });
         if (!response.ok || !response.body) {
           throw new Error(`Failed to fetch ${sourceUrlOrBlob}: HTTP ${response.status}`);
         }
@@ -62,6 +63,9 @@ export class OpfsStorageAdapter {
             onProgress?.(loaded, total);
           }
         }
+        if (total > 0 && loaded !== total) {
+          throw new Error(`Incomplete download: ${loaded} of ${total} bytes`);
+        }
       } else {
         const total = sourceUrlOrBlob.size;
         const chunkSize = 4 * 1024 * 1024; // 4 MB chunks
@@ -76,7 +80,17 @@ export class OpfsStorageAdapter {
       }
       await writable.close();
 
-      // Copy validated temp file into final target handle
+      // Prefer an atomic rename (no second multi-GB copy). Fall back to copy on older engines.
+      const movable = tempHandle as FileSystemFileHandle & {
+        move?: (name: string) => Promise<void>;
+      };
+      if (typeof movable.move === 'function') {
+        await dir.removeEntry(fileName).catch(() => {});
+        await movable.move(fileName);
+        const movedHandle = await dir.getFileHandle(fileName, { create: false });
+        return await movedHandle.getFile();
+      }
+
       const tempFile = await tempHandle.getFile();
       const finalHandle = await dir.getFileHandle(fileName, { create: true });
       const finalWritable = await finalHandle.createWritable();
@@ -88,6 +102,30 @@ export class OpfsStorageAdapter {
       await writable.abort().catch(() => {});
       await dir.removeEntry(tempFileName).catch(() => {});
       throw err;
+    }
+  }
+
+  /** Deletes a stored archive (and any leftover temp file) from OPFS. */
+  static async removeFile(fileName: string): Promise<void> {
+    if (!this.isSupported()) return;
+    const dir = await this.getMapsDirHandle();
+    await dir.removeEntry(fileName).catch(() => {});
+    await dir.removeEntry(`${fileName}.tmp`).catch(() => {});
+  }
+
+  /** Returns browser storage quota/usage and requests persistent storage so files aren't evicted. */
+  static async getStorageEstimate(): Promise<{ quota: number; usage: number; persisted: boolean }> {
+    let persisted = false;
+    try {
+      persisted = (await navigator.storage.persist?.()) ?? false;
+    } catch {
+      /* ignore */
+    }
+    try {
+      const est = await navigator.storage.estimate();
+      return { quota: est.quota ?? 0, usage: est.usage ?? 0, persisted };
+    } catch {
+      return { quota: 0, usage: 0, persisted };
     }
   }
 

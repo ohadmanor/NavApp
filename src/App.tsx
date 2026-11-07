@@ -424,7 +424,6 @@ export const App: React.FC = () => {
         maxPitch: 75,
         fadeDuration: 0,
         refreshExpiredTiles: false,
-        maxParallelImageRequests: 16,
         attributionControl: false,
       });
 

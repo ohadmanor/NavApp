@@ -10,7 +10,7 @@ import {
   type RangeResponse,
 } from 'pmtiles';
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
-import { pmtilesUrl } from '../dataUrls';
+import { pmtilesUrl, REMOTE_DATA_ORIGIN } from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
 import { registerOfflineRtlTextPlugin } from '../style/hebrewBidiProcessor';
@@ -109,7 +109,7 @@ export class PMTilesRegistry {
     const mountKey = `https://localhost/__pmtiles_local__/${id}/${file.lastModified || 0}-${Date.now()}.pmtiles`;
     const customSource: Source = {
       getKey: () => mountKey,
-      getBytes: (offset, length, signal, etag) => fileSource.getBytes(offset, length, signal, etag),
+      getBytes: (offset, length) => fileSource.getBytes(offset, length),
     };
     return this.registerArchiveSource(
       id,
@@ -126,6 +126,25 @@ export class PMTilesRegistry {
    * Hot-swaps Israel.osm.pmtiles from a newly selected local File or remote URL
    * while leaving the 1.40 GB Israel.dem.pmtiles untouched.
    */
+  /**
+   * Downloads Israel.dem.pmtiles or Israel.osm.pmtiles from the hosted Firebase site into the
+   * device's persistent storage (OPFS) on user request, then mounts the local copy so the map
+   * works 100% offline.
+   */
+  async downloadOfflineArchive(
+    id: 'israel-dem' | 'israel-osm',
+    onProgress?: (loaded: number, total: number) => void,
+    signal?: AbortSignal
+  ): Promise<MountedArchiveInfo> {
+    if (!OpfsStorageAdapter.isSupported()) {
+      throw new Error('Offline storage (OPFS) is not supported on this device/browser.');
+    }
+    const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
+    const url = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
+    const file = await OpfsStorageAdapter.saveOrReplaceFromStream(fileName, url, onProgress, signal);
+    return this.mountFromFile(id, fileName, file, id === 'israel-dem', 'opfs');
+  }
+
   async replaceOsmArchive(
     newSource: { kind: 'file'; file: File; persistToOpfs?: boolean } | { kind: 'url'; url: string },
     onProgress?: (loaded: number, total: number) => void

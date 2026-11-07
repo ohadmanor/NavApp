@@ -9,9 +9,13 @@ import {
   FolderOpen,
   Globe,
   FileUp,
+  Download,
+  Trash2,
+  Ban,
 } from 'lucide-react';
 import type { MountedArchiveInfo } from '../../core/pmtiles/PMTilesRegistry';
 import { pmtilesRegistry } from '../../core/pmtiles/PMTilesRegistry';
+import { OpfsStorageAdapter } from '../../core/pmtiles/OpfsStorageAdapter';
 import { CommunityPoiImporter } from '../../core/pois/CommunityPoiImporter';
 import { RouteManager } from '../../core/navigation/RouteManager';
 
@@ -37,6 +41,9 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [progressPct, setProgressPct] = useState<number | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [downloading, setDownloading] = useState<'israel-dem' | 'israel-osm' | null>(null);
+  const [dlProgress, setDlProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const osmFileInputRef = useRef<HTMLInputElement>(null);
   const demFileInputRef = useRef<HTMLInputElement>(null);
@@ -50,6 +57,72 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     }
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  const ARCHIVE_SIZES = { 'israel-dem': 1402183369, 'israel-osm': 112434955 } as const;
+  const ARCHIVE_FILES = {
+    'israel-dem': 'Israel.dem.pmtiles',
+    'israel-osm': 'Israel.osm.pmtiles',
+  } as const;
+
+  const handleDownloadOffline = async (id: 'israel-dem' | 'israel-osm') => {
+    if (!demInfo || !osmInfo || downloading) return;
+    if (!OpfsStorageAdapter.isSupported()) {
+      setStatusMessage('שגיאה: אחסון אופליין (OPFS) אינו נתמך במכשיר / בדפדפן זה.');
+      return;
+    }
+    const needed = ARCHIVE_SIZES[id];
+    const est = await OpfsStorageAdapter.getStorageEstimate();
+    if (est.quota > 0 && est.quota - est.usage < needed * 1.05) {
+      setStatusMessage(
+        `אין מספיק מקום אחסון פנוי: נדרש ${formatSize(needed)}, פנוי ${formatSize(
+          Math.max(0, est.quota - est.usage)
+        )}.`
+      );
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setDownloading(id);
+    setIsBusy(true);
+    setDlProgress({ loaded: 0, total: needed });
+    setStatusMessage(`מוריד את ${ARCHIVE_FILES[id]} מ-Firebase לשימוש אופליין...`);
+    try {
+      const mounted = await pmtilesRegistry.downloadOfflineArchive(
+        id,
+        (loaded, total) => setDlProgress({ loaded, total: total || needed }),
+        controller.signal
+      );
+      if (id === 'israel-dem') onArchivesUpdated(mounted, osmInfo);
+      else onArchivesUpdated(demInfo, mounted);
+      setStatusMessage(`✓ ${ARCHIVE_FILES[id]} ירד ונשמר במכשיר – המפה פועלת כעת ללא אינטרנט!`);
+    } catch (err: any) {
+      setStatusMessage(
+        err?.name === 'AbortError'
+          ? 'ההורדה בוטלה.'
+          : `שגיאה בהורדה: ${err?.message || err}`
+      );
+    } finally {
+      setDownloading(null);
+      setDlProgress(null);
+      setIsBusy(false);
+      abortRef.current = null;
+    }
+  };
+
+  const handleCancelDownload = () => abortRef.current?.abort();
+
+  const handleRemoveOffline = async (id: 'israel-dem' | 'israel-osm') => {
+    if (!window.confirm(`למחוק את העותק המקומי של ${ARCHIVE_FILES[id]}? המפה תחזור לטעינה מהאינטרנט.`)) {
+      return;
+    }
+    await OpfsStorageAdapter.removeFile(ARCHIVE_FILES[id]);
+    window.location.reload();
+  };
+
+  const isLocalCopy = (info: MountedArchiveInfo | null) =>
+    !!info && (info.record.storageKind === 'opfs' || info.record.storageKind === 'user-file');
+
 
   const handleReplaceOsmFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -315,6 +388,98 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Offline Download Card */}
+        <div className="p-4 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-3">
+          <div className="flex items-center gap-2">
+            <Download className="w-4 h-4 text-amber-400" />
+            <h4 className="text-sm font-bold text-white" dir="rtl">
+              הורדת מפות לשימוש אופליין (מ-Firebase למכשיר)
+            </h4>
+          </div>
+          <p className="text-xs text-slate-400" dir="rtl">
+            ההורדה מתבצעת לפי בקשה בלבד ונשמרת באחסון הקבוע של המכשיר. מומלץ להוריד ב-Wi-Fi.
+            לאחר ההורדה המפה פועלת ללא חיבור לאינטרנט.
+          </p>
+
+          {(['israel-osm', 'israel-dem'] as const).map((id) => {
+            const info = id === 'israel-dem' ? demInfo : osmInfo;
+            const local = isLocalCopy(info);
+            const active = downloading === id;
+            const pct =
+              active && dlProgress && dlProgress.total > 0
+                ? Math.min(100, Math.round((dlProgress.loaded / dlProgress.total) * 100))
+                : 0;
+            return (
+              <div
+                key={id}
+                className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-mono text-slate-200">
+                    {ARCHIVE_FILES[id]}{' '}
+                    <span className="text-slate-500">({formatSize(ARCHIVE_SIZES[id])})</span>
+                  </div>
+                  <span
+                    className={`text-xs font-semibold ${
+                      local ? 'text-emerald-400' : 'text-amber-300'
+                    }`}
+                  >
+                    {local ? '✓ שמור במכשיר (אופליין)' : 'מקוון בלבד'}
+                  </span>
+                </div>
+
+                {active && dlProgress && (
+                  <div className="space-y-1">
+                    <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-amber-500 transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className="text-xs font-mono text-slate-400 flex justify-between">
+                      <span>
+                        {formatSize(dlProgress.loaded)} / {formatSize(dlProgress.total)}
+                      </span>
+                      <span>{pct}%</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  {active ? (
+                    <button
+                      onClick={handleCancelDownload}
+                      className="flex-1 py-2 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-xs font-semibold text-white flex items-center justify-center gap-2"
+                    >
+                      <Ban className="w-4 h-4" />
+                      <span>בטל הורדה</span>
+                    </button>
+                  ) : (
+                    <button
+                      disabled={isBusy || !demInfo || !osmInfo}
+                      onClick={() => handleDownloadOffline(id)}
+                      className="flex-1 py-2 px-3 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-xs font-semibold text-white flex items-center justify-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>{local ? 'הורד מחדש / עדכן' : 'הורד לשימוש אופליין'}</span>
+                    </button>
+                  )}
+                  {local && !active && (
+                    <button
+                      disabled={isBusy}
+                      onClick={() => handleRemoveOffline(id)}
+                      className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-red-300 flex items-center gap-1"
+                      title="מחק עותק מקומי"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {/* Community Importer Card (Amud Anan / Off-Road / Israel Hiking) */}

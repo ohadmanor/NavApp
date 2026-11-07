@@ -30,3 +30,4 @@ export function bundledDataUrl(fileName: string): string {
       : 'http://localhost:5173';
   return `${origin}/data/${fileName}`;
 }
+
