@@ -1,0 +1,17 @@
+{
+  "appId": "com.navapp.outdoor.israel",
+  "appName": "NavApp Israel Outdoor",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "capacitor",
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}
+

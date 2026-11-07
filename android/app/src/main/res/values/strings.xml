@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NavApp Israel Outdoor</string>
+    <string name="title_activity_main">NavApp Israel Outdoor</string>
+    <string name="package_name">com.navapp.outdoor.israel</string>
+    <string name="custom_url_scheme">com.navapp.outdoor.israel</string>
+</resources>

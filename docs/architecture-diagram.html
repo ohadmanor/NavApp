@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NavApp — Full System Architecture Diagram</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --background: #0f172a;
+      --content: #1e293b;
+      --card: #111827;
+      --border: #334155;
+      --foreground: #f8fafc;
+      --muted-foreground: #94a3b8;
+      --primary: #10b981;
+      --primary-foreground: #052e16;
+    }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-6">
+  <div class="max-w-7xl mx-auto space-y-6">
+    <!-- Header Banner -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-6 shadow-sm flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <span class="px-2.5 py-1 rounded-md text-xs font-semibold bg-[var(--primary)] text-[var(--primary-foreground)]">
+            ARCHITECTURE BLUEPRINT
+          </span>
+          <span class="text-xs font-medium text-[var(--muted-foreground)]">
+            Web PWA • Android • iOS (Capacitor + MapLibre + PMTiles)
+          </span>
+        </div>
+        <h1 class="text-2xl font-bold mt-2 text-[var(--foreground)]">
+          NavApp — Outdoor Map Navigation &amp; Offline PMTiles Architecture
+        </h1>
+        <p class="text-sm text-[var(--muted-foreground)] mt-1">
+          Interactive system diagram inspired by IsraelHikingMap, MapLibre GL JS, and Protomaps PMTiles. Click any module or switch modes to inspect data flows.
+        </p>
+      </div>
+
+      <!-- Mode Switcher Tabs -->
+      <div class="flex flex-wrap gap-2 bg-[var(--content)] p-1.5 rounded-xl border border-[var(--border)]">
+        <button id="tab-layers" onclick="switchTab('layers')" class="px-3.5 py-2 rounded-lg text-xs font-semibold transition-all bg-[var(--primary)] text-[var(--primary-foreground)]">
+          1. 5-Layer Architecture
+        </button>
+        <button id="tab-flow" onclick="switchTab('flow')" class="px-3.5 py-2 rounded-lg text-xs font-semibold transition-all text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          2. Offline vs Online Flow
+        </button>
+        <button id="tab-pmtiles" onclick="switchTab('pmtiles')" class="px-3.5 py-2 rounded-lg text-xs font-semibold transition-all text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          3. PMTiles Storage &amp; Byte Slicing
+        </button>
+      </div>
+    </div>
+
+    <!-- VIEW 1: 5-LAYER SYSTEM ARCHITECTURE -->
+    <div id="view-layers" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <!-- Left 8 Cols: Interactive Layered Stack -->
+      <div class="lg:col-span-8 space-y-4">
+        <!-- Layer 1: UI & Outdoor Navigation Features -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-bold uppercase tracking-wider text-[var(--primary)]">
+              Layer 1 — Shared Application UI &amp; Outdoor Navigation (React + TypeScript)
+            </span>
+            <span class="text-xs text-[var(--muted-foreground)]">src/components/* &amp; src/core/navigation/*</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+            <button onclick="selectNode('ui-viewport')" id="node-ui-viewport" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">MapViewport</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">2D/3D Canvas, Compass, Scale, Locate</div>
+            </button>
+            <button onclick="selectNode('ui-routes')" id="node-ui-routes" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">GPX / KML Route Engine</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Turf.js Snapping &amp; Off-Route Alerts</div>
+            </button>
+            <button onclick="selectNode('ui-elevation')" id="node-ui-elevation" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">Elevation Profile</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Offline RGB DEM Pixel Decoder</div>
+            </button>
+            <button onclick="selectNode('ui-catalog')" id="node-ui-catalog" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">Offline Map Manager</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Download, Resume, Local File Picker</div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Connector Arrow -->
+        <div class="flex justify-center items-center gap-6 text-xs text-[var(--muted-foreground)]">
+          <span>▼ Style JSON &amp; GeoJSON Overlays</span>
+          <span>▼ Camera &amp; DEM Queries</span>
+        </div>
+
+        <!-- Layer 2: MapLibre GL JS Rendering & Offline Style Engine -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-bold uppercase tracking-wider text-[var(--primary)]">
+              Layer 2 — MapLibre GL JS WebGL Engine &amp; Offline Cartography
+            </span>
+            <span class="text-xs text-[var(--muted-foreground)]">src/core/style/* &amp; public/assets/*</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+            <button onclick="selectNode('ml-style')" id="node-ml-style" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">Dynamic Style Builder</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">In-Memory Style JSON (0 Network)</div>
+            </button>
+            <button onclick="selectNode('ml-trails')" id="node-ml-trails" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">Topo &amp; Trail Hierarchy</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Hiking Blazes, 4x4, MTB, Springs</div>
+            </button>
+            <button onclick="selectNode('ml-terrain')" id="node-ml-terrain" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">Contours &amp; 3D Hillshade</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Vector Contours + Raster-DEM Relief</div>
+            </button>
+            <button onclick="selectNode('ml-assets')" id="node-ml-assets" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">Bundled Fonts &amp; Sprites</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Local PBF Glyphs &amp; Outdoor Icons</div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Connector Arrow -->
+        <div class="flex justify-center items-center gap-6 text-xs text-[var(--muted-foreground)]">
+          <span>▼ maplibregl.addProtocol("pmtiles", protocol.tile)</span>
+          <span>▼ Tile Request: pmtiles://&lt;archive-id&gt;/{z}/{x}/{y}</span>
+        </div>
+
+        <!-- Layer 3: Universal PMTiles Protocol & Source Router -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-bold uppercase tracking-wider text-[var(--primary)]">
+              Layer 3 — Universal PMTiles Protocol &amp; Byte-Range Router
+            </span>
+            <span class="text-xs text-[var(--muted-foreground)]">src/core/pmtiles/*</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+            <button onclick="selectNode('pm-registry')" id="node-pm-registry" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">PMTilesRegistry</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Hilbert Z/X/Y Directory Resolver</div>
+            </button>
+            <button onclick="selectNode('pm-fetch')" id="node-pm-fetch" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">FetchSource (Online)</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">HTTP 206 Range: bytes=offset-end</div>
+            </button>
+            <button onclick="selectNode('pm-file')" id="node-pm-file" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">FileSource (Web Local)</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">Blob.slice(offset, offset+len)</div>
+            </button>
+            <button onclick="selectNode('pm-native')" id="node-pm-native" class="node-btn text-left p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+              <div class="text-xs font-bold text-[var(--foreground)]">NativeSliceSource (Mobile)</div>
+              <div class="text-xs text-[var(--muted-foreground)] mt-1">RandomAccessFile / NSFileHandle</div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Connector Arrow -->
+        <div class="flex justify-center items-center gap-6 text-xs text-[var(--muted-foreground)]">
+          <span>▼ getBytes(offset, length)</span>
+          <span>▼ Persistent Offline Storage &amp; Sensors</span>
+        </div>
+
+        <!-- Layer 4 & 5: Storage Persistence & Platform Bridges -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- Web PWA Target -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+            <div class="text-xs font-bold uppercase tracking-wider text-[var(--primary)] mb-2">
+              Platform A — Web App / PWA
+            </div>
+            <div class="space-y-2">
+              <button onclick="selectNode('plat-web')" id="node-plat-web" class="node-btn w-full text-left p-2.5 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+                <div class="text-xs font-bold text-[var(--foreground)]">OPFS + Service Worker</div>
+                <div class="text-xs text-[var(--muted-foreground)] mt-0.5">Origin Private File System (/maps/*.pmtiles), Local File Picker &amp; Dexie.js IndexedDB</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Android Capacitor Target -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+            <div class="text-xs font-bold uppercase tracking-wider text-[var(--primary)] mb-2">
+              Platform B — Android (Capacitor)
+            </div>
+            <div class="space-y-2">
+              <button onclick="selectNode('plat-android')" id="node-plat-android" class="node-btn w-full text-left p-2.5 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+                <div class="text-xs font-bold text-[var(--foreground)]">Android Native Bridge</div>
+                <div class="text-xs text-[var(--muted-foreground)] mt-0.5">Directory.Data / SD Card + HTTP 206 WebViewAssetLoader + Foreground GPS Service</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- iOS Capacitor Target -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 shadow-sm">
+            <div class="text-xs font-bold uppercase tracking-wider text-[var(--primary)] mb-2">
+              Platform C — iOS (Capacitor)
+            </div>
+            <div class="space-y-2">
+              <button onclick="selectNode('plat-ios')" id="node-plat-ios" class="node-btn w-full text-left p-2.5 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] transition-all">
+                <div class="text-xs font-bold text-[var(--foreground)]">iOS Native Bridge</div>
+                <div class="text-xs text-[var(--muted-foreground)] mt-0.5">Application Support (No-iCloud Backup) + WKURLSchemeHandler + CoreLocation</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right 4 Cols: Live Component Inspector Panel -->
+      <div class="lg:col-span-4">
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 shadow-sm sticky top-6 space-y-4">
+          <div class="flex items-center justify-between border-b border-[var(--border)] pb-3">
+            <div>
+              <span id="insp-badge" class="px-2 py-0.5 rounded text-xs font-semibold bg-[var(--primary)] text-[var(--primary-foreground)]">
+                Layer 3 • Core Engine
+              </span>
+              <h2 id="insp-title" class="text-lg font-bold text-[var(--foreground)] mt-1.5">
+                PMTilesRegistry
+              </h2>
+            </div>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Workspace Path</div>
+            <code id="insp-path" class="block mt-1 text-xs p-2 rounded bg-[var(--content)] border border-[var(--border)] text-[var(--foreground)] font-mono">
+              src/core/pmtiles/PMTilesRegistry.ts
+            </code>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Architectural Role</div>
+            <p id="insp-desc" class="text-sm text-[var(--foreground)] mt-1 leading-relaxed">
+              Central registry that binds the custom pmtiles:// protocol into MapLibre GL JS and routes tile requests (z/x/y) to the active Source adapter (Remote URL, Browser OPFS File, or Mobile Native File).
+            </p>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold uppercase text-[var(--muted-foreground)]">How It Works Offline (No Internet)</div>
+            <p id="insp-offline" class="text-sm text-[var(--muted-foreground)] mt-1 leading-relaxed">
+              Reads the 127-byte header and 16 KB root Hilbert directory directly from local disk. Resolves any (z, x, y) tile request to a pure (byteOffset, byteLength) tuple with zero network lookups.
+            </p>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Key API / Pattern</div>
+            <pre id="insp-code" class="mt-1 text-xs p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] text-[var(--foreground)] overflow-x-auto font-mono">maplibregl.addProtocol('pmtiles', protocol.tile);
+const pmtiles = new PMTiles(source);
+const header = await pmtiles.getHeader();
+protocol.add(pmtiles);</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 2: OFFLINE VS ONLINE DATA FLOW SIMULATOR -->
+    <div id="view-flow" class="hidden space-y-6">
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 shadow-sm">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[var(--border)]">
+          <div>
+            <h2 class="text-lg font-bold text-[var(--foreground)]">End-to-End Execution Pipeline</h2>
+            <p class="text-xs text-[var(--muted-foreground)]">Select an operating environment below to see how every subsystem functions with or without internet.</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="setFlowMode('offline-mobile')" id="flow-btn-offline-mobile" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--primary)] text-[var(--primary-foreground)]">
+              Airplane Mode: Android / iOS
+            </button>
+            <button onclick="setFlowMode('offline-web')" id="flow-btn-offline-web" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--content)] text-[var(--foreground)] border border-[var(--border)]">
+              Offline Mode: Web PWA (OPFS)
+            </button>
+            <button onclick="setFlowMode('online')" id="flow-btn-online" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--content)] text-[var(--foreground)] border border-[var(--border)]">
+              Online Mode: Cloud Streaming
+            </button>
+          </div>
+        </div>
+
+        <div id="flow-steps-container" class="grid grid-cols-1 md:grid-cols-5 gap-4 mt-5">
+          <!-- Populated dynamically by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 3: PMTILES STORAGE & BYTE-RANGE INSPECTOR -->
+    <div id="view-pmtiles" class="hidden space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Internal Layout of a Single PMTiles File -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 shadow-sm space-y-4">
+          <h2 class="text-lg font-bold text-[var(--foreground)]">Inside a Single .pmtiles Archive (v3 Spec)</h2>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            Why a 4 GB country topo map loads instantly with &lt; 10 MB RAM: tiles are ordered along a spatial Hilbert curve and accessed via direct byte offsets.
+          </p>
+          <div class="space-y-2.5">
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-[var(--primary)]">[Bytes 0 – 126] 127B Binary Header</span>
+                <p class="text-xs text-[var(--muted-foreground)] mt-0.5">Magic "PMTiles\x03", tileType (MVT/PNG/WebP), minZoom/maxZoom, Lat/Lon Bounds, Directory Offsets</p>
+              </div>
+              <span class="text-xs font-mono px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)]">Read #1 (16 KB)</span>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-[var(--primary)]">[Bytes 127 – ~16,384] Root Directory</span>
+                <p class="text-xs text-[var(--muted-foreground)] mt-0.5">Maps Hilbert Tile IDs (z/x/y) to exact byte offsets &amp; lengths (cached in RAM on open)</p>
+              </div>
+              <span class="text-xs font-mono px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)]">Cached in RAM</span>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-[var(--foreground)]">[JSON Metadata Block]</span>
+                <p class="text-xs text-[var(--muted-foreground)] mt-0.5">Vector layer definitions (roads, trails, contours, water, pois) &amp; map attribution</p>
+              </div>
+              <span class="text-xs font-mono px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)]">On Init</span>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-[var(--foreground)]">[Leaf Directories] (For huge archives)</span>
+                <p class="text-xs text-[var(--muted-foreground)] mt-0.5">Sub-directories for high-zoom tiles (z14–z16), fetched on-demand &amp; cached in LRU cache</p>
+              </div>
+              <span class="text-xs font-mono px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)]">LRU Cached</span>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold text-[var(--primary)]">[Hilbert-Clustered Tile Payloads] (99% of file)</span>
+                <p class="text-xs text-[var(--muted-foreground)] mt-0.5">Individual Gzip MVT vector tiles or Terrarium DEM PNG tiles sliced by exact (offset, length)</p>
+              </div>
+              <span class="text-xs font-mono px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)]"> ~15–45 KB / tile</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Storage Paths Matrix Across Platforms -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 shadow-sm space-y-4">
+          <h2 class="text-lg font-bold text-[var(--foreground)]">Where .pmtiles Maps Are Saved &amp; Read</h2>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            Physical file locations and random-access reading mechanisms across every target platform.
+          </p>
+          <div class="space-y-3">
+            <div class="p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[var(--foreground)]">1. Android App (Capacitor Local Storage)</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)]">NativeSliceSource</span>
+              </div>
+              <code class="block text-xs mt-1.5 text-[var(--primary)] font-mono">/storage/emulated/0/Android/data/com.navapp.outdoor/files/maps/*.pmtiles</code>
+              <p class="text-xs text-[var(--muted-foreground)] mt-1">
+                Persisted in external/internal app files (never auto-deleted by OS cache cleaner). Read via Java <code>RandomAccessFile.seek(offset)</code> returning HTTP 206 byte streams.
+              </p>
+            </div>
+
+            <div class="p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[var(--foreground)]">2. Web App / PWA (Browser Persistent Disk)</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)]">FileSource (OPFS)</span>
+              </div>
+              <code class="block text-xs mt-1.5 text-[var(--primary)] font-mono">navigator.storage.getDirectory() → /maps/israel-hiking.pmtiles</code>
+              <p class="text-xs text-[var(--muted-foreground)] mt-1">
+                Origin Private File System stores multi-GB archives on disk. Or users pick any local file (<code>C:\Maps\*.pmtiles</code>) with zero copy via <code>file.slice(offset, offset + length)</code>.
+              </p>
+            </div>
+
+            <div class="p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[var(--foreground)]">3. iOS App (Capacitor iOS Target)</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)]">NativeSliceSource</span>
+              </div>
+              <code class="block text-xs mt-1.5 text-[var(--primary)] font-mono">Library/Application Support/maps/*.pmtiles &amp; Documents/maps/</code>
+              <p class="text-xs text-[var(--muted-foreground)] mt-1">
+                Marked with <code>NSURLIsExcludedFromBackupKey</code> so multi-GB maps don't fill iCloud. Read via Swift <code>FileHandle.seek(toOffset:)</code> over custom URL scheme.
+              </p>
+            </div>
+
+            <div class="p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[var(--foreground)]">4. Project Dev &amp; Cloud CDN</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)]">FetchSource</span>
+              </div>
+              <code class="block text-xs mt-1.5 text-[var(--primary)] font-mono">C:\dev\NavApp\public\assets\maps\*.pmtiles | https://cdn.../map.pmtiles</code>
+              <p class="text-xs text-[var(--muted-foreground)] mt-1">
+                Bundled starter sample map for local testing or remote cloud object storage (Cloudflare R2 / AWS S3) using standard HTTP <code>Range</code> requests.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const NODES = {
+      'ui-viewport': {
+        badge: 'Layer 1 • UI Component',
+        title: 'MapViewport (2D / 3D Canvas)',
+        path: 'src/components/map/MapViewport.tsx',
+        desc: 'Hosts the interactive MapLibre GL JS canvas, 2D/3D pitch toggle, compass orientation reset, scale bar, and live GPS follow-me puck.',
+        offline: 'Renders 100% locally on the device GPU using WebGL2. No external API keys or map server tokens required.',
+        code: `const map = new maplibregl.Map({\n  container: mapRef.current,\n  style: buildOutdoorStyle(activeSources),\n  maxPitch: 75\n});`
+      },
+      'ui-routes': {
+        badge: 'Layer 1 • Navigation Engine',
+        title: 'GPX / KML Route & Off-Route Engine',
+        path: 'src/core/navigation/RouteManager.ts',
+        desc: 'Imports/exports GPX, KML, and GeoJSON routes into local IndexedDB (Dexie.js). Computes real-time snapping, remaining distance, and off-route deviation warnings.',
+        offline: 'Uses @turf/point-to-line-distance and @turf/nearest-point-on-line directly in the browser/WebView CPU with zero routing server calls.',
+        code: `const snapped = turf.nearestPointOnLine(routeGeoJson, userPt);\nconst distMeters = turf.pointToLineDistance(userPt, routeGeoJson, {\n  units: 'meters'\n});`
+      },
+      'ui-elevation': {
+        badge: 'Layer 1 • Spatial Analysis',
+        title: 'Offline Elevation Profile Service',
+        path: 'src/core/navigation/ElevationService.ts',
+        desc: 'Generates interactive elevation charts along planned routes or recorded tracks, syncing hover position with a marker on the map.',
+        offline: 'Decodes RGB Terrarium/Mapbox DEM pixels directly from the local terrain .pmtiles file: elevation = (R * 256 + G + B / 256) - 32768.',
+        code: `const elev = (r * 256 + g + b / 256) - 32768;\n// Samples route every 30m offline`
+      },
+      'ui-catalog': {
+        badge: 'Layer 1 • Storage UI',
+        title: 'Offline Map Package Manager',
+        path: 'src/components/maps-manager/MapSourceModal.tsx',
+        desc: 'Lets users switch between remote URLs, open a local .pmtiles file from disk/SD card, or download regional map packages for offline backcountry trips.',
+        offline: 'Reads installed map registry from IndexedDB (Dexie.js) at startup and mounts local OPFS or Android/iOS files immediately.',
+        code: `await pmtilesRegistry.registerSource({\n  id: 'israel-topo',\n  kind: 'web-file',\n  file: opfsFileHandle\n});`
+      },
+      'ml-style': {
+        badge: 'Layer 2 • Cartography',
+        title: 'Dynamic Offline Style Builder',
+        path: 'src/core/style/outdoorStyleBuilder.ts',
+        desc: 'Generates a complete MapLibre StyleSpecification JSON object in memory, combining base vector tiles, contour lines, and DEM hillshading.',
+        offline: 'Eliminates network fetches for style.json by building the style in TypeScript and pointing sources to pmtiles://<local-id>.',
+        code: `sources: {\n  base: { type: 'vector', url: 'pmtiles://local-base' },\n  contours: { type: 'vector', url: 'pmtiles://local-contours' },\n  dem: { type: 'raster-dem', url: 'pmtiles://local-dem' }\n}`
+      },
+      'ml-trails': {
+        badge: 'Layer 2 • Outdoor Layers',
+        title: 'Topographic & Trail Hierarchy',
+        path: 'src/core/style/trailLayers.ts',
+        desc: 'Inspired by IsraelHikingMap/VectorMap: styles blazed hiking trails, 4x4 dirt tracks (grade1–5 dash patterns), MTB singletracks, water springs, campsites, and peaks.',
+        offline: 'All styling rules and filter expressions execute client-side on the GPU against vector MVT tiles read from the local .pmtiles archive.',
+        code: `{\n  id: 'hiking-trails-casing',\n  type: 'line',\n  source: 'base',\n  'source-layer': 'roads',\n  filter: ['==', 'highway', 'path']\n}`
+      },
+      'ml-terrain': {
+        badge: 'Layer 2 • 3D & Relief',
+        title: 'Contours & 3D DEM Hillshade',
+        path: 'src/core/style/outdoorStyleBuilder.ts',
+        desc: 'Composes 10m/50m topographic contour lines with shaded relief (hillshade layer) and optional 3D terrain extrusion.',
+        offline: 'Reads DEM tiles from a local terrain .pmtiles file, computing slope aspect and hillshade illumination on the device GPU.',
+        code: `terrain: { source: 'dem', exaggeration: 1.2 },\nlayers: [{ id: 'hills', type: 'hillshade', source: 'dem' }]`
+      },
+      'ml-assets': {
+        badge: 'Layer 2 • Static Offline Assets',
+        title: 'Bundled Offline Fonts & Sprites',
+        path: 'public/assets/fonts/ & public/assets/sprites/',
+        desc: 'Packages PBF SDF glyph ranges (0-255.pbf, Hebrew/Latin/Numbers) and outdoor SVG icon sprites directly inside the app bundle.',
+        offline: 'Prevents MapLibre from failing offline when rendering trail names, elevation labels, peak heights, and POI symbols.',
+        code: `glyphs: '/assets/fonts/{fontstack}/{range}.pbf',\nsprite: window.location.origin + '/assets/sprites/outdoor'`
+      },
+      'pm-registry': {
+        badge: 'Layer 3 • Core Engine',
+        title: 'PMTilesRegistry',
+        path: 'src/core/pmtiles/PMTilesRegistry.ts',
+        desc: 'Central registry that binds the custom pmtiles:// protocol into MapLibre GL JS and routes tile requests (z/x/y) to the active Source adapter.',
+        offline: 'Reads the 127-byte header and 16 KB root Hilbert directory from local disk. Resolves any (z, x, y) tile to a pure (byteOffset, byteLength) tuple.',
+        code: `maplibregl.addProtocol('pmtiles', protocol.tile);\nconst pmtiles = new PMTiles(source);\nconst header = await pmtiles.getHeader();\nprotocol.add(pmtiles);`
+      },
+      'pm-fetch': {
+        badge: 'Layer 3 • Online Adapter',
+        title: 'FetchSource (Remote Cloud HTTP 206)',
+        path: 'pmtiles (Built-in FetchSource)',
+        desc: 'Streams only the visible map tiles from static cloud storage (Cloudflare R2, AWS S3, CDN) using HTTP Range headers.',
+        offline: 'Used when online or previewing remote maps before downloading them to OPFS / Mobile storage.',
+        code: `// Sends HTTP header:\n// Range: bytes=41892000-41916100\nconst source = new FetchSource(remoteUrl);`
+      },
+      'pm-file': {
+        badge: 'Layer 3 • Web Offline Adapter',
+        title: 'FileSource (OPFS & Local File Picker)',
+        path: 'src/core/pmtiles/OpfsStorageAdapter.ts',
+        desc: 'Reads byte ranges directly from a browser File / Blob handle stored in the Origin Private File System (OPFS) or chosen via <input type="file">.',
+        offline: 'Calls file.slice(offset, offset + length).arrayBuffer(), reading only ~25 KB from disk even on a 5 GB map file.',
+        code: `const slice = file.slice(offset, offset + length);\nconst buffer = await slice.arrayBuffer();\nreturn { data: buffer };`
+      },
+      'pm-native': {
+        badge: 'Layer 3 • Mobile Offline Adapter',
+        title: 'NativeSliceSource (Android & iOS)',
+        path: 'src/core/pmtiles/NativeSliceSource.ts',
+        desc: 'Bypasses WebView full-file memory bottlenecks by reading exact byte ranges from native phone storage via RandomAccessFile / FileHandle.',
+        offline: 'Seeks directly to byte offset on internal flash or SD card and streams raw ArrayBuffer bytes to MapLibre workers.',
+        code: `RandomAccessFile raf = new RandomAccessFile(file, "r");\nraf.seek(offset);\nraf.readFully(buffer, 0, length);`
+      },
+      'plat-web': {
+        badge: 'Layer 4 • Web PWA Runtime',
+        title: 'Web PWA: Service Worker + OPFS + Dexie',
+        path: 'vite.config.ts & src/core/db/NavDatabase.ts',
+        desc: 'Caches app shell via Service Worker, stores multi-GB .pmtiles in OPFS (/maps/*), and stores GPX routes/waypoints in IndexedDB.',
+        offline: 'Boots in Chrome/Safari/Edge with Wi-Fi unplugged and reads local .pmtiles archives with zero server dependency.',
+        code: `const root = await navigator.storage.getDirectory();\nconst mapsDir = await root.getDirectoryHandle('maps', { create: true });`
+      },
+      'plat-android': {
+        badge: 'Layer 4 • Android Native Runtime',
+        title: 'Capacitor Android + Range Asset Handler',
+        path: 'android/app/src/main/java/.../MainActivity.java',
+        desc: 'Stores maps in /Android/data/<id>/files/maps/ (or SD card), intercepts /_pmtiles_/* with HTTP 206 Partial Content, and runs Foreground GPS service.',
+        offline: 'Works in Airplane Mode for multi-day hikes; screen-off GPS recording continues via Android Foreground Notification.',
+        code: `// Returns HTTP 206 Partial Content\n// Content-Range: bytes start-end/totalLength`
+      },
+      'plat-ios': {
+        badge: 'Layer 4 • iOS Native Runtime',
+        title: 'Capacitor iOS + WKURLSchemeHandler',
+        path: 'ios/App/App/PMTilesSchemeHandler.swift',
+        desc: 'Stores maps in Application Support/maps/ (excluded from iCloud backup) and Documents/maps/ (accessible via iOS Files app).',
+        offline: 'Serves byte slices natively via FileHandle.seek(toOffset:) and tracks background location via CoreLocation.',
+        code: `try fileHandle.seek(toOffset: UInt64(offset))\nlet data = fileHandle.readData(ofLength: length)`
+      }
+    };
+
+    const FLOW_MODES = {
+      'offline-mobile': [
+        {
+          step: 'Step 1: App Boot',
+          title: 'Native APK / IPA Bundle',
+          status: '0 Network Calls',
+          detail: 'Capacitor loads index.html, JS bundles, Tailwind CSS, local PBF fonts, and trail sprites directly from the installed mobile app binary.'
+        },
+        {
+          step: 'Step 2: Map Mount',
+          title: 'Dexie.js + Style Builder',
+          status: 'Local IndexedDB',
+          detail: 'App checks Dexie.js for active offline map (e.g. israel-hiking.pmtiles) and generates the MapLibre Style JSON in-memory.'
+        },
+        {
+          step: 'Step 3: Tile Request',
+          title: 'pmtiles:// Hilbert Lookup',
+          status: '16 KB RAM Directory',
+          detail: 'MapLibre requests z14/x9782/y6641. PMTilesRegistry translates (14, 9782, 6641) into (offset: 41892000, length: 24100).'
+        },
+        {
+          step: 'Step 4: Disk Read',
+          title: 'Native RandomAccessFile',
+          status: '24 KB Flash Read',
+          detail: 'Android/iOS seeks to byte 41,892,000 in /files/maps/israel.pmtiles and returns only those 24 KB to WebGL workers.'
+        },
+        {
+          step: 'Step 5: Navigation',
+          title: 'GNSS Satellite + Turf.js',
+          status: 'Hardware GPS',
+          detail: 'Phone GNSS chip provides lat/lon/alt in Airplane Mode. Turf.js computes trail snapping & DEM elevation profile locally.'
+        }
+      ],
+      'offline-web': [
+        {
+          step: 'Step 1: App Boot',
+          title: 'PWA Service Worker',
+          status: 'CacheStorage Hit',
+          detail: 'Browser boots the app offline from Service Worker cache, including bundled Noto Sans PBF glyphs and outdoor sprite sheets.'
+        },
+        {
+          step: 'Step 2: Map Mount',
+          title: 'OPFS / Local File Handle',
+          status: 'Browser Disk Sandbox',
+          detail: 'Opens FileSystemFileHandle from navigator.storage.getDirectory() (/maps/*.pmtiles) or user-selected local disk file.'
+        },
+        {
+          step: 'Step 3: Tile Request',
+          title: 'pmtiles:// Hilbert Lookup',
+          status: 'In-Memory Offset',
+          detail: 'PMTiles resolves (z, x, y) against the cached root/leaf directory to an exact byte range (offset, length).'
+        },
+        {
+          step: 'Step 4: Disk Read',
+          title: 'FileSource Blob.slice()',
+          status: 'Zero Full-File Load',
+          detail: 'Executes file.slice(offset, offset + length).arrayBuffer(), reading only the single compressed tile from disk.'
+        },
+        {
+          step: 'Step 5: Navigation',
+          title: 'Geolocation + IndexedDB',
+          status: 'Client-Side CPU',
+          detail: 'Renders saved GPX tracks from IndexedDB, decodes DEM elevation pixels, and tracks live location via navigator.geolocation.'
+        }
+      ],
+      'online': [
+        {
+          step: 'Step 1: App Boot',
+          title: 'HTTPS / Vite Server',
+          status: 'Caches for Offline',
+          detail: 'Loads web app over HTTPS while Service Worker pre-caches all app shell assets in the background for future offline use.'
+        },
+        {
+          step: 'Step 2: Map Mount',
+          title: 'Remote PMTiles URL',
+          status: 'Cloudflare R2 / CDN',
+          detail: 'Registers remote archive URL (e.g. https://cdn.example.com/israel.pmtiles) via FetchSource.'
+        },
+        {
+          step: 'Step 3: Tile Request',
+          title: 'HTTP 206 Range Request',
+          status: 'Range: bytes=X-Y',
+          detail: 'Sends standard HTTP GET with Range header to static storage; no backend tile server or database required.'
+        },
+        {
+          step: 'Step 4: Optional Save',
+          title: 'Download to OPFS / Phone',
+          status: 'Resumable Stream',
+          detail: 'User can tap "Download for Offline" to stream the .pmtiles archive into OPFS (Web) or Directory.Data (Mobile).'
+        },
+        {
+          step: 'Step 5: Navigation',
+          title: 'Full GPX & Trail Tools',
+          status: 'Synced Locally',
+          detail: 'Routes created or imported online are stored in Dexie.js so they remain immediately available when connection drops.'
+        }
+      ]
+    };
+
+    function switchTab(tab) {
+      ['layers', 'flow', 'pmtiles'].forEach((t) => {
+        const view = document.getElementById('view-' + t);
+        const btn = document.getElementById('tab-' + t);
+        if (t === tab) {
+          view.classList.remove('hidden');
+          btn.className = 'px-3.5 py-2 rounded-lg text-xs font-semibold transition-all bg-[var(--primary)] text-[var(--primary-foreground)]';
+        } else {
+          view.classList.add('hidden');
+          btn.className = 'px-3.5 py-2 rounded-lg text-xs font-semibold transition-all text-[var(--muted-foreground)] hover:text-[var(--foreground)]';
+        }
+      });
+    }
+
+    function selectNode(nodeId) {
+      const data = NODES[nodeId];
+      if (!data) return;
+      document.getElementById('insp-badge').textContent = data.badge;
+      document.getElementById('insp-title').textContent = data.title;
+      document.getElementById('insp-path').textContent = data.path;
+      document.getElementById('insp-desc').textContent = data.desc;
+      document.getElementById('insp-offline').textContent = data.offline;
+      document.getElementById('insp-code').textContent = data.code;
+
+      document.querySelectorAll('.node-btn').forEach((btn) => {
+        btn.classList.remove('ring-2', 'ring-[var(--primary)]');
+      });
+      const activeBtn = document.getElementById('node-' + nodeId);
+      if (activeBtn) {
+        activeBtn.classList.add('ring-2', 'ring-[var(--primary)]');
+      }
+    }
+
+    function setFlowMode(mode) {
+      ['offline-mobile', 'offline-web', 'online'].forEach((m) => {
+        const btn = document.getElementById('flow-btn-' + m);
+        if (m === mode) {
+          btn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--primary)] text-[var(--primary-foreground)]';
+        } else {
+          btn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--content)] text-[var(--foreground)] border border-[var(--border)]';
+        }
+      });
+
+      const container = document.getElementById('flow-steps-container');
+      const steps = FLOW_MODES[mode] || [];
+      container.innerHTML = steps.map((s) => `
+        <div class="p-4 rounded-xl bg-[var(--content)] border border-[var(--border)] flex flex-col justify-between space-y-3">
+          <div>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-bold text-[var(--primary)]">${s.step}</span>
+              <span class="text-xs px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-medium">${s.status}</span>
+            </div>
+            <h3 class="text-sm font-bold text-[var(--foreground)] mt-2">${s.title}</h3>
+            <p class="text-xs text-[var(--muted-foreground)] mt-1.5 leading-relaxed">${s.detail}</p>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Initialize default selection
+    selectNode('pm-registry');
+    setFlowMode('offline-mobile');
+  </script>
+</body>
+</html>
+

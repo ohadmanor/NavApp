@@ -1,0 +1,37 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "**/*.pmtiles",
+        "headers": [
+          { "key": "Access-Control-Allow-Origin", "value": "*" },
+          { "key": "Access-Control-Allow-Methods", "value": "GET, HEAD, OPTIONS" },
+          { "key": "Access-Control-Allow-Headers", "value": "Range, If-Match, Content-Type" },
+          { "key": "Access-Control-Expose-Headers", "value": "Accept-Ranges, Content-Range, Content-Length, ETag" },
+          { "key": "Accept-Ranges", "value": "bytes" },
+          { "key": "Cache-Control", "value": "public, max-age=86400" }
+        ]
+      },
+      {
+        "source": "**/*.geojson",
+        "headers": [
+          { "key": "Access-Control-Allow-Origin", "value": "*" },
+          { "key": "Cache-Control", "value": "public, max-age=3600" }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
+

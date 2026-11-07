@@ -1,0 +1,692 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "generatedAt": "2026-11-07T11:04:48.687Z",
+    "region": "Israel",
+    "totalPois": 26,
+    "sources": [
+      "OpenStreetMap Israel",
+      "IsraelHikingMap Ecosystem",
+      "Off-Road / Community Curated Landmarks",
+      "Wikimedia"
+    ]
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "il-poi-ein-aqev",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.8134,
+          30.8281
+        ]
+      },
+      "properties": {
+        "id": "il-poi-ein-aqev",
+        "name": "עין עקב תחתון",
+        "nameHe": "עין עקב תחתון",
+        "nameEn": "Ein Aqev (Lower Spring)",
+        "category": "water",
+        "subcategory": "spring",
+        "ele": 390,
+        "waterStatus": "Perennial — Deep natural pool year-round (בריכה עמוקה כל השנה)",
+        "difficulty4x4": null,
+        "descHe": "מעיין שכבה איתן בנחל עקב בנגב התיכון. מפל בגובה 10 מטרים הנופל לבריכה עמוקה וצוננת כל ימות השנה. הגישה ברגל בשביל מסומן כחול או ברכב 4x4 עד חניון עין עקב.",
+        "descEn": "Perennial desert spring in Nahal Aqev (Central Negev) feeding a deep 10m waterfall pool with cool water year-round. Accessible via blue-blazed trail or 4x4 track to the parking area.",
+        "source": "IsraelHiking + OSM + Wikimedia",
+        "wikipedia": "he:עין עקב"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-ein-avdat",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.7695,
+          30.8322
+        ]
+      },
+      "properties": {
+        "id": "il-poi-ein-avdat",
+        "name": "עין עובדת",
+        "nameHe": "עין עובדת",
+        "nameEn": "Ein Avdat Canyon & Spring",
+        "category": "water",
+        "subcategory": "spring",
+        "ele": 445,
+        "waterStatus": "Perennial — Flowing canyon pools (Entry only, no swimming)",
+        "difficulty4x4": null,
+        "descHe": "קניון מצוקי מרשים באפיק נחל צין ובו מעיינות הזורמים כל השנה בין עצי צפצפה פרתית. רחצה אסורה (גן לאומי).",
+        "descEn": "Spectacular white-chalk desert canyon along Nahal Tzin featuring perennial springs, waterfalls, and Euphrates poplar groves.",
+        "source": "IsraelHiking + INPA",
+        "wikipedia": "he:עין עובדת"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-ein-gedi-dodim",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.3849,
+          31.4682
+        ]
+      },
+      "properties": {
+        "id": "il-poi-ein-gedi-dodim",
+        "name": "גב חלון ומערת דודים — נחל דוד",
+        "nameHe": "גב חלון ומערת דודים — נחל דוד",
+        "nameEn": "Dodim Cave & Window Pool (Nahal David)",
+        "category": "water",
+        "subcategory": "spring",
+        "ele": -210,
+        "waterStatus": "Perennial — Freshwater waterfall & pool overlooking the Dead Sea",
+        "difficulty4x4": null,
+        "descHe": "מערה יפהפייה ומפל מים מתוקים בנחל דוד בשמורת עין גדי, ומעליה גב חלון המשקיף אל ים המלח.",
+        "descEn": "Lush oasis cave and infinity rock pool in Nahal David (Ein Gedi Nature Reserve) with sweeping views toward the Dead Sea.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:נחל דוד"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-gev-yamin",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.0725,
+          30.9462
+        ]
+      },
+      "properties": {
+        "id": "il-poi-gev-yamin",
+        "name": "גבי ימין",
+        "nameHe": "גבי ימין",
+        "nameEn": "Gavei Yamin (Yamin Water Holes)",
+        "category": "water",
+        "subcategory": "cistern",
+        "ele": 365,
+        "waterStatus": "Seasonal — Holds cold floodwater from winter through spring",
+        "difficulty4x4": null,
+        "descHe": "סדרת גבי מים חצובים בסלע אבן החול והגיר בנחל ימין. מתמלאים לאחר שיטפונות החורף ומחזיקים מים נקיים וקרים עד האביב.",
+        "descEn": "Series of natural desert rock pools in Nahal Yamin that fill during winter flash floods and hold cool water well into spring.",
+        "source": "IsraelHiking + Off-Road Community",
+        "wikipedia": "he:נחל ימין"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-ein-shoka",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.6752,
+          32.7568
+        ]
+      },
+      "properties": {
+        "id": "il-poi-ein-shoka",
+        "name": "עין שוקו (עין א-תינה דרום רמת הגולן)",
+        "nameHe": "עין שוקו (עין א-תינה דרום רמת הגולן)",
+        "nameEn": "Ein Shoko (Southern Golan Spring)",
+        "category": "water",
+        "subcategory": "spring",
+        "ele": 195,
+        "waterStatus": "Perennial — Built stone pool with views of the Sea of Galilee",
+        "difficulty4x4": null,
+        "descHe": "מעיין נובע בדרום רמת הגולן מעל נחל עין גב. בריכת בטון ואבן עם מים צלולים ותצפית מרהיבה לכנרת ולהרי הגליל.",
+        "descEn": "Popular stone-lined spring pool in the southern Golan Heights overlooking the Sea of Galilee and Nahal Ein Gev.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:רמת הגולן"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-ein-lavan",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.1618,
+          31.7478
+        ]
+      },
+      "properties": {
+        "id": "il-poi-ein-lavan",
+        "name": "עין לבן — הרי ירושלים",
+        "nameHe": "עין לבן — הרי ירושלים",
+        "nameEn": "Ein Lavan (Jerusalem Hills Spring)",
+        "category": "water",
+        "subcategory": "spring",
+        "ele": 625,
+        "waterStatus": "Perennial — Two stone agricultural pools fed by spring tunnel",
+        "difficulty4x4": null,
+        "descHe": "מעיין ניקבה ברכס לבן בהרי ירושלים. שתי בריכות אבן עתיקות מוקפות עצי תאנה, אגוז ושקד על שביל ישראל.",
+        "descEn": "Ancient spring-tunnel feeding two terraced stone pools shaded by fig and almond trees in the Jerusalem Hills along the Israel National Trail.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:עין לבן"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-ein-kelt",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.3492,
+          31.8384
+        ]
+      },
+      "properties": {
+        "id": "il-poi-ein-kelt",
+        "name": "עין קלט — נחל פרת",
+        "nameHe": "עין קלט — נחל פרת",
+        "nameEn": "Ein Qelt (Wadi Qelt Pools)",
+        "category": "water",
+        "subcategory": "spring",
+        "ele": 45,
+        "waterStatus": "Perennial — Flowing desert stream and deep rock pools",
+        "difficulty4x4": null,
+        "descHe": "אחד ממעיינות נחל פרת (ואדי קלט) במדבר יהודה. זרימה איתנה כל השנה, בריכות סלע עמוקות ואמות מים קדומות.",
+        "descEn": "Perennial spring in Wadi Qelt (Judean Desert) creating deep natural rock pools and aqueduct cascades.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:נחל פרת"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-bor-hemet",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.6778,
+          30.5831
+        ]
+      },
+      "properties": {
+        "id": "il-poi-bor-hemet",
+        "name": "בור חמת — הר הנגב",
+        "nameHe": "בור חמת — הר הנגב",
+        "nameEn": "Bor Hemet (Ancient Nabataean Cistern)",
+        "category": "water",
+        "subcategory": "cistern",
+        "ele": 905,
+        "waterStatus": "Historical Cistern — Protected dark water reservoir near Mitzpe Ramon",
+        "difficulty4x4": null,
+        "descHe": "בור מים עתיק ומקורה מתקופת הברונזה והנבטים ברמת מטרד בהר הנגב הגבוה, סמוך למצפה רמון.",
+        "descEn": "Ancient stone-roofed cistern in the High Negev plateau near Mitzpe Ramon, engineered to collect desert runoff.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:בור חמת"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-maale-zik",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.8355,
+          30.8245
+        ]
+      },
+      "properties": {
+        "id": "il-poi-maale-zik",
+        "name": "מעלה זיק — נחל צין",
+        "nameHe": "מעלה זיק — נחל צין",
+        "nameEn": "Maale Zik (4x4 High-Difficulty Ascent)",
+        "category": "offroad",
+        "subcategory": "4x4_pass",
+        "ele": 460,
+        "waterStatus": null,
+        "difficulty4x4": "Hard / Extreme — הילוך כוח ונעילות דיפרנציאל מומלצות, דרדרת ומדרגות סלע",
+        "descHe": "אחד ממעלות ה-4x4 המפורסמים והמאתגרים בנגב. עלייה תלולה עם דרדרת פודרה ומדרגות סלע גבוהות מעל בקעת צין. מחייב רכב שטח קשוח עם הילוך כוח (LOW) ונהג מנוסה.",
+        "descEn": "Famous steep 4x4 climb in the Tzin Valley featuring deep loose fesh-fesh dust and high limestone rock steps. Requires Low-Range 4WD and high ground clearance.",
+        "source": "Off-Road + OSM Israel",
+        "wikipedia": "he:נחל צין"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-maale-vardit",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.0211,
+          30.3318
+        ]
+      },
+      "properties": {
+        "id": "il-poi-maale-vardit",
+        "name": "מעלה ורדית — קניון ורדית",
+        "nameHe": "מעלה ורדית — קניון ורדית",
+        "nameEn": "Maale Vardit (4x4 Technical Rock Steps)",
+        "category": "offroad",
+        "subcategory": "4x4_pass",
+        "ele": 375,
+        "waterStatus": null,
+        "difficulty4x4": "Hard — מדרגות סלע גבוהות והצלבות צירים חריפות",
+        "descHe": "מעלה 4x4 טכני וקשה ביציאה מקניון ורדית בנגב הדרומי. כולל מדרגת סלע אלכסונית המחייבת הכוונה קרקעית, מרווח גחון גבוה והילוך כוח.",
+        "descEn": "Technical 4x4 ascent above Vardit Canyon in the southern Negev with deep axle-articulation ruts and a steep diagonal rock ledge.",
+        "source": "Off-Road + OSM Israel",
+        "wikipedia": "he:נחל ורדית"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-maale-noah",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.8924,
+          30.6691
+        ]
+      },
+      "properties": {
+        "id": "il-poi-maale-noah",
+        "name": "מעלה נח — מכתש רמון",
+        "nameHe": "מעלה נח — מכתש רמון",
+        "nameEn": "Maale Noah (Makhtesh Ramon North Rim 4x4)",
+        "category": "offroad",
+        "subcategory": "4x4_pass",
+        "ele": 740,
+        "waterStatus": null,
+        "difficulty4x4": "Medium-Hard — מדרגות סלע ושיפועי צד ביציאה הצפונית ממכתש רמון",
+        "descHe": "מעלה היסטורי ומרשים המטפס מתוך מכתש רמון אל מצוק הצינים הצפוני. תצפית פנורמית אדירה על המכתש והר ארדון.",
+        "descEn": "Historic 4x4 trail climbing the northern wall of Makhtesh Ramon with dramatic panoramic views of Mount Ardon and the crater floor.",
+        "source": "Off-Road + IsraelHiking",
+        "wikipedia": "he:מכתש רמון"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-maale-dekla",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.3312,
+          31.5945
+        ]
+      },
+      "properties": {
+        "id": "il-poi-maale-dekla",
+        "name": "מעלה דקלים / מעלה עוזי — מדבר יהודה",
+        "nameHe": "מעלה דקלים / מעלה עוזי — מדבר יהודה",
+        "nameEn": "Maale Uzi / Judean Desert 4x4 Pass",
+        "category": "offroad",
+        "subcategory": "4x4_pass",
+        "ele": 120,
+        "waterStatus": null,
+        "difficulty4x4": "Medium-Hard — מדרגות גיר ודרדרת ברמת מדבר יהודה",
+        "descHe": "מעלה שטח בציר מצוק ההעתקים במדבר יהודה. כולל מדרגות גיר ושיפוע תלול עם תצפית אל ים המלח והרי מואב.",
+        "descEn": "4x4 desert ascent near the Judean Desert fault scarp with limestone steps and views across the Dead Sea to Moab.",
+        "source": "Off-Road + OSM Israel",
+        "wikipedia": null
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-maale-akrabim",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.1319,
+          30.9094
+        ]
+      },
+      "properties": {
+        "id": "il-poi-maale-akrabim",
+        "name": "מעלה עקרבים הרומי והמנדטורי",
+        "nameHe": "מעלה עקרבים הרומי והמנדטורי",
+        "nameEn": "Scorpions Pass (Maale Akrabim Historic & Hiking Pass)",
+        "category": "offroad",
+        "subcategory": "4x4_pass",
+        "ele": 320,
+        "waterStatus": null,
+        "difficulty4x4": "Scenic Historic Serpentine Road & Roman Stepped Trail",
+        "descHe": "דרך פיתולים מנדטורית היסטורית (18 סרפנטינות ותחביות חביות) לצד מעלה עקרבים הרומי החצוב בסלע, בין המכתש הקטן לבקעת צין.",
+        "descEn": "Iconic 18-hairpin British Mandate desert pass alongside the ancient stepped Roman Nabataean road descending toward Nahal Tzin.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:מעלה עקרבים"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-masada",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.3536,
+          31.3156
+        ]
+      },
+      "properties": {
+        "id": "il-poi-masada",
+        "name": "מצדה — שביל הנחש והרמון",
+        "nameHe": "מצדה — שביל הנחש והרמון",
+        "nameEn": "Masada Fortress & Snake Path",
+        "category": "heritage",
+        "subcategory": "archaeological_site",
+        "ele": 58,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "מבצר הר מלכותי מתקופת הבית השני על צוק מבודד במזרח מדבר יהודה מול ים המלח. עלייה רגלית משביל הנחש ממזרח או מהסוללה הרומית ממערב.",
+        "descEn": "UNESCO World Heritage cliff-top fortress overlooking the Dead Sea, accessible via the eastern Snake Path or western Roman Ramp.",
+        "source": "IsraelHiking + UNESCO + OSM",
+        "wikipedia": "he:מצדה"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-karnei-hittin",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.4489,
+          32.8012
+        ]
+      },
+      "properties": {
+        "id": "il-poi-karnei-hittin",
+        "name": "קרני חיטין — תצפית והר געש כבוי",
+        "nameHe": "קרני חיטין — תצפית והר געש כבוי",
+        "nameEn": "Horns of Hattin (Volcanic Ridge & Lookout)",
+        "category": "heritage",
+        "subcategory": "viewpoint",
+        "ele": 326,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "הר געש כבוי בעל שתי פסגות בגליל התחתון על שביל ישראל. אתר הקרב ההיסטורי משנת 1187 ותצפית של 360 מעלות על בקעת ארבל, הכנרת והתבור.",
+        "descEn": "Twin-peaked extinct volcano along the Israel National Trail, site of the historic 1187 Battle of Hattin with 360° views of Mount Arbel and the Sea of Galilee.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:קרני חיטין"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-arbel-cliff",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.4958,
+          32.8256
+        ]
+      },
+      "properties": {
+        "id": "il-poi-arbel-cliff",
+        "name": "מצוק הארבל ומבצר המערות",
+        "nameHe": "מצוק הארבל ומבצר המערות",
+        "nameEn": "Mount Arbel Cliff & Cave Fortress",
+        "category": "heritage",
+        "subcategory": "viewpoint",
+        "ele": 181,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "מצוק אדיר המתנשא מעל הכנרת ובקעת גינוסר. בדופן המצוק חצובות מערות מפלט ומבצר מהתקופה ההרודיאנית והעות׳מאנית, עם שביל יתדות אתגרי.",
+        "descEn": "Towering limestone cliff above the Sea of Galilee featuring ancient cliffside cave fortifications and a dramatic via-ferrata rung trail.",
+        "source": "IsraelHiking + INPA",
+        "wikipedia": "he:הר ארבל"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-shivta",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.6308,
+          30.8811
+        ]
+      },
+      "properties": {
+        "id": "il-poi-shivta",
+        "name": "שבטה — עיר נבטית עתיקה",
+        "nameHe": "שבטה — עיר נבטית עתיקה",
+        "nameEn": "Shivta (Ancient Nabataean-Byzantine Desert City)",
+        "category": "heritage",
+        "subcategory": "archaeological_site",
+        "ele": 350,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "עיר נבטית-ביזנטית שמורה להפליא בנגב המערבי, כוללת בורות מים ציבוריים, גתות יין עתיקות ושלוש כנסיות מרשימות.",
+        "descEn": "Remarkably preserved Nabataean and Byzantine desert settlement in the Negev featuring engineered runoff water reservoirs and ancient winepresses.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:שבטה"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-har-karkom",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.7412,
+          30.2895
+        ]
+      },
+      "properties": {
+        "id": "il-poi-har-karkom",
+        "name": "הר כרכום — ציורי סלע ומזבחות קדומים",
+        "nameHe": "הר כרכום — ציורי סלע ומזבחות קדומים",
+        "nameEn": "Har Karkom (Ancient Rock Art & Desert Mesa)",
+        "category": "heritage",
+        "subcategory": "archaeological_site",
+        "ele": 842,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "הר שולחן מבודד בנגב הדרומי ובו אלפי חריטות סלע (פטרוגליפים), מצבות אבן ומקדשים פרהיסטוריים. שטח אש — כניסה בסופי שבוע וחגים בתיאום בלבד.",
+        "descEn": "Remote plateau mountain in the southern Negev rich in Bronze Age rock engravings (petroglyphs), standing stones, and geoglyphs.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:הר כרכום"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-camp-beeri",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.9182,
+          30.6194
+        ]
+      },
+      "properties": {
+        "id": "il-poi-camp-beeri",
+        "name": "חניון לילה בארות — מכתש רמון",
+        "nameHe": "חניון לילה בארות — מכתש רמון",
+        "nameEn": "Beerot Night Campsite (Makhtesh Ramon)",
+        "category": "campsite",
+        "subcategory": "camp_site",
+        "ele": 495,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "חניון לילה מוסדר בלב מכתש רמון (רט\"ג). כולל מים לשתייה, מקלחות חמות, שירותים, סככות צל ונקודת יציאה מעולה לשביל ישראל ולהר ארדון.",
+        "descEn": "Organized desert campsite in the heart of Makhtesh Ramon offering drinking water, showers, shade structures, and direct access to Mount Ardon and the Israel National Trail.",
+        "source": "IsraelHiking + INPA",
+        "wikipedia": "he:מכתש רמון"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-camp-ein-aqev",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.8192,
+          30.8389
+        ]
+      },
+      "properties": {
+        "id": "il-poi-camp-ein-aqev",
+        "name": "חניון לילה עין עקב — נחל עקב",
+        "nameHe": "חניון לילה עין עקב — נחל עקב",
+        "nameEn": "Ein Aqev Backcountry Night Campsite",
+        "category": "campsite",
+        "subcategory": "camp_site",
+        "ele": 370,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "חניון לילה פתוח בשטח (ללא מים וללא שירותים) במפגש שבילים צפונית לעין עקב. לינה מותרת רק בשטח המסומן באבנים כדי לא להפריע לחיות הבר ליד המעיין.",
+        "descEn": "Designated primitive desert night camp north of Ein Aqev spring (no water or facilities; camping directly at the spring is prohibited to allow wildlife access at night).",
+        "source": "IsraelHiking + INPA",
+        "wikipedia": null
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-camp-amud",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.4685,
+          32.9762
+        ]
+      },
+      "properties": {
+        "id": "il-poi-camp-amud",
+        "name": "חניון לילה נחל עמוד (פיתול העמוד)",
+        "nameHe": "חניון לילה נחל עמוד (פיתול העמוד)",
+        "nameEn": "Nahal Amud Night Campsite",
+        "category": "campsite",
+        "subcategory": "camp_site",
+        "ele": 615,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "חניון לילה מבוקש על שביל ישראל בכניסה לנחל עמוד עליון בגליל העליון, סמוך למירון.",
+        "descEn": "Key Israel National Trail campsite at the entrance to Upper Nahal Amud in the Upper Galilee near Mount Meron.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:נחל עמוד"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-camp-barak",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.0982,
+          30.4021
+        ]
+      },
+      "properties": {
+        "id": "il-poi-camp-barak",
+        "name": "חניון לילה נחל ברק — הערבה",
+        "nameHe": "חניון לילה נחל ברק — הערבה",
+        "nameEn": "Nahal Barak Night Campsite",
+        "category": "campsite",
+        "subcategory": "camp_site",
+        "ele": 110,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "חניון לילה מדברי פתוח בכניסה לקניון נחל ברק ומסלול הסולמות. מתאים לרכבי שטח ולמטיילים רגליים.",
+        "descEn": "Open desert night campsite at the mouth of Nahal Barak slot canyon and ladder trail in the Arava.",
+        "source": "IsraelHiking + Off-Road",
+        "wikipedia": null
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-peak-meron",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.4126,
+          32.9969
+        ]
+      },
+      "properties": {
+        "id": "il-poi-peak-meron",
+        "name": "הר מירון — שביל הפסגה",
+        "nameHe": "הר מירון — שביל הפסגה",
+        "nameEn": "Mount Meron Summit Trail",
+        "category": "peak",
+        "subcategory": "peak",
+        "ele": 1204,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "הפסגה הגבוהה ביותר בגליל (1,204 מ׳). שביל הפסגה המוצל בחורש ים-תיכוני סבוך מציע תצפיות מרהיבות ללבנון, לחרמון, לגולן ולכנרת.",
+        "descEn": "Highest peak in the Galilee (1,204m) featuring a circular summit trail through dense Mediterranean oak woodland with views to Mount Hermon and the Sea of Galilee.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:הר מירון"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-peak-hermon",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.7865,
+          33.3075
+        ]
+      },
+      "properties": {
+        "id": "il-poi-peak-hermon",
+        "name": "הר החרמון — מצפה שלגים",
+        "nameHe": "הר החרמון — מצפה שלגים",
+        "nameEn": "Mount Hermon (Mitzpe Shlagim)",
+        "category": "peak",
+        "subcategory": "peak",
+        "ele": 2224,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "הנקודה הגבוהה ביותר בישראל, מתנשאת מעל עמק החולה ורמת הגולן וניזונה משלגי החורף.",
+        "descEn": "Highest mountain ridge in Israel towering above the Hula Valley and the Golan Heights.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:חרמון"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-peak-ramon",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.6431,
+          30.5015
+        ]
+      },
+      "properties": {
+        "id": "il-poi-peak-ramon",
+        "name": "הר רמון — הפסגה הגבוהה בנגב",
+        "nameHe": "הר רמון — הפסגה הגבוהה בנגב",
+        "nameEn": "Mount Ramon (Highest Peak in the Negev)",
+        "category": "peak",
+        "subcategory": "peak",
+        "ele": 1037,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "הפסגה הגבוהה ביותר בנגב (1,037 מ׳) בקצה המערבי של מכתש רמון, סמוך לקרני רמון ובור חמת.",
+        "descEn": "Highest summit in the Negev desert (1,037m) on the western rim of Makhtesh Ramon.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:הר רמון"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "il-poi-peak-tavor",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.3911,
+          32.6869
+        ]
+      },
+      "properties": {
+        "id": "il-poi-peak-tavor",
+        "name": "הר תבור — שביל סובב פסגה",
+        "nameHe": "הר תבור — שביל סובב פסגה",
+        "nameEn": "Mount Tabor Summit Loop",
+        "category": "peak",
+        "subcategory": "peak",
+        "ele": 588,
+        "waterStatus": null,
+        "difficulty4x4": null,
+        "descHe": "הר כיפתי בולט בגליל התחתון המתנשא מעל עמק יזרעאל. סביב הפסגה שביל מעגלי מוצל עם שרידי חומה מימי בית שני ותצפית פנורמית.",
+        "descEn": "Iconic dome-shaped mountain rising above the Jezreel Valley with a shaded panoramic summit loop trail along the Israel National Trail.",
+        "source": "IsraelHiking + OSM",
+        "wikipedia": "he:הר תבור"
+      }
+    }
+  ]
+}
