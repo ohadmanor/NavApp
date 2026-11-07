@@ -10,6 +10,7 @@ import {
   type RangeResponse,
 } from 'pmtiles';
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
+import { pmtilesUrl } from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
 import { registerOfflineRtlTextPlugin } from '../style/hebrewBidiProcessor';
@@ -67,7 +68,7 @@ export class PMTilesRegistry {
       : await this.mountFromUrl(
           'israel-dem',
           'Israel.dem.pmtiles',
-          `${window.location.origin}/data/Israel.dem.pmtiles`,
+          pmtilesUrl('Israel.dem.pmtiles'),
           true
         );
 
@@ -78,7 +79,7 @@ export class PMTilesRegistry {
       : await this.mountFromUrl(
           'israel-osm',
           'Israel.osm.pmtiles',
-          `${window.location.origin}/data/Israel.osm.pmtiles`,
+          pmtilesUrl('Israel.osm.pmtiles'),
           false
         );
 
