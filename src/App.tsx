@@ -60,7 +60,7 @@ export const App: React.FC = () => {
   const [isStorageOpen, setIsStorageOpen] = useState(false);
   const [isLayerSheetOpen, setIsLayerSheetOpen] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [showCenterCrosshair, setShowCenterCrosshair] = useState<boolean>(true);
+  const [showCenterCrosshair, setShowCenterCrosshair] = useState<boolean>(false);
 
   const [cursorCoords, setCursorCoords] = useState<{
     lon: number;
