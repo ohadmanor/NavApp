@@ -171,11 +171,20 @@ export class PMTilesRegistry {
       }
     }
 
-    // 3. Not stored locally -> stream from Firebase right away (map shows immediately).
+    // 3. Not stored locally -> check if hosted on Firebase
     const remoteUrl = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
-    console.log(`[PMTilesRegistry] ${fileName} not found locally. Streaming from Firebase: ${remoteUrl}`);
+    console.log(`[PMTilesRegistry] Checking Firebase for ${fileName}...`);
 
     try {
+      const remote = await this.probeRemote(fileName);
+      if (!remote) {
+        console.warn(
+          `[PMTilesRegistry] ${fileName} does not exist on Firebase Hosting (404/missing). Base map will be unavailable until uploaded or imported.`
+        );
+        return null;
+      }
+
+      console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remoteUrl}`);
       const mounted = await this.mountFromUrl(id, fileName, remoteUrl, isConstant);
 
       // Only the small OSM archive is saved automatically. The 1.4 GB DEM keeps streaming
@@ -199,6 +208,10 @@ export class PMTilesRegistry {
         signal: AbortSignal.timeout(6000),
       });
       if (!res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        return null; // SPA rewrite or 404 page, not a binary PMTiles archive
+      }
       const range = res.headers.get('content-range');
       const size = range ? Number(range.split('/')[1]) : 0;
       if (!size) return null;

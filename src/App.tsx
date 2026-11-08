@@ -554,6 +554,9 @@ export const App: React.FC = () => {
 
         if (dem) setDemInfo(dem);
         if (osm) setOsmInfo(osm);
+        if (!osm && !dem) {
+          setDownloadStatus('לא נמצאו קובצי מפה (PMTiles) בשרת. לחץ על "ייבוא מפות (PMTiles)" כדי לטעון קובץ מפה.');
+        }
         if (loadedPois.length > 0) setPois(loadedPois);
         if (loadedRoutes.length > 0) setRoutes(loadedRoutes);
       } catch (err) {

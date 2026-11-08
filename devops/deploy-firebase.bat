@@ -27,8 +27,18 @@ echo [3/4] Copying all map data ^(Israel.pois.geojson, Israel.trails.geojson, Is
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
 if exist "data\Israel.trails.geojson" copy /Y "data\Israel.trails.geojson" "dist\data\Israel.trails.geojson" >nul
-if exist "data\Israel.osm.pmtiles" copy /Y "data\Israel.osm.pmtiles" "dist\data\Israel.osm.pmtiles" >nul
-if exist "data\Israel.dem.pmtiles" copy /Y "data\Israel.dem.pmtiles" "dist\data\Israel.dem.pmtiles" >nul
+if exist "data\Israel.osm.pmtiles" (
+    copy /Y "data\Israel.osm.pmtiles" "dist\data\Israel.osm.pmtiles" >nul
+    echo       [OK] Copied data\Israel.osm.pmtiles into dist\data\
+) else (
+    echo       [WARN] data\Israel.osm.pmtiles not found! It will not be uploaded to Firebase Hosting.
+)
+if exist "data\Israel.dem.pmtiles" (
+    copy /Y "data\Israel.dem.pmtiles" "dist\data\Israel.dem.pmtiles" >nul
+    echo       [OK] Copied data\Israel.dem.pmtiles into dist\data\
+) else (
+    echo       [WARN] data\Israel.dem.pmtiles not found! It will not be uploaded to Firebase Hosting.
+)
 
 echo [4/4] Deploying to Firebase Hosting...
 call npx.cmd firebase-tools deploy --only hosting

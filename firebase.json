@@ -32,7 +32,7 @@
     ],
     "rewrites": [
       {
-        "source": "**",
+        "source": "!/data/**",
         "destination": "/index.html"
       }
     ]

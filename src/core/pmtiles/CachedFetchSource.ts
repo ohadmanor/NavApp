@@ -1,7 +1,12 @@
 import { FetchSource, type Source, type RangeResponse } from 'pmtiles';
 
-const CACHE_NAME = 'pmtiles-range-cache-v1';
+const CACHE_NAME = 'pmtiles-range-cache-v2';
 const MAX_CACHED_RANGE_BYTES = 2 * 1024 * 1024;
+
+// One-time cleanup of legacy range cache (v1)
+if (typeof caches !== 'undefined') {
+  caches.delete('pmtiles-range-cache-v1').catch(() => {});
+}
 
 /**
  * HTTP-Range PMTiles source with a persistent Cache Storage layer.
@@ -69,6 +74,17 @@ export class CachedFetchSource implements Source {
       }
 
       const res = await this.inner.getBytes(offset, length, signal, etag);
+
+      // Validate header magic bytes (PM) at offset 0 so HTML error pages are never parsed or cached
+      if (offset === 0 && res.data && res.data.byteLength >= 2) {
+        const u8 = new Uint8Array(res.data);
+        if (u8[0] !== 0x50 || u8[1] !== 0x4d) {
+          throw new Error(
+            `Invalid PMTiles magic bytes (received 0x${u8[0].toString(16)} 0x${u8[1].toString(16)}). The file may be missing from the server (returned HTML error page).`
+          );
+        }
+      }
+
       if (cache && res.data && res.data.byteLength > 0) {
         cache
           .put(
