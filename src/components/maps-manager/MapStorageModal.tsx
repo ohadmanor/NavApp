@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   HardDrive,
@@ -12,6 +12,9 @@ import {
   Download,
   Trash2,
   Ban,
+  Cloud,
+  Terminal,
+  AlertCircle,
 } from 'lucide-react';
 import type { MountedArchiveInfo } from '../../core/pmtiles/PMTilesRegistry';
 import { pmtilesRegistry } from '../../core/pmtiles/PMTilesRegistry';
@@ -43,6 +46,11 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   const [isBusy, setIsBusy] = useState(false);
   const [downloading, setDownloading] = useState<'israel-dem' | 'israel-osm' | null>(null);
   const [dlProgress, setDlProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<{
+    dem?: { available: boolean; size?: number; url?: string };
+    osm?: { available: boolean; size?: number; url?: string };
+  }>({});
+  const [isCheckingCloud, setIsCheckingCloud] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const osmFileInputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +71,34 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     'israel-dem': 'Israel.dem.pmtiles',
     'israel-osm': 'Israel.osm.pmtiles',
   } as const;
+
+  const checkCloudStatus = async () => {
+    setIsCheckingCloud(true);
+    try {
+      const [demRemote, osmRemote] = await Promise.all([
+        pmtilesRegistry.probeRemote('Israel.dem.pmtiles'),
+        pmtilesRegistry.probeRemote('Israel.osm.pmtiles'),
+      ]);
+      setCloudStatus({
+        dem: demRemote
+          ? { available: true, size: demRemote.size, url: demRemote.url }
+          : { available: false },
+        osm: osmRemote
+          ? { available: true, size: osmRemote.size, url: osmRemote.url }
+          : { available: false },
+      });
+    } catch {
+      // offline
+    } finally {
+      setIsCheckingCloud(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      checkCloudStatus();
+    }
+  }, [isOpen]);
 
   const handleDownloadOffline = async (id: 'israel-dem' | 'israel-osm') => {
     if (downloading) return;
@@ -284,15 +320,35 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 data/Israel.dem.pmtiles
               </h3>
               <p className="text-xs text-slate-400 leading-relaxed" dir="rtl">
-                קובץ גבהים וטופוגרפיה (Terrarium 256px PNG DEM, זום 0–14). אינו משתנה ואינו דורש הורדה מחדש בעת עדכון שבילים. מפעיל הצללת הרים (Hillshade), תלת-ממד, קווי גובה וחתך גבהים.
+                קובץ גבהים וטופוגרפיה (Terrarium 256px PNG DEM, זום 0–14). מפעיל הצללת הרים (Hillshade), תלת-ממד, קווי גובה וחתך גבהים.
               </p>
-              {demInfo && (
-                <div className="text-xs font-mono text-slate-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800 space-y-1">
-                  <div>Status: <span className="text-emerald-400">✓ Mounted ({demInfo.record.storageKind})</span></div>
-                  <div>Zoom: z{demInfo.record.minZoom} – z{demInfo.record.maxZoom} (Terrarium RGB)</div>
-                  <div>Bounds: {demInfo.record.bounds.map((n) => n.toFixed(2)).join(', ')}</div>
+
+              {/* Status Box */}
+              <div className="text-xs font-mono text-slate-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800 space-y-1" dir="rtl">
+                <div className="flex items-center justify-between">
+                  <span>מצב מקומי:</span>
+                  <span className="text-emerald-400">
+                    {demInfo ? `✓ מחובר (${demInfo.record.storageKind})` : 'טוען / לא מחובר'}
+                  </span>
                 </div>
-              )}
+                <div className="flex items-center justify-between">
+                  <span>מצב ענן (Firebase):</span>
+                  {cloudStatus.dem?.available ? (
+                    <span className="text-emerald-400">✓ זמין ({formatSize(cloudStatus.dem.size || 1402183369)})</span>
+                  ) : (
+                    <span className="text-amber-400">ממתין להעלאה</span>
+                  )}
+                </div>
+                {demInfo && (
+                  <div>זום: z{demInfo.record.minZoom} – z{demInfo.record.maxZoom} (Terrarium RGB)</div>
+                )}
+              </div>
+
+              {/* Hard Safety Interlock Note */}
+              <div className="text-[11px] text-emerald-300/90 bg-emerald-950/40 border border-emerald-500/30 rounded-lg p-2 flex items-center gap-2" dir="rtl">
+                <Lock className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>קובץ זה מוגן באופן מוחלט: פריסות קוד (deploy-firebase.bat) לעולם אינן נוגעות בו או מוחקות אותו!</span>
+              </div>
             </div>
 
             <div className="pt-2">
@@ -330,60 +386,124 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 data/Israel.osm.pmtiles
               </h3>
               <p className="text-xs text-slate-400 leading-relaxed" dir="rtl">
-                מפת OpenStreetMap וקטורית (19 שכבות OpenMapTiles: שבילים, דרכי 4x4, שמורות טבע, נחלים, פסגות ויישובים). מתעדכנת מעת לעת ומחליפה את הקובץ הישן מבלי לגעת בקובץ ה-DEM.
+                מפת OpenStreetMap וקטורית (19 שכבות: שבילים, דרכי 4x4, שמורות טבע, שטחי אש, נחלים, פסגות ויישובים). מתעדכנת מעת לעת מבלי לגעת בקובץ ה-DEM.
               </p>
-              {osmInfo && (
-                <div className="text-xs font-mono text-slate-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800 space-y-1">
-                  <div>Status: <span className="text-emerald-400">✓ Active ({osmInfo.record.storageKind})</span></div>
-                  <div>Build UTC: <span className="text-sky-300">{osmInfo.record.createdUtc.slice(0, 19)}</span></div>
-                  <div>Layers: {osmInfo.vectorLayers.length || 19} OpenMapTiles layers</div>
+
+              {/* Status Box */}
+              <div className="text-xs font-mono text-slate-300 bg-slate-900 p-2.5 rounded-lg border border-slate-800 space-y-1" dir="rtl">
+                <div className="flex items-center justify-between">
+                  <span>מצב מקומי:</span>
+                  <span className="text-emerald-400">
+                    {osmInfo ? `✓ מחובר (${osmInfo.record.storageKind})` : 'טוען / לא מחובר'}
+                  </span>
                 </div>
-              )}
-            </div>
+                <div className="flex items-center justify-between">
+                  <span>מצב ענן (Firebase):</span>
+                  {cloudStatus.osm?.available ? (
+                    <span className="text-emerald-400">✓ זמין ({formatSize(cloudStatus.osm.size || 112434955)})</span>
+                  ) : (
+                    <span className="text-amber-400">ממתין להעלאה</span>
+                  )}
+                </div>
+                {osmInfo && (
+                  <div>תאריך בנייה: <span className="text-sky-300">{osmInfo.record.createdUtc.slice(0, 19)}</span></div>
+                )}
+              </div>
 
-            <div className="space-y-2 pt-2">
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={persistOpfs}
-                  onChange={(e) => setPersistOpfs(e.target.checked)}
-                  className="rounded border-slate-700 text-emerald-500"
-                />
-                <span>שמור קובץ מעודכן בזיכרון הדפדפן המתמיד (OPFS Offline)</span>
-              </label>
+              {/* Section 1: Fast Client Streaming */}
+              <div className="text-xs bg-slate-900/90 p-2.5 rounded-lg border border-sky-500/30 space-y-1.5" dir="rtl">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-sky-300 flex items-center gap-1.5">
+                    <Cloud className="w-3.5 h-3.5" />
+                    חלק 1: טעינה מהירה מ-Firebase ללקוחות חדשים
+                  </span>
+                  <button
+                    onClick={checkCloudStatus}
+                    disabled={isCheckingCloud}
+                    className="text-[11px] text-sky-400 hover:text-sky-300 flex items-center gap-1 px-2 py-0.5 rounded bg-sky-950/60 border border-sky-500/40"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isCheckingCloud ? 'animate-spin' : ''}`} />
+                    <span>{isCheckingCloud ? 'בודק...' : 'בדוק ענן'}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  כל לקוח שנכנס ללא מטמון מקומי מזרים מקטעי בתים (Byte-Ranges) ישירות מ-Firebase תוך מילישניות, ללא צורך בהורדת 112MB מראש. מקטעים שנצפו נשמרים במטמון.
+                </p>
+              </div>
 
-              <input
-                ref={osmFileInputRef}
-                type="file"
-                accept=".pmtiles"
-                onChange={handleReplaceOsmFile}
-                className="hidden"
-              />
-              <button
-                disabled={isBusy}
-                onClick={() => osmFileInputRef.current?.click()}
-                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white flex items-center justify-center gap-2 transition-colors"
-              >
-                <Upload className="w-4 h-4" />
-                <span>החלף / עדכן קובץ Israel.osm.pmtiles מקומי</span>
-              </button>
+              {/* Section 2: Cloud & Local OSM Update */}
+              <div className="text-xs bg-slate-900/90 p-2.5 rounded-lg border border-emerald-500/30 space-y-2" dir="rtl">
+                <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  חלק 2: עדכון קובץ OSM חדש
+                </span>
 
-              <div className="flex gap-1.5 pt-1">
-                <input
-                  type="url"
-                  value={remoteOsmUrl}
-                  onChange={(e) => setRemoteOsmUrl(e.target.value)}
-                  placeholder="https://.../Israel.osm.pmtiles"
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100"
-                />
-                <button
-                  disabled={isBusy || !remoteOsmUrl.trim()}
-                  onClick={handleRemoteOsmUpdate}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-sky-300 flex items-center gap-1"
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  <span>עדכן מ-URL</span>
-                </button>
+                {/* Sub-section A: Cloud Update for all users */}
+                <div className="text-[11px] text-slate-300 bg-slate-950 p-2 rounded-lg border border-slate-700/60 space-y-1">
+                  <div className="font-semibold text-amber-300 flex items-center gap-1">
+                    <Terminal className="w-3.5 h-3.5 text-amber-400" />
+                    <span>עדכון ענן (עבור כל המשתמשים):</span>
+                  </div>
+                  <p className="text-slate-400">
+                    העתק את קובץ <code>Israel.osm.pmtiles</code> החדש לתיקיית <code>data\</code> והרץ במחשב:
+                  </p>
+                  <code className="block text-emerald-400 font-mono text-center bg-slate-900 py-1 rounded border border-slate-800 select-all">
+                    devops\upload-map-data.bat
+                  </code>
+                  <p className="text-slate-500 text-[10px]">
+                    הסקריפט מעלה את הנתונים לענן הייעודי navapp-israel-topo-data ללא מחיקת ה-DEM.
+                  </p>
+                </div>
+
+                {/* Sub-section B: Local Update / Test on this device */}
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[11px] font-semibold text-slate-300 block">
+                    בדיקה / החלפה מקומית במכשיר זה (OPFS):
+                  </span>
+                  <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={persistOpfs}
+                      onChange={(e) => setPersistOpfs(e.target.checked)}
+                      className="rounded border-slate-700 text-emerald-500"
+                    />
+                    <span>שמור קובץ מעודכן בזיכרון הדפדפן המתמיד (OPFS Offline)</span>
+                  </label>
+
+                  <input
+                    ref={osmFileInputRef}
+                    type="file"
+                    accept=".pmtiles"
+                    onChange={handleReplaceOsmFile}
+                    className="hidden"
+                  />
+                  <button
+                    disabled={isBusy}
+                    onClick={() => osmFileInputRef.current?.click()}
+                    className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>בחר קובץ והחלף מקומית במכשיר זה</span>
+                  </button>
+
+                  <div className="flex gap-1.5 pt-0.5">
+                    <input
+                      type="url"
+                      value={remoteOsmUrl}
+                      onChange={(e) => setRemoteOsmUrl(e.target.value)}
+                      placeholder="https://.../Israel.osm.pmtiles"
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100"
+                    />
+                    <button
+                      disabled={isBusy || !remoteOsmUrl.trim()}
+                      onClick={handleRemoteOsmUpdate}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-sky-300 flex items-center gap-1"
+                    >
+                      <Globe className="w-3.5 h-3.5" />
+                      <span>עדכן מ-URL</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

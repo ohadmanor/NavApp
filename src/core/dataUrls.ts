@@ -7,7 +7,8 @@
  *   Firebase site, unless the user mounted local files (OPFS / file picker) in the Maps Manager.
  *   Small GeoJSON files are bundled inside the APK (`public/data`).
  */
-export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo.web.app';
+export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo-data.web.app';
+export const REMOTE_DATA_FALLBACK_ORIGIN = 'https://navapp-israel-topo.web.app';
 
 export function isNativePlatform(): boolean {
   const cap = (typeof window !== 'undefined' ? (window as any).Capacitor : undefined) as
@@ -16,10 +17,14 @@ export function isNativePlatform(): boolean {
   return !!cap?.isNativePlatform?.();
 }
 
-/** Large PMTiles archives: remote on native, same-origin on web. */
+/**
+ * Large PMTiles archives: served from the dedicated Firebase data site (HTTP 206 Byte-Range streaming).
+ */
 export function pmtilesUrl(fileName: string): string {
-  const base = isNativePlatform() ? REMOTE_DATA_ORIGIN : window.location.origin;
-  return `${base}/data/${fileName}`;
+  if (typeof window !== 'undefined' && (window.location?.hostname === 'localhost' || window.location?.hostname === '127.0.0.1')) {
+    return `${window.location.origin}/data/${fileName}`;
+  }
+  return `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
 }
 
 /** Small bundled data files (GeoJSON): always local so they work offline. */

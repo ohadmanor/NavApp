@@ -2,6 +2,7 @@
 node_modules/
 .pnp
 .pnp.js
+.firebase/
 
 # Build and distribution
 dist/
@@ -14,6 +15,7 @@ android/capacitor-cordova-android-plugins/
 # Heavy Map Data & Archives (>100MB / not suitable for standard Git)
 data/*.pmtiles
 public/data/*.pmtiles
+deploy_data/
 
 # Environment & Keystores (keep credentials safe)
 .env

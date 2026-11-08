@@ -10,7 +10,7 @@ import {
   type RangeResponse,
 } from 'pmtiles';
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
-import { pmtilesUrl, REMOTE_DATA_ORIGIN, isNativePlatform } from '../dataUrls';
+import { pmtilesUrl, REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN, isNativePlatform } from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
 import { CachedFetchSource } from './CachedFetchSource';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
@@ -170,7 +170,6 @@ export class PMTilesRegistry {
     }
 
     // 3. Not stored locally -> check if hosted on Firebase
-    const remoteUrl = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
     console.log(`[PMTilesRegistry] Checking Firebase for ${fileName}...`);
 
     try {
@@ -182,8 +181,8 @@ export class PMTilesRegistry {
         return null;
       }
 
-      console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remoteUrl}`);
-      const mounted = await this.mountFromUrl(id, fileName, remoteUrl, isConstant);
+      console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remote.url}`);
+      const mounted = await this.mountFromUrl(id, fileName, remote.url, isConstant);
       return mounted;
     } catch (err) {
       console.warn(`[PMTilesRegistry] Could not mount ${fileName} from Firebase:`, err);
@@ -191,25 +190,31 @@ export class PMTilesRegistry {
     }
   }
 
-  /** Reads the real archive size/etag from the server with a 1-byte range request. */
-  async probeRemote(fileName: string): Promise<{ size: number; etag?: string } | null> {
-    try {
-      const res = await fetch(`${REMOTE_DATA_ORIGIN}/data/${fileName}`, {
-        headers: { Range: 'bytes=0-0' },
-        signal: AbortSignal.timeout(6000),
-      });
-      if (!res.ok) return null;
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('text/html')) {
-        return null; // SPA rewrite or 404 page, not a binary PMTiles archive
+  /** Reads the real archive size/etag from Firebase with a 1-byte range request (checks primary & fallback sites). */
+  async probeRemote(fileName: string): Promise<{ size: number; etag?: string; url: string } | null> {
+    const candidateOrigins = [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN];
+    for (const origin of candidateOrigins) {
+      if (!origin) continue;
+      const targetUrl = `${origin}/data/${fileName}`;
+      try {
+        const res = await fetch(targetUrl, {
+          headers: { Range: 'bytes=0-0' },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) continue;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          continue; // SPA rewrite or 404 page, not a binary PMTiles archive
+        }
+        const range = res.headers.get('content-range');
+        const size = range ? Number(range.split('/')[1]) : 0;
+        if (!size) continue;
+        return { size, etag: res.headers.get('etag') || undefined, url: targetUrl };
+      } catch {
+        // try next candidate origin
       }
-      const range = res.headers.get('content-range');
-      const size = range ? Number(range.split('/')[1]) : 0;
-      if (!size) return null;
-      return { size, etag: res.headers.get('etag') || undefined };
-    } catch {
-      return null; // offline: keep using what we have
     }
+    return null; // offline or not yet uploaded
   }
 
   private readMeta(fileName: string): { size: number; etag?: string } | null {
@@ -320,7 +325,11 @@ export class PMTilesRegistry {
     isConstant: boolean
   ): Promise<MountedArchiveInfo> {
     this.initProtocols();
-    const source = url.startsWith(REMOTE_DATA_ORIGIN) ? new CachedFetchSource(url) : new FetchSource(url);
+    const isRemote =
+      url.startsWith(REMOTE_DATA_ORIGIN) ||
+      url.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
+      url.startsWith('https://');
+    const source = isRemote ? new CachedFetchSource(url) : new FetchSource(url);
     return this.registerArchiveSource(id, fileName, source, 'local-server', url, 0, isConstant);
   }
 
@@ -367,20 +376,20 @@ export class PMTilesRegistry {
       throw new Error('Offline storage (OPFS) is not supported on this device/browser.');
     }
     const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
-    const url = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
     const remote = await this.probeRemote(fileName);
     if (!remote) {
       throw new Error(`Archive ${fileName} is not available on Firebase Hosting (404/missing).`);
     }
+    const url = remote.url;
     OpfsStorageAdapter.getStorageEstimate().catch(() => {}); // also requests persistent storage
     const file = await OpfsStorageAdapter.saveOrReplaceFromStream(
       fileName,
       url,
       onProgress,
       signal,
-      remote?.size
+      remote.size
     );
-    this.writeMeta(fileName, { size: remote?.size || file.size, etag: remote?.etag });
+    this.writeMeta(fileName, { size: remote.size, etag: remote.etag });
     await CachedFetchSource.clear(); // streamed ranges of the old file are obsolete
     return this.mountFromFile(id, fileName, file, id === 'israel-dem', 'opfs');
   }

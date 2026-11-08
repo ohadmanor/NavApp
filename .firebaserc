@@ -1,6 +1,18 @@
 {
   "projects": {
     "default": "navapp-israel-topo"
-  }
+  },
+  "targets": {
+    "navapp-israel-topo": {
+      "hosting": {
+        "app": [
+          "navapp-israel-topo"
+        ],
+        "data": [
+          "navapp-israel-topo-data"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
-
