@@ -1,5 +1,6 @@
 import type { StyleSpecification, LayerSpecification } from 'maplibre-gl';
-import ihmLayersRaw from './ihmLayers.json';
+import navappLayersRaw from './navappLayer.json';
+import { bundledDataUrl, REMOTE_DATA_ORIGIN } from '../dataUrls';
 
 export interface OutdoorLayerVisibility {
   hillshade: boolean;
@@ -36,9 +37,9 @@ export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
 };
 
 export interface BuildIsraelStyleParams {
-  osmProtocolUrl: string;
-  demProtocolUrl: string;
-  contourProtocolUrl?: string;
+  osmProtocolUrl?: string | null;
+  demProtocolUrl?: string | null;
+  contourProtocolUrl?: string | null;
   visibility: OutdoorLayerVisibility;
   theme?: 'topo-day' | 'topo-dark';
 }
@@ -126,22 +127,35 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
 
   const isDark = theme === 'topo-dark';
 
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'http://localhost:5173';
+
+  const defaultOsmUrl = `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.osm.pmtiles`;
+  const defaultDemUrl = `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`;
+  const effectiveOsmUrl = osmProtocolUrl || defaultOsmUrl;
+  const effectiveDemUrl = demProtocolUrl || defaultDemUrl;
+
   const sources: StyleSpecification['sources'] = {
     'israel-osm': {
       type: 'vector',
-      url: osmProtocolUrl,
-      minzoom: 0,
-      maxzoom: 14,
-    },
-    'israel-dem': {
-      type: 'raster-dem',
-      url: demProtocolUrl,
-      encoding: 'terrarium',
-      tileSize: 512,
+      url: effectiveOsmUrl,
       minzoom: 0,
       maxzoom: 14,
     },
   };
+
+  if (effectiveDemUrl) {
+    sources['israel-dem'] = {
+      type: 'raster-dem',
+      url: effectiveDemUrl,
+      encoding: 'terrarium',
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: 14,
+    };
+  }
 
   if (contourProtocolUrl) {
     sources['israel-contours'] = {
@@ -152,26 +166,28 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     };
   }
 
-  const origin =
-    typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'http://localhost:5173';
-
   sources['israel-trails'] = {
     type: 'geojson',
-    data: `${origin}/data/Israel.trails.geojson`,
+    data: bundledDataUrl('Israel.trails.geojson'),
   };
 
-  const baseLayers = structuredClone(ihmLayersRaw) as LayerSpecification[];
+  const baseLayers = structuredClone(navappLayersRaw) as LayerSpecification[];
   const layers: LayerSpecification[] = [];
 
   for (const layer of baseLayers) {
     if (!contourProtocolUrl && (layer as any).source === 'israel-contours') {
       continue;
     }
+    if (!effectiveDemUrl && (layer as any).source === 'israel-dem') {
+      continue;
+    }
 
-    if (layer.id === 'background' && isDark) {
-      layer.paint = { 'background-color': '#0b1015' };
+    if (layer.id === 'background') {
+      if (isDark) {
+        layer.paint = { 'background-color': '#0b1015' };
+      }
+      layers.push(layer);
+      continue;
     }
 
     const visToggle = getVisibilityForIhmLayer(layer.id, visibility);
@@ -350,7 +366,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     layers,
   };
 
-  if (visibility.terrain3d) {
+  if (visibility.terrain3d && effectiveDemUrl) {
     style.terrain = {
       source: 'israel-dem',
       exaggeration: 1.35,

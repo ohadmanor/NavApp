@@ -6,7 +6,7 @@
       "IHM:overlay": false
     },
     "paint": {
-      "background-color": "rgb(250, 247, 225)"
+      "background-color": "#F1EEE6"
     }
   },
   {
@@ -27,8 +27,8 @@
       "plant"
     ],
     "paint": {
-      "fill-outline-color": "rgba(102, 102, 102, 0.3)",
-      "fill-color": "rgb(242, 242, 242)"
+      "fill-outline-color": "rgba(150,140,120,0.25)",
+      "fill-color": "#E6E2D8"
     }
   },
   {
@@ -64,20 +64,18 @@
             "get",
             "subclass"
           ],
-          "sand",
-          "rgba(255, 236, 139, 0.25)",
           "beach",
-          "#FAFAA0",
+          "#F3E9C0",
           "transparent"
         ],
         "wood",
-        "rgba(145, 230, 145, 0.5)",
+        "#C5DDA5",
         "farmland",
-        "#E7E9C9",
+        "#EAE8CC",
         "orchard",
-        "rgba(19, 196, 42, 0.4)",
+        "#CFE2A8",
         "grass",
-        "rgb(233, 253, 204)",
+        "#DCEAC0",
         "transparent"
       ]
     }
@@ -135,7 +133,7 @@
       "cemetery"
     ],
     "paint": {
-      "fill-color": "#CCCCCC"
+      "fill-color": "#D3E2C3"
     }
   },
   {
@@ -152,7 +150,7 @@
       "quarry"
     ],
     "paint": {
-      "fill-color": "#BFBFBF"
+      "fill-color": "#D9D4C7"
     }
   },
   {
@@ -169,37 +167,18 @@
       "military"
     ],
     "paint": {
-      "fill-pattern": [
-        "match",
-        [
-          "coalesce",
-          [
-            "get",
-            "military"
-          ],
-          ""
-        ],
-        "training_area",
-        "red_nwse_pattern",
-        "red_nesw_pattern"
-      ],
+      "fill-color": "#ff0000",
       "fill-opacity": [
-        "match",
+        "step",
         [
-          "coalesce",
-          [
-            "get",
-            "military"
-          ],
-          ""
+          "zoom"
         ],
-        "training_area",
-        0.1,
-        "airfield",
-        0.1,
-        0.3
+        0,
+        9.5,
+        0.1
       ]
-    }
+    },
+    "minzoom": 9.5
   },
   {
     "id": "contour-line-casing",
@@ -270,7 +249,7 @@
       1
     ],
     "paint": {
-      "fill-color": "#8EBDF0",
+      "fill-color": "#A6CFEF",
       "fill-antialias": true,
       "fill-outline-color": [
         "match",
@@ -280,7 +259,7 @@
         ],
         "ocean",
         "transparent",
-        "#1E80E2"
+        "#7FB2DE"
       ]
     }
   },
@@ -3987,11 +3966,41 @@
       "class",
       "military"
     ],
-    "layout": {},
+    "layout": {
+      "line-join": "round"
+    },
     "paint": {
-      "line-color": "red",
-      "line-opacity": 0.3
-    }
+      "line-color": "#ff0000",
+      "line-width": [
+        "interpolate",
+        [
+          "linear"
+        ],
+        [
+          "zoom"
+        ],
+        8,
+        0.6,
+        12,
+        1.1,
+        16,
+        1.8
+      ],
+      "line-opacity": [
+        "step",
+        [
+          "zoom"
+        ],
+        0,
+        9.5,
+        0.2
+      ],
+      "line-dasharray": [
+        4,
+        2.5
+      ]
+    },
+    "minzoom": 9.5
   },
   {
     "id": "boundary-park-casing",
@@ -13088,8 +13097,10 @@
     },
     "source": "israel-dem",
     "paint": {
-      "hillshade-exaggeration": 0.33,
-      "hillshade-highlight-color": "rgba(256,256,256,0)"
+      "hillshade-exaggeration": 0.45,
+      "hillshade-highlight-color": "rgba(255,255,255,0.35)",
+      "hillshade-shadow-color": "rgba(90,75,50,0.55)",
+      "hillshade-accent-color": "rgba(120,100,70,0.25)"
     }
   },
   {

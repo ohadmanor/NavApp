@@ -10,8 +10,9 @@ import {
   type RangeResponse,
 } from 'pmtiles';
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
-import { pmtilesUrl, REMOTE_DATA_ORIGIN } from '../dataUrls';
+import { pmtilesUrl, REMOTE_DATA_ORIGIN, isNativePlatform } from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
+import { CachedFetchSource } from './CachedFetchSource';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
 import { registerOfflineRtlTextPlugin } from '../style/hebrewBidiProcessor';
 
@@ -23,6 +24,17 @@ export interface MountedArchiveInfo {
   record: MapArchiveRecord;
   vectorLayers: string[];
 }
+
+export type ArchiveUpdateListener = (
+  id: 'israel-dem' | 'israel-osm',
+  info: MountedArchiveInfo
+) => void;
+
+export type DownloadProgressListener = (
+  fileName: string,
+  loaded: number,
+  total: number
+) => void;
 
 /**
  * Central PMTiles Engine managing the dual-file Israel architecture:
@@ -38,9 +50,54 @@ export class PMTilesRegistry {
   private isProtocolRegistered = false;
   private demContourSource: any = null;
   private activeDemPmtiles: PMTiles | null = null;
+  private defaultContourProtocolUrl?: string;
+  private updateListeners = new Set<ArchiveUpdateListener>();
+  private progressListeners = new Set<DownloadProgressListener>();
+  private activeAutoDownloads = new Set<string>();
+  private autoDownloadQueue: Array<'israel-osm' | 'israel-dem'> = [];
+  private isAutoDownloading = false;
+  private forcedDownloads = new Set<string>();
 
   constructor() {
     this.protocol = new Protocol({ metadata: true });
+  }
+
+  getDefaultOsmProtocolUrl(): string {
+    return `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.osm.pmtiles`;
+  }
+
+  getDefaultDemProtocolUrl(): string {
+    return `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`;
+  }
+
+  getDefaultContourProtocolUrl(): string | undefined {
+    return this.defaultContourProtocolUrl;
+  }
+
+  onArchiveUpdated(listener: ArchiveUpdateListener): () => void {
+    this.updateListeners.add(listener);
+    return () => this.updateListeners.delete(listener);
+  }
+
+  onDownloadProgress(listener: DownloadProgressListener): () => void {
+    this.progressListeners.add(listener);
+    return () => this.progressListeners.delete(listener);
+  }
+
+  private notifyArchiveUpdated(id: 'israel-dem' | 'israel-osm', info: MountedArchiveInfo): void {
+    for (const l of this.updateListeners) {
+      try {
+        l(id, info);
+      } catch {}
+    }
+  }
+
+  private notifyDownloadProgress(fileName: string, loaded: number, total: number): void {
+    for (const l of this.progressListeners) {
+      try {
+        l(fileName, loaded, total);
+      } catch {}
+    }
   }
 
   initProtocols(): void {
@@ -48,40 +105,206 @@ export class PMTilesRegistry {
     maplibregl.addProtocol('pmtiles', this.protocol.tile);
     registerOfflineGlyphsProtocol();
     registerOfflineRtlTextPlugin();
+
+    // Pre-register remote Firebase sources as default fallbacks so MapLibre can stream immediately
+    const defaultOsmUrl = `${REMOTE_DATA_ORIGIN}/data/Israel.osm.pmtiles`;
+    const defaultOsmSource = new CachedFetchSource(defaultOsmUrl);
+    const defaultOsmPmtiles = new PMTiles(defaultOsmSource);
+    this.attachInMemoryTileCache(defaultOsmPmtiles, 400);
+    this.protocol.add(defaultOsmPmtiles);
+    (this.protocol as any).tiles?.set('israel-osm', defaultOsmPmtiles);
+
+    const defaultDemUrl = `${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`;
+    const defaultDemSource = new CachedFetchSource(defaultDemUrl);
+    const defaultDemPmtiles = new PMTiles(defaultDemSource);
+    this.attachInMemoryTileCache(defaultDemPmtiles, 500);
+    this.protocol.add(defaultDemPmtiles);
+    (this.protocol as any).tiles?.set('israel-dem', defaultDemPmtiles);
+    this.activeDemPmtiles = defaultDemPmtiles;
+
+    this.defaultContourProtocolUrl = this.setupDemContours(defaultDemPmtiles, 14);
+
     this.isProtocolRegistered = true;
   }
 
   /**
+   * Resolves a PMTiles archive:
+   * 1. Checks device storage (OPFS) for local offline file.
+   * 2. Checks local development server (/data/{fileName}).
+   * 3. If not found locally, automatically connects to Firebase (REMOTE_DATA_ORIGIN)
+   *    and triggers an automatic background download to OPFS.
+   */
+  async resolveArchive(
+    id: 'israel-dem' | 'israel-osm',
+    fileName: string,
+    isConstant: boolean
+  ): Promise<MountedArchiveInfo | null> {
+    this.initProtocols();
+
+    // 1. Already stored on this device? Mount instantly and NEVER re-download an identical file.
+    try {
+      const opfsFile = await OpfsStorageAdapter.getStoredFile(fileName);
+      if (opfsFile && opfsFile.size > 0) {
+        console.log(`[PMTilesRegistry] Found ${fileName} in local storage. Mounting...`);
+        const mounted = await this.mountFromFile(id, fileName, opfsFile, isConstant, 'opfs');
+        // Only the updatable OSM archive is re-validated, silently, in the background.
+        if (!isConstant) void this.checkForRemoteUpdate(id, fileName, opfsFile.size);
+        return mounted;
+      }
+    } catch (err) {
+      console.warn(`[PMTilesRegistry] Local storage lookup warning for ${fileName}:`, err);
+    }
+
+    // 2. Check local development server (/data/{fileName}) if on web
+    if (typeof window !== 'undefined' && window.location?.origin && !isNativePlatform()) {
+      const localUrl = `${window.location.origin}/data/${fileName}`;
+      try {
+        const head = await fetch(localUrl, { method: 'HEAD', signal: AbortSignal.timeout(1200) });
+        const looksLikeArchive =
+          head.ok && !(head.headers.get('content-type') || '').includes('text/html');
+        if (looksLikeArchive) {
+          console.log(`[PMTilesRegistry] Found ${fileName} on local server. Mounting...`);
+          return await this.mountFromUrl(id, fileName, localUrl, isConstant);
+        }
+      } catch {
+        // Not on local server
+      }
+    }
+
+    // 3. Not stored locally -> stream from Firebase right away (map shows immediately).
+    const remoteUrl = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
+    console.log(`[PMTilesRegistry] ${fileName} not found locally. Streaming from Firebase: ${remoteUrl}`);
+
+    try {
+      const mounted = await this.mountFromUrl(id, fileName, remoteUrl, isConstant);
+
+      // Only the small OSM archive is saved automatically. The 1.4 GB DEM keeps streaming
+      // (range-cached) and is downloaded only when the user asks for it in the Maps Manager.
+      if (id === 'israel-osm' && OpfsStorageAdapter.isSupported()) {
+        this.triggerAutoDownloadQueue(id, false);
+      }
+
+      return mounted;
+    } catch (err) {
+      console.warn(`[PMTilesRegistry] Could not mount ${fileName} from Firebase:`, err);
+      return null;
+    }
+  }
+
+  /** Reads the real archive size/etag from the server with a 1-byte range request. */
+  async probeRemote(fileName: string): Promise<{ size: number; etag?: string } | null> {
+    try {
+      const res = await fetch(`${REMOTE_DATA_ORIGIN}/data/${fileName}`, {
+        headers: { Range: 'bytes=0-0' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return null;
+      const range = res.headers.get('content-range');
+      const size = range ? Number(range.split('/')[1]) : 0;
+      if (!size) return null;
+      return { size, etag: res.headers.get('etag') || undefined };
+    } catch {
+      return null; // offline: keep using what we have
+    }
+  }
+
+  private readMeta(fileName: string): { size: number; etag?: string } | null {
+    try {
+      return JSON.parse(localStorage.getItem(`pmtiles-meta:${fileName}`) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  private writeMeta(fileName: string, meta: { size: number; etag?: string }): void {
+    try {
+      localStorage.setItem(`pmtiles-meta:${fileName}`, JSON.stringify(meta));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Downloads again only if the server's file differs from the stored one. */
+  private async checkForRemoteUpdate(
+    id: 'israel-dem' | 'israel-osm',
+    fileName: string,
+    localSize: number
+  ): Promise<void> {
+    const remote = await this.probeRemote(fileName);
+    if (!remote) return;
+    const meta = this.readMeta(fileName);
+    const sameSize = remote.size === localSize;
+    const sameEtag = !meta?.etag || !remote.etag || meta.etag === remote.etag;
+    if (sameSize && sameEtag) {
+      if (!meta) this.writeMeta(fileName, { size: remote.size, etag: remote.etag });
+      console.log(`[PMTilesRegistry] ${fileName} is up to date. No download needed.`);
+      return;
+    }
+    console.log(`[PMTilesRegistry] ${fileName} changed on server. Updating in background...`);
+    this.triggerAutoDownloadQueue(id, true);
+  }
+
+  private triggerAutoDownloadQueue(id: 'israel-osm' | 'israel-dem', force: boolean): void {
+    if (force) this.forcedDownloads.add(id);
+    if (!this.autoDownloadQueue.includes(id) && !this.activeAutoDownloads.has(id)) {
+      this.autoDownloadQueue.push(id);
+    }
+    void this.processAutoDownloadQueue();
+  }
+
+  private async processAutoDownloadQueue(): Promise<void> {
+    if (this.isAutoDownloading || this.autoDownloadQueue.length === 0) return;
+    this.isAutoDownloading = true;
+
+    const nextId = this.autoDownloadQueue.shift()!;
+    const forced = this.forcedDownloads.delete(nextId);
+    const fileName = nextId === 'israel-osm' ? 'Israel.osm.pmtiles' : 'Israel.dem.pmtiles';
+    const failKey = `pmtiles-dl-fail:${fileName}`;
+
+    try {
+      const existing = await OpfsStorageAdapter.getStoredFile(fileName);
+      if (existing && existing.size > 0 && !forced) return;
+
+      // Back off for 6h after a failed attempt instead of retrying on every app start.
+      const lastFail = Number(localStorage.getItem(failKey) || 0);
+      if (lastFail && Date.now() - lastFail < 6 * 3600 * 1000) return;
+
+      this.activeAutoDownloads.add(nextId);
+      console.log(`[PMTilesRegistry] Downloading ${fileName} to device storage...`);
+      const saved = await this.downloadOfflineArchive(nextId, (loaded, total) => {
+        this.notifyDownloadProgress(fileName, loaded, total);
+      });
+      localStorage.removeItem(failKey);
+      console.log(`[PMTilesRegistry] ${fileName} saved to device storage.`);
+      this.notifyArchiveUpdated(nextId, saved);
+    } catch (err) {
+      try {
+        localStorage.setItem(failKey, String(Date.now()));
+      } catch {
+        /* ignore */
+      }
+      console.warn(`[PMTilesRegistry] Download error for ${fileName}:`, err);
+    } finally {
+      this.activeAutoDownloads.delete(nextId);
+      this.isAutoDownloading = false;
+      void this.processAutoDownloadQueue();
+    }
+  }
+
+  /**
    * Boots both Israel.dem.pmtiles (Constant) and Israel.osm.pmtiles (Updatable).
-   * Checks OPFS first for any user-updated Israel.osm.pmtiles, falling back to /data/*.pmtiles.
+   * Checks OPFS first -> local server -> automatically downloads from Firebase.
    */
   async initializeDefaultIsraelArchives(): Promise<{
-    dem: MountedArchiveInfo;
-    osm: MountedArchiveInfo;
+    dem: MountedArchiveInfo | null;
+    osm: MountedArchiveInfo | null;
   }> {
     this.initProtocols();
 
-    // 1. Mount Constant DEM (Israel.dem.pmtiles)
-    const opfsDem = await OpfsStorageAdapter.getStoredFile('Israel.dem.pmtiles');
-    const dem = opfsDem
-      ? await this.mountFromFile('israel-dem', 'Israel.dem.pmtiles', opfsDem, true)
-      : await this.mountFromUrl(
-          'israel-dem',
-          'Israel.dem.pmtiles',
-          pmtilesUrl('Israel.dem.pmtiles'),
-          true
-        );
-
-    // 2. Mount Updatable OSM (Israel.osm.pmtiles) — prefers OPFS if user already updated it
-    const opfsOsm = await OpfsStorageAdapter.getStoredFile('Israel.osm.pmtiles');
-    const osm = opfsOsm
-      ? await this.mountFromFile('israel-osm', 'Israel.osm.pmtiles', opfsOsm, false)
-      : await this.mountFromUrl(
-          'israel-osm',
-          'Israel.osm.pmtiles',
-          pmtilesUrl('Israel.osm.pmtiles'),
-          false
-        );
+    const [osm, dem] = await Promise.all([
+      this.resolveArchive('israel-osm', 'Israel.osm.pmtiles', false),
+      this.resolveArchive('israel-dem', 'Israel.dem.pmtiles', true),
+    ]);
 
     return { dem, osm };
   }
@@ -93,7 +316,7 @@ export class PMTilesRegistry {
     isConstant: boolean
   ): Promise<MountedArchiveInfo> {
     this.initProtocols();
-    const source = new FetchSource(url);
+    const source = url.startsWith(REMOTE_DATA_ORIGIN) ? new CachedFetchSource(url) : new FetchSource(url);
     return this.registerArchiveSource(id, fileName, source, 'local-server', url, 0, isConstant);
   }
 
@@ -141,7 +364,17 @@ export class PMTilesRegistry {
     }
     const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
     const url = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
-    const file = await OpfsStorageAdapter.saveOrReplaceFromStream(fileName, url, onProgress, signal);
+    const remote = await this.probeRemote(fileName);
+    OpfsStorageAdapter.getStorageEstimate().catch(() => {}); // also requests persistent storage
+    const file = await OpfsStorageAdapter.saveOrReplaceFromStream(
+      fileName,
+      url,
+      onProgress,
+      signal,
+      remote?.size
+    );
+    this.writeMeta(fileName, { size: remote?.size || file.size, etag: remote?.etag });
+    await CachedFetchSource.clear(); // streamed ranges of the old file are obsolete
     return this.mountFromFile(id, fileName, file, id === 'israel-dem', 'opfs');
   }
 
@@ -191,6 +424,7 @@ export class PMTilesRegistry {
     const metadata: any = await pmtiles.getMetadata().catch(() => ({}));
 
     this.protocol.add(pmtiles);
+    (this.protocol as any).tiles?.set(id, pmtiles);
     this.archives.set(id, pmtiles);
 
     const createdUtc =
@@ -204,7 +438,7 @@ export class PMTilesRegistry {
 
     const sizeBytes =
       knownSizeBytes ||
-      Number(header.tileDataOffset + header.tileDataLength) ||
+      Number(header.tileDataOffset + (header.tileDataLength ?? 0)) ||
       (id === 'israel-dem' ? 1402183369 : 112434955);
 
     const record: MapArchiveRecord = {

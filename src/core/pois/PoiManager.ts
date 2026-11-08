@@ -1,4 +1,5 @@
 import { db, type PoiRecord, type PoiCategory } from '../db/NavDatabase';
+import { bundledDataUrl } from '../dataUrls';
 
 /**
  * Manages the Israeli Outdoor Points of Interest (Springs, Caves, Ruins, Campsites, 4x4 Passes, Peaks)
@@ -8,7 +9,7 @@ import { db, type PoiRecord, type PoiCategory } from '../db/NavDatabase';
 export class PoiManager {
   static async initializePois(): Promise<PoiRecord[]> {
     try {
-      const response = await fetch(`${window.location.origin}/data/Israel.pois.geojson`);
+      const response = await fetch(bundledDataUrl('Israel.pois.geojson'));
       if (response.ok) {
         const geojson = await response.json();
         if (Array.isArray(geojson.features) && geojson.features.length > 0) {

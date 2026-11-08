@@ -16,6 +16,8 @@ import {
   Square,
   AlertTriangle,
   Crosshair,
+  Download,
+  CheckCircle2,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
 import {
@@ -73,6 +75,37 @@ export const App: React.FC = () => {
   const [recordedCoords, setRecordedCoords] = useState<Array<[number, number]>>([]);
   const [offRouteWarning, setOffRouteWarning] = useState<number | null>(null);
   const [isAddingPoiMode, setIsAddingPoiMode] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<{
+    fileName: string;
+    loaded: number;
+    total: number;
+    percent: number;
+  } | null>(null);
+  const [downloadSuccessToast, setDownloadSuccessToast] = useState<string | null>(null);
+
+  const poisRef = useRef<PoiRecord[]>(pois);
+  poisRef.current = pois;
+
+  // Listen to background downloads from Firebase into persistent OPFS
+  useEffect(() => {
+    const unsubProgress = pmtilesRegistry.onDownloadProgress((fileName, loaded, total) => {
+      const percent = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      setDownloadStatus({ fileName, loaded, total, percent });
+    });
+
+    const unsubUpdated = pmtilesRegistry.onArchiveUpdated((id, info) => {
+      if (id === 'israel-osm') setOsmInfo(info);
+      if (id === 'israel-dem') setDemInfo(info);
+      setDownloadStatus(null);
+      setDownloadSuccessToast(`קובץ המפה ${info.record.fileName} נשמר בהצלחה במכשיר! פועל כעת 100% אופליין.`);
+      setTimeout(() => setDownloadSuccessToast(null), 5000);
+    });
+
+    return () => {
+      unsubProgress();
+      unsubUpdated();
+    };
+  }, []);
 
   // Monitor Online / Offline connectivity
   useEffect(() => {
@@ -382,134 +415,152 @@ export const App: React.FC = () => {
     [updateTacticalGridOnMap]
   );
 
-  // Initialize PMTiles Archives (Israel.dem.pmtiles + Israel.osm.pmtiles), POIs, Routes, and MapLibre
+  // Initialize MapLibre immediately so map canvas loads without delay, then boot PMTiles & POIs in background
   useEffect(() => {
     let isCancelled = false;
     let resizeObserver: ResizeObserver | null = null;
 
-    async function boot() {
-      const [{ dem, osm }, loadedPois, loadedRoutes] = await Promise.all([
-        pmtilesRegistry.initializeDefaultIsraelArchives(),
-        PoiManager.initializePois(),
-        RouteManager.initializeStarterRoutes(),
-      ]);
+    if (!mapContainerRef.current || mapRef.current) return;
 
-      if (isCancelled) return;
+    // 1. Synchronously register offline protocols (glyphs, rtl, pmtiles)
+    pmtilesRegistry.initProtocols();
 
-      // Record initial style key BEFORE setting state so the theme/archive effect does not double-load
-      mountedStyleKeyRef.current = `${osm.protocolUrl}|${dem.protocolUrl}|topo-day`;
+    // 2. Check if archives are already mounted or use default streaming Firebase endpoints
+    const existingOsm = pmtilesRegistry.getMountedInfo('israel-osm');
+    const existingDem = pmtilesRegistry.getMountedInfo('israel-dem');
+    const initialOsmUrl = existingOsm?.protocolUrl || pmtilesRegistry.getDefaultOsmProtocolUrl();
+    const initialDemUrl = existingDem?.protocolUrl || pmtilesRegistry.getDefaultDemProtocolUrl();
+    const initialContourUrl = existingDem?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl();
 
-      setDemInfo(dem);
-      setOsmInfo(osm);
-      setPois(loadedPois);
-      setRoutes(loadedRoutes);
-      setActiveRoute(null);
+    mountedStyleKeyRef.current = `${initialOsmUrl}|${initialDemUrl}|topo-day`;
 
-      if (!mapContainerRef.current || mapRef.current) return;
+    // 3. Build pure PMTiles style (renders authentic 242-layer IHM map immediately via range streaming)
+    const initialStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: initialOsmUrl,
+      demProtocolUrl: initialDemUrl,
+      contourProtocolUrl: initialContourUrl,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
 
-      const initialStyle = buildIsraelOutdoorStyle({
-        osmProtocolUrl: osm.protocolUrl,
-        demProtocolUrl: dem.protocolUrl,
-        contourProtocolUrl: dem.contourProtocolUrl,
-        visibility: DEFAULT_LAYER_VISIBILITY,
-        theme: 'topo-day',
+    // 4. Instantly mount MapLibre GL JS map instance
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: initialStyle,
+      center: [34.8134, 30.835],
+      zoom: 12.6,
+      maxPitch: 75,
+      fadeDuration: 0,
+      refreshExpiredTiles: false,
+      attributionControl: false,
+    });
+    mapRef.current = map;
+
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 140, unit: 'metric' }), 'bottom-left');
+
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        map.resize();
+        map.triggerRepaint();
       });
-
-      // Start zoomed into Nahal Aqev / Ein Aqev (z12.6) so 10m & 50m contours + wadis + 4x4 tracks are immediately visible!
-      const map = new maplibregl.Map({
-        container: mapContainerRef.current,
-        style: initialStyle,
-        center: [34.8134, 30.835],
-        zoom: 12.6,
-        maxPitch: 75,
-        fadeDuration: 0,
-        refreshExpiredTiles: false,
-        attributionControl: false,
-      });
-
-      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
-      map.addControl(new maplibregl.ScaleControl({ maxWidth: 140, unit: 'metric' }), 'bottom-left');
-
-      // Keep WebGL canvas resized whenever container dimensions change
-      if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
-        resizeObserver = new ResizeObserver(() => {
-          map.resize();
-          map.triggerRepaint();
-        });
-        resizeObserver.observe(mapContainerRef.current);
-      }
-
-      map.on('load', async () => {
-        if (isCancelled) return;
-        setIsMapReady(true);
-        syncOverlaySourcesToMap(
-          map,
-          loadedPois,
-          DEFAULT_LAYER_VISIBILITY,
-          null,
-          [],
-          'topo-day'
-        );
-      });
-
-      map.on('moveend', async () => {
-        const c = map.getCenter();
-        const lon = Number(c.lng.toFixed(4));
-        const lat = Number(c.lat.toFixed(4));
-        const zoom = Number(map.getZoom().toFixed(1));
-        const ele = await ElevationService.getElevationAt(lon, lat, 11, false);
-        setCursorCoords({ lon, lat, ele, zoom });
-      });
-
-      // Throttled mousemove (skipped while dragging/panning/zooming and using only cached DEM tiles)
-      map.on('mousemove', async (e) => {
-        if (map.isMoving() || map.isZooming() || map.isRotating()) return;
-        const now = performance.now();
-        if (now - lastMouseMoveTsRef.current < 150) return;
-        lastMouseMoveTsRef.current = now;
-
-        const lon = Number(e.lngLat.lng.toFixed(4));
-        const lat = Number(e.lngLat.lat.toFixed(4));
-        const zoom = Number(map.getZoom().toFixed(1));
-        const ele = await ElevationService.getElevationAt(lon, lat, 11, true);
-        setCursorCoords((prev) => ({
-          lon,
-          lat,
-          ele: ele !== null ? ele : prev.ele,
-          zoom,
-        }));
-      });
-
-      const handlePoiFeatureClick = (e: maplibregl.MapLayerMouseEvent) => {
-        const feature = e.features?.[0];
-        if (!feature || !feature.properties) return;
-        const p = feature.properties as any;
-        setSelectedPoi({
-          id: p.id,
-          name: p.nameHe || p.name,
-          nameHe: p.nameHe || p.name,
-          nameEn: p.nameEn || p.name,
-          category: p.category,
-          subcategory: p.subcategory,
-          lon: Number(p.lon),
-          lat: Number(p.lat),
-          ele: p.ele ? Number(p.ele) : null,
-          waterStatus: p.waterStatus || null,
-          difficulty4x4: p.difficulty4x4 || null,
-          descHe: p.descHe || '',
-          descEn: p.descEn || '',
-          source: p.source || 'IsraelHiking / OSM',
-          wikipedia: p.wikipedia || null,
-          userNotes: p.userNotes || '',
-        });
-      };
-
-      map.on('click', 'israel-pois-labels', handlePoiFeatureClick);
-
-      mapRef.current = map;
+      resizeObserver.observe(mapContainerRef.current);
     }
 
-    boot();
+    map.on('load', async () => {
+      if (isCancelled) return;
+      setIsMapReady(true);
+      map.resize();
+      syncOverlaySourcesToMap(
+        map,
+        poisRef.current,
+        DEFAULT_LAYER_VISIBILITY,
+        null,
+        [],
+        'topo-day'
+      );
+    });
+
+    map.on('moveend', async () => {
+      const c = map.getCenter();
+      const lon = Number(c.lng.toFixed(4));
+      const lat = Number(c.lat.toFixed(4));
+      const zoom = Number(map.getZoom().toFixed(1));
+      const ele = await ElevationService.getElevationAt(lon, lat, 11, false);
+      setCursorCoords({ lon, lat, ele, zoom });
+    });
+
+    // Throttled mousemove (skipped while dragging/panning/zooming and using only cached DEM tiles)
+    map.on('mousemove', async (e) => {
+      if (map.isMoving() || map.isZooming() || map.isRotating()) return;
+      const now = performance.now();
+      if (now - lastMouseMoveTsRef.current < 150) return;
+      lastMouseMoveTsRef.current = now;
+
+      const lon = Number(e.lngLat.lng.toFixed(4));
+      const lat = Number(e.lngLat.lat.toFixed(4));
+      const zoom = Number(map.getZoom().toFixed(1));
+      const ele = await ElevationService.getElevationAt(lon, lat, 11, true);
+      setCursorCoords((prev) => ({
+        lon,
+        lat,
+        ele: ele !== null ? ele : prev.ele,
+        zoom,
+      }));
+    });
+
+    const handlePoiFeatureClick = (e: maplibregl.MapLayerMouseEvent) => {
+      const feature = e.features?.[0];
+      if (!feature || !feature.properties) return;
+      const p = feature.properties as any;
+      setSelectedPoi({
+        id: p.id,
+        name: p.nameHe || p.name,
+        nameHe: p.nameHe || p.name,
+        nameEn: p.nameEn || p.name,
+        category: p.category,
+        subcategory: p.subcategory,
+        lon: Number(p.lon),
+        lat: Number(p.lat),
+        ele: p.ele ? Number(p.ele) : null,
+        waterStatus: p.waterStatus || null,
+        difficulty4x4: p.difficulty4x4 || null,
+        descHe: p.descHe || '',
+        descEn: p.descEn || '',
+        source: p.source || 'IsraelHiking / OSM',
+        wikipedia: p.wikipedia || null,
+        userNotes: p.userNotes || '',
+      });
+    };
+
+    map.on('click', 'israel-pois-labels', handlePoiFeatureClick);
+    map.on('mouseenter', 'israel-pois-labels', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'israel-pois-labels', () => {
+      map.getCanvas().style.cursor = '';
+    });
+
+    // 5. Asynchronously load PMTiles archives, POIs, and Routes in background
+    (async () => {
+      try {
+        const [{ dem, osm }, loadedPois, loadedRoutes] = await Promise.all([
+          pmtilesRegistry.initializeDefaultIsraelArchives(),
+          PoiManager.initializePois(),
+          RouteManager.initializeStarterRoutes(),
+        ]);
+
+        if (isCancelled) return;
+
+        if (dem) setDemInfo(dem);
+        if (osm) setOsmInfo(osm);
+        if (loadedPois.length > 0) setPois(loadedPois);
+        if (loadedRoutes.length > 0) setRoutes(loadedRoutes);
+      } catch (err) {
+        console.warn('[App] Background data loading warning:', err);
+      }
+    })();
+
     return () => {
       isCancelled = true;
       resizeObserver?.disconnect();
@@ -570,18 +621,20 @@ export const App: React.FC = () => {
   // Effect A: Only call map.setStyle() when the base theme ('topo-day' | 'topo-dark') or PMTiles archive URL actually changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !isMapReady || !demInfo || !osmInfo) return;
+    if (!map || !isMapReady) return;
 
-    const nextStyleKey = `${osmInfo.protocolUrl}|${demInfo.protocolUrl}|${theme}`;
+    const osmKey = osmInfo?.protocolUrl || 'none';
+    const demKey = demInfo?.protocolUrl || 'none';
+    const nextStyleKey = `${osmKey}|${demKey}|${theme}`;
     if (mountedStyleKeyRef.current === nextStyleKey) {
       return;
     }
     mountedStyleKeyRef.current = nextStyleKey;
 
     const newStyle = buildIsraelOutdoorStyle({
-      osmProtocolUrl: osmInfo.protocolUrl,
-      demProtocolUrl: demInfo.protocolUrl,
-      contourProtocolUrl: demInfo.contourProtocolUrl,
+      osmProtocolUrl: osmInfo?.protocolUrl || null,
+      demProtocolUrl: demInfo?.protocolUrl || null,
+      contourProtocolUrl: demInfo?.contourProtocolUrl || null,
       visibility,
       theme,
     });
@@ -699,6 +752,40 @@ export const App: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 select-none">
+      {/* Background Download from Firebase to OPFS Banner */}
+      {downloadStatus && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-sky-500/50 text-white rounded-2xl shadow-2xl px-4 py-3 flex flex-col gap-2 min-w-[320px] max-w-md backdrop-blur-md pointer-events-auto">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="font-semibold text-sky-400 flex items-center gap-1.5">
+              <Download className="w-4 h-4 animate-bounce text-sky-400" />
+              מוריד {downloadStatus.fileName} מ-Firebase למכשיר...
+            </span>
+            <span className="font-mono text-sky-300 font-bold">{downloadStatus.percent}%</span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-sky-500 h-2 rounded-full transition-all duration-200 ease-out"
+              style={{ width: `${Math.max(3, downloadStatus.percent)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[11px] text-slate-400">
+            <span>המפה פועלת בינתיים בצפייה ישירה</span>
+            <span>
+              {(downloadStatus.loaded / (1024 * 1024)).toFixed(1)} /{' '}
+              {(downloadStatus.total / (1024 * 1024)).toFixed(1)} MB
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Download Complete Toast */}
+      {downloadSuccessToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-emerald-950/95 border border-emerald-500/80 text-emerald-200 rounded-2xl shadow-2xl px-4 py-2.5 flex items-center gap-2.5 backdrop-blur-md">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="text-xs font-medium">{downloadSuccessToast}</span>
+        </div>
+      )}
+
       {/* Top Floating Navigation & Search Header */}
       <header className="fixed top-3 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
         {/* Left: Brand + Offline Hebrew/English Search + Category Filter Pills */}

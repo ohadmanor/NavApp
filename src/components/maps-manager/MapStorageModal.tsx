@@ -24,7 +24,7 @@ interface MapStorageModalProps {
   onClose: () => void;
   demInfo: MountedArchiveInfo | null;
   osmInfo: MountedArchiveInfo | null;
-  onArchivesUpdated: (dem: MountedArchiveInfo, osm: MountedArchiveInfo) => void;
+  onArchivesUpdated: (dem: MountedArchiveInfo | null, osm: MountedArchiveInfo | null) => void;
   onPoisAndRoutesImported: (poiCount: number, routeCount: number) => void;
 }
 
@@ -65,7 +65,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   } as const;
 
   const handleDownloadOffline = async (id: 'israel-dem' | 'israel-osm') => {
-    if (!demInfo || !osmInfo || downloading) return;
+    if (downloading) return;
     if (!OpfsStorageAdapter.isSupported()) {
       setStatusMessage('שגיאה: אחסון אופליין (OPFS) אינו נתמך במכשיר / בדפדפן זה.');
       return;
@@ -123,10 +123,9 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   const isLocalCopy = (info: MountedArchiveInfo | null) =>
     !!info && (info.record.storageKind === 'opfs' || info.record.storageKind === 'user-file');
 
-
   const handleReplaceOsmFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !demInfo) return;
+    if (!file) return;
     setIsBusy(true);
     setStatusMessage(`מחליף את קובץ המפה הווקטורית (${file.name})...`);
     try {
@@ -150,7 +149,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
   const handleMountLocalDemFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !osmInfo) return;
+    if (!file) return;
     setIsBusy(true);
     setStatusMessage(`טוען קובץ DEM מקומי (${file.name}) בקריאת Byte-Range...`);
     try {
@@ -171,7 +170,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   };
 
   const handleRemoteOsmUpdate = async () => {
-    if (!remoteOsmUrl.trim() || !demInfo) return;
+    if (!remoteOsmUrl.trim()) return;
     setIsBusy(true);
     setStatusMessage(`מוריד ומחליף את Israel.osm.pmtiles מכתובת מרוחקת...`);
     try {
@@ -423,10 +422,10 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                   </div>
                   <span
                     className={`text-xs font-semibold ${
-                      local ? 'text-emerald-400' : 'text-amber-300'
+                      local ? 'text-emerald-400' : info ? 'text-amber-300' : 'text-slate-400'
                     }`}
                   >
-                    {local ? '✓ שמור במכשיר (אופליין)' : 'מקוון בלבד'}
+                    {local ? '✓ שמור במכשיר (אופליין)' : info ? 'מקוון בלבד' : 'לא מחובר (מפה מקוונת פעילה)'}
                   </span>
                 </div>
 

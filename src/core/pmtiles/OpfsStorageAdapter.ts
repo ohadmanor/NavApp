@@ -37,7 +37,8 @@ export class OpfsStorageAdapter {
     fileName: string,
     sourceUrlOrBlob: string | Blob,
     onProgress?: (loadedBytes: number, totalBytes: number) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    expectedSize?: number
   ): Promise<File> {
     const dir = await this.getMapsDirHandle();
     const tempFileName = `${fileName}.tmp`;
@@ -50,7 +51,10 @@ export class OpfsStorageAdapter {
         if (!response.ok || !response.body) {
           throw new Error(`Failed to fetch ${sourceUrlOrBlob}: HTTP ${response.status}`);
         }
-        const total = Number(response.headers.get('content-length') || 0);
+        // Content-Length is the *compressed* size when the CDN applies Content-Encoding, while the
+        // stream yields decoded bytes. Trust only the real (probed) size, never a compressed header.
+        const encoded = !!response.headers.get('content-encoding');
+        const total = expectedSize || (encoded ? 0 : Number(response.headers.get('content-length') || 0));
         const reader = response.body.getReader();
         let loaded = 0;
 

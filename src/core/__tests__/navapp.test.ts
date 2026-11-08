@@ -113,6 +113,76 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(validationErrors).toEqual([]);
   });
 
+  it('builds pure PMTiles-only style pointing to Firebase streaming by default when local PMTiles are not yet mounted', () => {
+    const style = buildIsraelOutdoorStyle({
+      osmProtocolUrl: null,
+      demProtocolUrl: null,
+      contourProtocolUrl: null,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
+
+    expect(style.version).toBe(8);
+    // Sources strictly come from OSM PMTiles, DEM PMTiles, and trails GeoJSON — NO external raster sources!
+    expect(style.sources['israel-osm']).toBeDefined();
+    expect((style.sources['israel-osm'] as any).url).toContain('Israel.osm.pmtiles');
+    expect(style.sources['israel-dem']).toBeDefined();
+    expect((style.sources['israel-dem'] as any).url).toContain('Israel.dem.pmtiles');
+    expect(style.sources['israel-trails']).toBeDefined();
+    expect((style.sources as any)['osm-online-raster']).toBeUndefined();
+
+    // Contains authentic IHM vector layers and trail layers
+    const layerIds = style.layers.map((l) => l.id);
+    expect(layerIds).toContain('background');
+    expect(layerIds).toContain('Terrain');
+    expect(layerIds).toContain('ihm-marked-int-glow');
+    expect(layerIds).toContain('ihm-marked-track-casing');
+    expect(layerIds).toContain('ihm-marked-path');
+    expect(layerIds).toContain('ihm-marked-trail-label');
+    expect(layerIds).not.toContain('osm-online-raster-layer');
+
+    // Run MapLibre GL JS validator on the immediate fallback style
+    const code = fs.readFileSync('node_modules/maplibre-gl/dist/maplibre-gl.js', 'utf8');
+    const sharedStart = code.indexOf('define("shared"');
+    const workerStart = code.indexOf('define("worker"');
+    const sharedExports: any = {};
+    vm.runInNewContext(code.slice(sharedStart, workerStart), {
+      console,
+      setTimeout,
+      clearTimeout,
+      Uint8Array,
+      Uint16Array,
+      Uint32Array,
+      Int8Array,
+      Int16Array,
+      Int32Array,
+      Float32Array,
+      Float64Array,
+      ArrayBuffer,
+      DataView,
+      TextDecoder,
+      performance,
+      Math,
+      Object,
+      Array,
+      String,
+      Number,
+      Boolean,
+      RegExp,
+      Error,
+      Map,
+      Set,
+      WeakMap,
+      Symbol,
+      Promise,
+      JSON,
+      define: (_n: string, _d: string[], factory: any) => factory(sharedExports),
+    });
+
+    const validationErrors = sharedExports.F(style);
+    expect(validationErrors).toEqual([]);
+  });
+
   it('accurately processes Hebrew, mixed LTR numbers, and parentheses into visual RTL order', () => {
     // 1. Single Hebrew word: "ירושלים" -> "םילשורי"
     expect(convertLineToVisualOrder('ירושלים').text).toBe('םילשורי');
