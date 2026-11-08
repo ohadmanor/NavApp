@@ -756,7 +756,7 @@ export const App: React.FC = () => {
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 select-none">
       {/* Background Download from Firebase to OPFS Banner */}
-      {downloadStatus && (
+      {downloadStatus && !isNaN(downloadStatus.percent) && downloadStatus.total > 0 && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-sky-500/50 text-white rounded-2xl shadow-2xl px-4 py-3 flex flex-col gap-2 min-w-[320px] max-w-md backdrop-blur-md pointer-events-auto">
           <div className="flex items-center justify-between gap-3 text-xs">
             <span className="font-semibold text-sky-400 flex items-center gap-1.5">

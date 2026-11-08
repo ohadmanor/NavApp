@@ -378,6 +378,9 @@ export class PMTilesRegistry {
     const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
     const url = `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
     const remote = await this.probeRemote(fileName);
+    if (!remote) {
+      throw new Error(`Archive ${fileName} is not available on Firebase Hosting (404/missing).`);
+    }
     OpfsStorageAdapter.getStorageEstimate().catch(() => {}); // also requests persistent storage
     const file = await OpfsStorageAdapter.saveOrReplaceFromStream(
       fileName,
