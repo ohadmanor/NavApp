@@ -162,9 +162,17 @@
     "source": "israel-osm",
     "source-layer": "landuse",
     "filter": [
-      "==",
-      "class",
-      "military"
+      "any",
+      [
+        "==",
+        "class",
+        "military"
+      ],
+      [
+        "==",
+        "landuse",
+        "military"
+      ]
     ],
     "paint": {
       "fill-color": "#ff0000",
@@ -3962,9 +3970,17 @@
     "source": "israel-osm",
     "source-layer": "landuse",
     "filter": [
-      "==",
-      "class",
-      "military"
+      "any",
+      [
+        "==",
+        "class",
+        "military"
+      ],
+      [
+        "==",
+        "landuse",
+        "military"
+      ]
     ],
     "layout": {
       "line-join": "round"
