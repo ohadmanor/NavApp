@@ -125,6 +125,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    emptyOutDir: false, // Never wipe dist/ so large PMTiles files are preserved across builds
     sourcemap: false,
     chunkSizeWarningLimit: 2000,
   },

@@ -147,8 +147,6 @@ export class PMTilesRegistry {
       if (opfsFile && opfsFile.size > 0) {
         console.log(`[PMTilesRegistry] Found ${fileName} in local storage. Mounting...`);
         const mounted = await this.mountFromFile(id, fileName, opfsFile, isConstant, 'opfs');
-        // Only the updatable OSM archive is re-validated, silently, in the background.
-        if (!isConstant) void this.checkForRemoteUpdate(id, fileName, opfsFile.size);
         return mounted;
       }
     } catch (err) {
@@ -186,13 +184,6 @@ export class PMTilesRegistry {
 
       console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remoteUrl}`);
       const mounted = await this.mountFromUrl(id, fileName, remoteUrl, isConstant);
-
-      // Only the small OSM archive is saved automatically. The 1.4 GB DEM keeps streaming
-      // (range-cached) and is downloaded only when the user asks for it in the Maps Manager.
-      if (id === 'israel-osm' && OpfsStorageAdapter.isSupported()) {
-        this.triggerAutoDownloadQueue(id, false);
-      }
-
       return mounted;
     } catch (err) {
       console.warn(`[PMTilesRegistry] Could not mount ${fileName} from Firebase:`, err);

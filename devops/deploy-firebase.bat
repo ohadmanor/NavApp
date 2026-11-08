@@ -23,21 +23,33 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/4] Copying all map data ^(Israel.pois.geojson, Israel.trails.geojson, Israel.osm.pmtiles, Israel.dem.pmtiles^) into dist\data\...
+echo [3/4] Ensuring map data in dist\data\...
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
 if exist "data\Israel.trails.geojson" copy /Y "data\Israel.trails.geojson" "dist\data\Israel.trails.geojson" >nul
 if exist "data\Israel.osm.pmtiles" (
     copy /Y "data\Israel.osm.pmtiles" "dist\data\Israel.osm.pmtiles" >nul
     echo       [OK] Copied data\Israel.osm.pmtiles into dist\data\
-) else (
-    echo       [WARN] data\Israel.osm.pmtiles not found! It will not be uploaded to Firebase Hosting.
 )
-if exist "data\Israel.dem.pmtiles" (
-    copy /Y "data\Israel.dem.pmtiles" "dist\data\Israel.dem.pmtiles" >nul
-    echo       [OK] Copied data\Israel.dem.pmtiles into dist\data\
+
+if not exist "dist\data\Israel.dem.pmtiles" (
+    if exist "data\Israel.dem.pmtiles" (
+        copy /Y "data\Israel.dem.pmtiles" "dist\data\Israel.dem.pmtiles" >nul
+        echo       [OK] Copied data\Israel.dem.pmtiles into dist\data\
+    ) else (
+        echo.
+        echo ============================================================================
+        echo   [ERROR] SAFETY INTERLOCK: Israel.dem.pmtiles is not in dist\data\ or data\ !
+        echo   Deploying now would DELETE Israel.dem.pmtiles from Firebase Hosting!
+        echo   The deployment has been stopped to protect your hosted DEM file.
+        echo   Please place Israel.dem.pmtiles in data\ or dist\data\ before deploying.
+        echo ============================================================================
+        echo.
+        pause
+        exit /b 1
+    )
 ) else (
-    echo       [WARN] data\Israel.dem.pmtiles not found! It will not be uploaded to Firebase Hosting.
+    echo       [OK] Verified dist\data\Israel.dem.pmtiles is preserved and ready for Firebase.
 )
 
 echo [4/4] Deploying to Firebase Hosting...
