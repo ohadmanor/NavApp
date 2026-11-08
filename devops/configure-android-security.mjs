@@ -121,12 +121,11 @@ function configureGradleSigning() {
     return;
   }
 
-  const keystoreNormalized = KEYSTORE_FILE.replace(/\\/g, '/');
   const signingBlock = `
     // navappReleaseSigning: Configured automatically by devops/configure-android-security.mjs
     signingConfigs {
         release {
-            storeFile file("${keystoreNormalized}")
+            storeFile file("../../devops/keystore/navapp-release.jks")
             storePassword "${KEY_PASS}"
             keyAlias "${KEY_ALIAS}"
             keyPassword "${KEY_PASS}"

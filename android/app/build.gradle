@@ -20,7 +20,7 @@ android {
     // navappReleaseSigning: Configured automatically by devops/configure-android-security.mjs
     signingConfigs {
         release {
-            storeFile file("C:/dev/NavApp/devops/keystore/navapp-release.jks")
+            storeFile file("../../devops/keystore/navapp-release.jks")
             storePassword "NavAppOutdoor2026!"
             keyAlias "navapp_israel_key"
             keyPassword "NavAppOutdoor2026!"
