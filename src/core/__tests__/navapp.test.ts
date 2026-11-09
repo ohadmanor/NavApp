@@ -1,8 +1,24 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import maplibregl from 'maplibre-gl';
+import { PMTiles } from 'pmtiles';
+import { VectorTile } from '@mapbox/vector-tile';
+import { PbfReader } from 'pbf';
+import {
+  PMTilesSearchService,
+} from '../search/PMTilesSearchService';
+import {
+  extractRawRecordsFromVectorTile,
+  getPmtilesArchiveFingerprint,
+  normalizeSearchText,
+  parseSearchIndexBytes,
+  SearchIndexBuilder,
+  serializeSearchIndexPayload,
+} from '../search/pmtilesSearchCore.js';
+import type { PoiRecord, SavedRouteRecord } from '../db/NavDatabase';
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
@@ -1159,6 +1175,280 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
       expect(Array.isArray(layer?.paint?.['line-dasharray'])).toBe(true);
       expect(layer.paint['line-dasharray'].length).toBeGreaterThanOrEqual(2);
       expect(layer?.layout?.['line-cap']).toBe('butt');
+    }
+  });
+});
+
+describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extraction', () => {
+  const loadBundledTestPois = (): PoiRecord[] => {
+    const raw = JSON.parse(fs.readFileSync('data/Israel.pois.geojson', 'utf8'));
+    return (raw.features || []).map((f: any) => {
+      const p = f.properties || {};
+      const coords = f.geometry?.coordinates || [34.8, 30.8];
+      return {
+        id: String(p.id || f.id),
+        name: p.nameHe || p.name || '',
+        nameHe: p.nameHe || p.name || '',
+        nameEn: p.nameEn || p.name || '',
+        category: p.category || 'heritage',
+        subcategory: p.subcategory || 'poi',
+        lon: Number(coords[0]),
+        lat: Number(coords[1]),
+        ele: typeof p.ele === 'number' ? p.ele : null,
+        waterStatus: p.waterStatus || null,
+        difficulty4x4: p.difficulty4x4 || null,
+        descHe: p.descHe || '',
+        descEn: p.descEn || '',
+        source: p.source || 'IsraelHiking / OSM',
+        wikipedia: p.wikipedia || null,
+      };
+    });
+  };
+
+  it('indexes all searchable PMTiles layers inside Israel.search.idx with fingerprint matching Israel.osm.pmtiles', async () => {
+    const idxBytes = fs.readFileSync('data/Israel.search.idx');
+    const payload = await parseSearchIndexBytes(idxBytes, {
+      gunzip: async (b) => new Uint8Array(zlib.gunzipSync(b)),
+    });
+
+    expect(payload.totalFeatures).toBeGreaterThan(130_000);
+    expect(payload.layers).toEqual(
+      expect.arrayContaining([
+        'place',
+        'admin_area',
+        'mountain_peak',
+        'park',
+        'aerodrome_label',
+        'water',
+        'flood_defence',
+        'poi',
+        'road',
+        'aeroway',
+      ])
+    );
+
+    const fd = fs.openSync('data/Israel.osm.pmtiles', 'r');
+    try {
+      const pmtiles = new PMTiles({
+        getKey: () => 'data/Israel.osm.pmtiles',
+        async getBytes(offset, length) {
+          const buf = Buffer.allocUnsafe(length);
+          const n = fs.readSync(fd, buf, 0, length, offset);
+          return { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + n) };
+        },
+      });
+      const header = await pmtiles.getHeader();
+      expect(payload.fingerprint).toBe(getPmtilesArchiveFingerprint(header));
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    // Tel Aviv-Yafo city cluster must deduplicate to a single place:city entry
+    const placeLayerIdx = payload.layers.indexOf('place');
+    const cityClsIdx = payload.classes.indexOf('city');
+    const tlvCities = payload.rows.filter(
+      (r) =>
+        r[0] === placeLayerIdx &&
+        r[1] === cityClsIdx &&
+        normalizeSearchText(r[4]) === 'תל אביב יפו'
+    );
+    expect(tlvCities).toHaveLength(1);
+  });
+
+  it('ranks cities, peaks, rivers, 4x4 tracks, highways, and multi-token name+locality queries accurately & quickly', async () => {
+    const idxBytes = fs.readFileSync('data/Israel.search.idx');
+    const payload = await parseSearchIndexBytes(idxBytes, {
+      gunzip: async (b) => new Uint8Array(zlib.gunzipSync(b)),
+    });
+    const service = new PMTilesSearchService();
+    service.loadPayload(payload, 'bundled');
+
+    const pois = loadBundledTestPois();
+    const refCenter = { lon: 34.8134, lat: 30.8281 };
+
+    const t0 = performance.now();
+    const jerusalem = service.search('ירושלים', { pois, referenceCoord: refCenter });
+    const elapsedMs = performance.now() - t0;
+    expect(elapsedMs).toBeLessThan(200);
+    expect(jerusalem[0].title).toBe('ירושלים');
+    expect(jerusalem[0].filterGroup).toBe('places');
+
+    // Dash/maqaf normalization: תל אביב / תל-אביב יפו / תל אביב–יפו
+    for (const q of ['תל אביב', 'תל-אביב יפו', 'תל אביב–יפו']) {
+      const hits = service.search(q, { pois, referenceCoord: refCenter });
+      expect(hits[0].title).toContain('תל אביב');
+      expect(hits[0].filterGroup).toBe('places');
+    }
+
+    // Geresh/gershayim normalization & airport alias
+    const airportHits = service.search('נתב"ג', { pois, referenceCoord: refCenter });
+    expect(airportHits.some((h) => h.title.includes('בן-גוריון') || h.ref.includes('LLBG'))).toBe(true);
+    expect(airportHits.some((h) => h.title.includes('נתב'))).toBe(true);
+
+    // Airport IATA / dash normalization
+    const llbgHits = service.search('נמל התעופה בן גוריון', { pois });
+    expect(llbgHits[0].ref).toContain('LLBG');
+
+    // Iconic outdoor highlights outrank bus stops & municipal residential streets
+    const einAkev = service.search('עין עקב', { pois, referenceCoord: refCenter });
+    expect(einAkev[0].kind).toBe('curated-poi');
+    expect(einAkev[0].title).toContain('עין עקב');
+
+    const meron = service.search('הר מירון', { pois, referenceCoord: refCenter });
+    expect(meron.some((h) => h.title.includes('הר מירון') && h.poiCategory === 'peak')).toBe(true);
+    expect(meron[0].categoryLabel).not.toBe('תחנת אוטובוס');
+
+    const tzin = service.search('נחל צין', { filter: 'nature', pois, referenceCoord: refCenter });
+    expect(tzin.length).toBeGreaterThan(0);
+    expect(tzin[0].title).toContain('נחל צין');
+
+    const maaleZik = service.search('מעלה זיק', { pois, referenceCoord: refCenter });
+    expect(maaleZik[0].title).toContain('מעלה זיק');
+
+    // Highway ref matching: "כביש 6" prioritizes motorway ref="6" over Highway 60
+    const hwy6 = service.search('כביש 6', { filter: 'roads', pois, referenceCoord: refCenter });
+    expect(hwy6.length).toBeGreaterThan(0);
+    expect(hwy6[0].ref).toBe('6');
+
+    // Low-zoom-only airbases (Nevatim & Hatzerim) must be indexed
+    const hatzerimAirbase = service.search('בסיס חיל האויר חצרים', { pois });
+    expect(hatzerimAirbase.some((h) => h.ref.includes('LLHB'))).toBe(true);
+    const nevatimAirbase = service.search('נבטים', { pois });
+    expect(nevatimAirbase.some((h) => h.ref.includes('LLNV'))).toBe(true);
+    expect(service.search('LLNV', { pois })[0].ref).toContain('LLNV');
+
+    // Multi-token "street + locality" (with and without Hebrew 'ב' preposition)
+    const herzlHaifa = service.search('הרצל חיפה', { pois });
+    expect(herzlHaifa.length).toBeGreaterThan(0);
+    expect(herzlHaifa[0].locality).toBe('חיפה');
+
+    const herzlTlv = service.search('הרצל בתל אביב', { pois });
+    expect(herzlTlv.length).toBeGreaterThan(0);
+    expect(herzlTlv[0].locality).toContain('תל אביב');
+
+    // Category + locality semantic query ("דלק חיפה" finds gas stations in Haifa)
+    const fuelHaifa = service.search('דלק חיפה', { pois });
+    expect(fuelHaifa.length).toBeGreaterThan(0);
+    expect(fuelHaifa[0].locality).toBe('חיפה');
+
+    // Filter tabs isolate routes & places properly
+    const sampleRoute: SavedRouteRecord = {
+      id: 'route-test-ramon',
+      name: 'סובב מכתש רמון ציר צפוני',
+      sourceFormat: 'planned',
+      distanceKm: 18.4,
+      ascentMeters: 420,
+      descentMeters: 410,
+      minEle: 380,
+      maxEle: 820,
+      color: '#2563eb',
+      visible: true,
+      geojson: {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                [34.801, 30.61],
+                [34.88, 30.63],
+              ],
+            },
+          },
+        ],
+      },
+      elevationProfile: [
+        { distKm: 0, ele: 650, lon: 34.801, lat: 30.61 },
+        { distKm: 18.4, ele: 510, lon: 34.88, lat: 30.63 },
+      ],
+      createdAt: new Date().toISOString(),
+    };
+    const routeHits = service.search('', { filter: 'routes', routes: [sampleRoute] });
+    expect(routeHits).toHaveLength(1);
+    expect(routeHits[0].kind).toBe('route');
+    expect(routeHits[0].routeRecord?.id).toBe('route-test-ramon');
+
+    const placesOnly = service.search('ירושלים', { filter: 'places', pois });
+    expect(placesOnly.every((r) => r.filterGroup === 'places')).toBe(true);
+  });
+
+  it('parses WGS84 coords, swaps Israel lon/lat, and round-trips IDF 8-digit & 12-digit ITM grid searches', () => {
+    const service = new PMTilesSearchService();
+
+    // Forward -> Inverse 12-digit ITM accuracy (< 5m)
+    const sampleLon = 34.8134;
+    const sampleLat = 30.8281;
+    const mil = MilitaryGridService.toMilitaryCoords(sampleLon, sampleLat);
+    const inv = MilitaryGridService.itmToWgs84(mil.itmEasting, mil.itmNorthing);
+    expect(Math.abs(inv.lon - sampleLon)).toBeLessThan(0.0001);
+    expect(Math.abs(inv.lat - sampleLat)).toBeLessThan(0.0001);
+
+    // 8-digit IDF tactical grid search ("1813-5828" or formatted grid)
+    const idfHits = service.search(mil.idfGrid8Digit);
+    expect(idfHits[0].kind).toBe('coord');
+    expect(Math.abs(idfHits[0].lon - sampleLon)).toBeLessThan(0.002);
+    expect(Math.abs(idfHits[0].lat - sampleLat)).toBeLessThan(0.002);
+
+    // Decimal WGS84 (standard lat, lon AND swapped lon, lat in Israel bounds)
+    const wgsHits = service.search('31.7683, 35.2137');
+    expect(wgsHits[0].kind).toBe('coord');
+    expect(wgsHits[0].lat).toBeCloseTo(31.7683, 4);
+    expect(wgsHits[0].lon).toBeCloseTo(35.2137, 4);
+
+    const swappedHits = service.search('34.8134, 30.8281');
+    expect(swappedHits[0].kind).toBe('coord');
+    expect(swappedHits[0].lat).toBeCloseTo(30.8281, 4);
+    expect(swappedHits[0].lon).toBeCloseTo(34.8134, 4);
+
+    // 12-digit ITM meters
+    const itmQuery = `${mil.itmEasting} / ${mil.itmNorthing}`;
+    const itmHits = service.search(itmQuery);
+    expect(itmHits[0].kind).toBe('coord');
+    expect(Math.abs(itmHits[0].lon - sampleLon)).toBeLessThan(0.0001);
+    expect(Math.abs(itmHits[0].lat - sampleLat)).toBeLessThan(0.0001);
+  });
+
+  it('extracts, serializes, and parses runtime vector tiles from PMTiles cleanly', async () => {
+    const fd = fs.openSync('data/Israel.osm.pmtiles', 'r');
+    try {
+      const pmtiles = new PMTiles({
+        getKey: () => 'data/Israel.osm.pmtiles',
+        async getBytes(offset, length) {
+          const buf = Buffer.allocUnsafe(length);
+          const n = fs.readSync(fd, buf, 0, length, offset);
+          return { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + n) };
+        },
+      });
+      // Center of Jerusalem at z14: x=9794, y=6672
+      const tileResp = await pmtiles.getZxy(14, 9794, 6672);
+      expect(tileResp?.data).toBeDefined();
+      const rawBytes = new Uint8Array(tileResp!.data);
+      const mvtBytes =
+        rawBytes[0] === 0x1f && rawBytes[1] === 0x8b
+          ? new Uint8Array(zlib.gunzipSync(rawBytes))
+          : rawBytes;
+      const vt = new VectorTile(new PbfReader(mvtBytes));
+      const records = extractRawRecordsFromVectorTile(vt, 14, 9794, 6672);
+      expect(records.length).toBeGreaterThan(20);
+
+      const builder = new SearchIndexBuilder({ fingerprint: 'runtime-test-fp' });
+      builder.ingestRecords(records);
+      const payload = builder.buildPayload();
+      expect(payload.totalFeatures).toBeGreaterThan(10);
+
+      const compressed = await serializeSearchIndexPayload(payload, {
+        gzip: true,
+        gzipFn: async (b) => new Uint8Array(zlib.gzipSync(b)),
+      });
+      const parsed = await parseSearchIndexBytes(compressed, {
+        gunzip: async (b) => new Uint8Array(zlib.gunzipSync(b)),
+      });
+      expect(parsed.fingerprint).toBe('runtime-test-fp');
+      expect(parsed.totalFeatures).toBe(payload.totalFeatures);
+    } finally {
+      fs.closeSync(fd);
     }
   });
 });

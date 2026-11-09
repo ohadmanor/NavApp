@@ -1,17 +1,19 @@
 const CACHE_NAME = 'navapp-offline-v6';
 const APP_SHELL = [
-  '/',
-  '/index.html',
-  '/manifest.webmanifest',
-  '/favicon.png',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/icon-512-maskable.png',
-  '/assets/rtl-text-plugin.js',
-  '/assets/sprites/sprite.json',
-  '/assets/sprites/sprite.png',
-  '/assets/sprites/sprite@2x.json',
-  '/assets/sprites/sprite@2x.png'
+  "/",
+  "/index.html",
+  "/manifest.webmanifest",
+  "/favicon.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-512-maskable.png",
+  "/assets/rtl-text-plugin.js",
+  "/assets/sprites/sprite.json",
+  "/assets/sprites/sprite.png",
+  "/assets/sprites/sprite@2x.json",
+  "/assets/sprites/sprite@2x.png",
+  "/data/Israel.pois.geojson",
+  "/data/Israel.search.idx"
 ];
 
 self.addEventListener('install', (event) => {
@@ -32,14 +34,8 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  // Never intercept non-GET, cross-origin requests (Firebase Auth/Storage/Firestore), Firebase auth handler, or PMTiles byte ranges
-  if (
-    event.request.method !== 'GET' ||
-    url.origin !== self.location.origin ||
-    url.pathname.startsWith('/__/') ||
-    url.pathname.endsWith('.pmtiles') ||
-    event.request.headers.get('range')
-  ) {
+  // Never intercept byte-range requests to large .pmtiles files
+  if (url.pathname.endsWith('.pmtiles') || event.request.headers.get('range')) {
     return;
   }
   event.respondWith(

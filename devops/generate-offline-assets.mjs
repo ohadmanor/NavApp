@@ -303,8 +303,15 @@ const rtlPluginCode = `/**
 fs.writeFileSync(path.join(ASSETS_DIR, 'rtl-text-plugin.js'), rtlPluginCode, 'utf-8');
 
 // 4. Offline Service Worker (public/sw.js)
-const swCode = `const CACHE_NAME = 'navapp-offline-v5';
-const APP_SHELL = [
+const optionalDataAssets = [];
+if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.pois.geojson'))) {
+  optionalDataAssets.push('/data/Israel.pois.geojson');
+}
+if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.search.idx'))) {
+  optionalDataAssets.push('/data/Israel.search.idx');
+}
+
+const appShellEntries = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
@@ -316,8 +323,12 @@ const APP_SHELL = [
   '/assets/sprites/sprite.json',
   '/assets/sprites/sprite.png',
   '/assets/sprites/sprite@2x.json',
-  '/assets/sprites/sprite@2x.png'
+  '/assets/sprites/sprite@2x.png',
+  ...optionalDataAssets
 ];
+
+const swCode = `const CACHE_NAME = 'navapp-offline-v6';
+const APP_SHELL = ${JSON.stringify(appShellEntries, null, 2)};
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

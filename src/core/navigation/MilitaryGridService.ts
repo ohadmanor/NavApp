@@ -205,5 +205,120 @@ export class MilitaryGridService {
       features,
     };
   }
+
+  /**
+   * Converts ITM (Israel Transverse Mercator, EPSG:2039) easting/northing in meters back to WGS84 (lon, lat).
+   * Uses iterative inversion of projectTransverseMercator to achieve millimeter accuracy.
+   */
+  static itmToWgs84(easting: number, northing: number): { lon: number; lat: number } {
+    let lon = 35.2045169444 + (easting - 219529.584) / 95000;
+    let lat = 31.7343936111 + (northing - 626907.39) / 110880;
+
+    // 4 Newton-style refinement steps against the exact forward TM projection
+    for (let i = 0; i < 4; i++) {
+      const proj = this.projectTransverseMercator(
+        lon,
+        lat,
+        35.2045169444,
+        31.7343936111,
+        219529.584,
+        626907.39,
+        1.0000067
+      );
+      const dE = easting - proj.easting;
+      const dN = northing - proj.northing;
+      if (Math.abs(dE) < 0.01 && Math.abs(dN) < 0.01) break;
+      const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+      lon += dE / (111319.49 * cosLat);
+      lat += dN / 110880.0;
+    }
+
+    return {
+      lon: Number(lon.toFixed(6)),
+      lat: Number(lat.toFixed(6)),
+    };
+  }
+
+  /**
+   * Parses manual coordinate / IDF grid searches:
+   *  - WGS84: "31.7683, 35.2137" or "30.8281 34.8134" (lat, lon or lon, lat inside Israel region)
+   *  - 8-digit IDF Grid: "1813-5828" or "1813 5828" or "18135828"
+   *  - 12-digit ITM meters: "220120 / 631450" or "220120, 631450"
+   */
+  static parseCoordinateQuery(
+    raw: string
+  ): { lon: number; lat: number; label: string; subtitle: string; kind: 'wgs84' | 'itm' | 'idf-grid' } | null {
+    const cleaned = raw
+      .trim()
+      .replace(/^נ\.?צ\.?:?\s*/i, '')
+      .replace(/^itm:?\s*/i, '');
+    if (!cleaned) return null;
+
+    // 1. Decimal WGS84 coordinates: e.g. "31.7683, 35.2137" or "34.8134 30.8281"
+    const decMatch = /^(-?\d{1,2}\.\d{3,})\s*[,;/\s]\s*(-?\d{1,2}\.\d{3,})$/.exec(cleaned);
+    if (decMatch) {
+      const a = Number(decMatch[1]);
+      const b = Number(decMatch[2]);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+      // Standard order is lat, lon (28..35, 33..37). Detect swapped lon, lat in Israel bounds.
+      let lat = a;
+      let lon = b;
+      if (a >= 33.5 && a <= 36.8 && b >= 28.5 && b < 33.5) {
+        lon = a;
+        lat = b;
+      }
+      if (lat >= -85 && lat <= 85 && lon >= -180 && lon <= 180) {
+        const mil = this.toMilitaryCoords(lon, lat);
+        return {
+          lon: Number(lon.toFixed(6)),
+          lat: Number(lat.toFixed(6)),
+          label: `${lat.toFixed(5)}, ${lon.toFixed(5)}`,
+          subtitle: `קואורדינטות WGS84 • נ.צ. ${mil.idfGrid8Digit}`,
+          kind: 'wgs84',
+        };
+      }
+    }
+
+    // 2. 8-digit IDF Tactical Grid: "1813-5828", "1813 5828", "18135828"
+    const idfSep = /^(\d{4})\s*[-–—/\s]\s*(\d{4})$/.exec(cleaned);
+    const idfCompact = !idfSep ? /^(\d{4})(\d{4})$/.exec(cleaned) : null;
+    const idfMatch = idfSep || idfCompact;
+    if (idfMatch) {
+      const e4 = Number(idfMatch[1]);
+      const n4 = Number(idfMatch[2]);
+      if (e4 >= 1000 && e4 <= 3200 && n4 >= 3400 && n4 <= 8600) {
+        const easting = e4 * 100 + 50;
+        const northing = n4 * 100 + 50;
+        const { lon, lat } = this.itmToWgs84(easting, northing);
+        return {
+          lon,
+          lat,
+          label: `נ.צ. ${idfMatch[1]}-${idfMatch[2]}`,
+          subtitle: `רשת ישראל החדשה (${easting}E / ${northing}N)`,
+          kind: 'idf-grid',
+        };
+      }
+    }
+
+    // 3. Full 6-digit ITM meters: "219529 / 626907" or "219529, 626907"
+    const itmMatch = /^(\d{6})\s*[,;/\s]\s*(\d{6})$/.exec(cleaned);
+    if (itmMatch) {
+      const easting = Number(itmMatch[1]);
+      const northing = Number(itmMatch[2]);
+      if (easting >= 100000 && easting <= 320000 && northing >= 340000 && northing <= 860000) {
+        const { lon, lat } = this.itmToWgs84(easting, northing);
+        const mil = this.toMilitaryCoords(lon, lat);
+        return {
+          lon,
+          lat,
+          label: `ITM ${easting} / ${northing}`,
+          subtitle: `נ.צ. ${mil.idfGrid8Digit} • ${lat.toFixed(5)}, ${lon.toFixed(5)}`,
+          kind: 'itm',
+        };
+      }
+    }
+
+    return null;
+  }
 }
 

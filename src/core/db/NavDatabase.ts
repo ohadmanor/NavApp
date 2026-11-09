@@ -85,11 +85,19 @@ export interface RecordedTrackRecord {
   coordinates: Array<[number, number, number, number]>; // [lon, lat, ele, timestamp]
 }
 
+export interface SearchIndexCacheRecord {
+  fingerprint: string;
+  createdUtc: string;
+  payloadBytes: Uint8Array;
+  totalFeatures: number;
+}
+
 export class NavDatabase extends Dexie {
   mapRegistry!: Table<MapArchiveRecord, string>;
   pois!: Table<PoiRecord, string>;
   routes!: Table<SavedRouteRecord, string>;
   tracks!: Table<RecordedTrackRecord, string>;
+  searchIndexCache!: Table<SearchIndexCacheRecord, string>;
 
   constructor() {
     super('NavAppOutdoorDB');
@@ -104,6 +112,13 @@ export class NavDatabase extends Dexie {
       pois: 'id, category, subcategory, nameHe, nameEn, source',
       routes: 'id, name, visible, createdAt, ownerUid, cloudSyncStatus, sourceFormat',
       tracks: 'id, startedAt',
+    });
+    this.version(3).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source',
+      routes: 'id, name, visible, createdAt, ownerUid, cloudSyncStatus, sourceFormat',
+      tracks: 'id, startedAt',
+      searchIndexCache: 'fingerprint, createdUtc',
     });
   }
 }

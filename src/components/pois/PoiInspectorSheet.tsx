@@ -87,7 +87,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   };
 
   const handleSaveNote = async () => {
-    const updated = await PoiManager.saveUserNote(poi.id, noteText);
+    const updated = await PoiManager.saveUserNote(poi.id, noteText, poi);
     if (updated) {
       onPoiUpdated(updated);
       setSavedBanner(true);

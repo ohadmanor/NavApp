@@ -60,8 +60,15 @@ if exist "data\Israel.osm.pmtiles" (
     )
 )
 
+if exist "deploy_data\data\Israel.osm.pmtiles" (
+    call node devops\build-pmtiles-search-index.mjs --if-present --input deploy_data\data\Israel.osm.pmtiles
+)
+
 if exist "data\Israel.pois.geojson" (
     copy /Y "data\Israel.pois.geojson" "deploy_data\data\Israel.pois.geojson" >nul
+)
+if exist "data\Israel.search.idx" (
+    copy /Y "data\Israel.search.idx" "deploy_data\data\Israel.search.idx" >nul
 )
 
 if not exist "deploy_data\data\*.pmtiles" goto :NO_FILES

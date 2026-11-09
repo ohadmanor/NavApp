@@ -37,6 +37,15 @@ import { RouteManager } from './core/navigation/RouteManager';
 import { ElevationService } from './core/navigation/ElevationService';
 import { MilitaryGridService } from './core/navigation/MilitaryGridService';
 import {
+  pmtilesSearchService,
+  type SearchResultItem,
+  type SearchIndexStatus,
+} from './core/search/PMTilesSearchService';
+import {
+  SEARCH_FILTER_TABS,
+  type SearchFilterCategory,
+} from './core/search/searchTaxonomy';
+import {
   db,
   type PoiRecord,
   type SavedRouteRecord,
@@ -159,8 +168,14 @@ export const App: React.FC = () => {
   const [pois, setPois] = useState<PoiRecord[]>([]);
   const [selectedPoi, setSelectedPoi] = useState<PoiRecord | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<PoiRecord[]>([]);
+  const [searchFilter, setSearchFilter] = useState<SearchFilterCategory>('all');
+  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
+  const [searchStatus, setSearchStatus] = useState<SearchIndexStatus>(() =>
+    pmtilesSearchService.getStatus()
+  );
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Routes & Active Navigation
   const [routes, setRoutes] = useState<SavedRouteRecord[]>([]);
@@ -259,6 +274,8 @@ export const App: React.FC = () => {
 
   const poisRef = useRef<PoiRecord[]>(pois);
   poisRef.current = pois;
+  const selectedPoiRef = useRef<PoiRecord | null>(selectedPoi);
+  selectedPoiRef.current = selectedPoi;
   const visibilityRef = useRef<OutdoorLayerVisibility>(visibility);
   visibilityRef.current = visibility;
   const themeRef = useRef<MapTheme>(theme);
@@ -543,7 +560,7 @@ export const App: React.FC = () => {
     []
   );
 
-  // Mount GeoJSON overlays (Tactical Grid + POIs + Saved/Active Routes + Live Recorded Track + Route Planner)
+  // Mount GeoJSON overlays (Tactical Grid + POIs + Search Highlight + Saved/Active Routes + Live Recorded Track + Route Planner)
   const syncOverlaySourcesToMap = useCallback(
     (
       map: maplibregl.Map,
@@ -553,7 +570,8 @@ export const App: React.FC = () => {
       allRoutes: SavedRouteRecord[],
       liveTrack: Array<[number, number]>,
       currentTheme: MapTheme,
-      currentPlan: PlanOverlayState
+      currentPlan: PlanOverlayState,
+      highlightedPoi: PoiRecord | null
     ) => {
       try {
         if (!map.getStyle()) return;
@@ -1095,6 +1113,81 @@ export const App: React.FC = () => {
           });
         }
 
+        // Selected POI / PMTiles Search Result Pin Highlight
+        const highlightFeatures: GeoJSON.Feature[] =
+          highlightedPoi &&
+          Number.isFinite(highlightedPoi.lon) &&
+          Number.isFinite(highlightedPoi.lat)
+            ? [
+                {
+                  type: 'Feature',
+                  properties: {
+                    title: highlightedPoi.nameHe || highlightedPoi.name || '',
+                  },
+                  geometry: {
+                    type: 'Point',
+                    coordinates: [highlightedPoi.lon, highlightedPoi.lat],
+                  },
+                },
+              ]
+            : [];
+        const highlightGeoJson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: highlightFeatures,
+        };
+        const existingHighlightSrc = map.getSource(
+          'search-highlight-src'
+        ) as maplibregl.GeoJSONSource;
+        if (existingHighlightSrc) {
+          existingHighlightSrc.setData(highlightGeoJson);
+        } else {
+          map.addSource('search-highlight-src', { type: 'geojson', data: highlightGeoJson });
+          map.addLayer({
+            id: 'search-highlight-halo',
+            type: 'circle',
+            source: 'search-highlight-src',
+            paint: {
+              'circle-radius': 18,
+              'circle-color': '#10b981',
+              'circle-opacity': 0.22,
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#10b981',
+              'circle-stroke-opacity': 0.8,
+            },
+          });
+          map.addLayer({
+            id: 'search-highlight-pin',
+            type: 'circle',
+            source: 'search-highlight-src',
+            paint: {
+              'circle-radius': 7.5,
+              'circle-color': '#f59e0b',
+              'circle-stroke-width': 2.5,
+              'circle-stroke-color': '#ffffff',
+            },
+          });
+          map.addLayer({
+            id: 'search-highlight-label',
+            type: 'symbol',
+            source: 'search-highlight-src',
+            layout: {
+              'text-field': ['get', 'title'],
+              'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
+              'text-size': 13.5,
+              'text-offset': [0, 1.35],
+              'text-anchor': 'top',
+              'text-max-width': 12,
+              'text-allow-overlap': true,
+            },
+            paint: {
+              'text-color': currentTheme === 'topo-dark' ? '#fde68a' : '#065f46',
+              'text-halo-color': currentTheme === 'topo-dark' ? '#0b1015' : '#ffffff',
+              'text-halo-width': 3,
+              'text-halo-blur': 1,
+            },
+          });
+        }
+
         map.triggerRepaint();
       } catch (err) {
         console.warn('[NavApp] syncOverlaySourcesToMap error:', err);
@@ -1175,7 +1268,8 @@ export const App: React.FC = () => {
         routesRef.current,
         recordedCoordsRef.current,
         themeRef.current,
-        planOverlayStateRef.current
+        planOverlayStateRef.current,
+        selectedPoiRef.current
       );
     });
 
@@ -1416,7 +1510,8 @@ export const App: React.FC = () => {
         routesRef.current,
         recordedCoordsRef.current,
         themeRef.current,
-        planOverlayStateRef.current
+        planOverlayStateRef.current,
+        selectedPoiRef.current
       );
     };
 
@@ -1431,7 +1526,7 @@ export const App: React.FC = () => {
     };
   }, [isMapReady, demInfo, osmInfo, theme, syncOverlaySourcesToMap]);
 
-  // Effect B: Instant in-place refresh for layer visibility, POIs, active route, GPS track, and Route Planner overlays
+  // Effect B: Instant in-place refresh for layer visibility, POIs, selected highlight, active route, GPS track, and Route Planner overlays
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady) return;
@@ -1452,12 +1547,14 @@ export const App: React.FC = () => {
       routes,
       recordedCoords,
       theme,
-      planOverlayState
+      planOverlayState,
+      selectedPoi
     );
   }, [
     isMapReady,
     visibility,
     pois,
+    selectedPoi,
     activeRoute,
     routes,
     recordedCoords,
@@ -1466,16 +1563,65 @@ export const App: React.FC = () => {
     syncOverlaySourcesToMap,
   ]);
 
-  // Filter POIs on search query change
+  // Initialize unified PMTiles full-map search index & keep synced with active OSM archive
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    const unsubStatus = pmtilesSearchService.subscribeStatus((st) => {
+      setSearchStatus(st);
+    });
+    void pmtilesSearchService.ensureInitialized();
+    return () => {
+      unsubStatus();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!osmInfo) return;
+    void pmtilesSearchService.syncWithOsmArchive(osmInfo);
+  }, [osmInfo]);
+
+  // Close search dropdown when tapping outside the search bar & panel
+  useEffect(() => {
+    if (!isSearchFocused) return;
+    const handlePointerDown = (ev: PointerEvent) => {
+      const container = searchContainerRef.current;
+      if (container && ev.target instanceof Node && !container.contains(ev.target)) {
+        setIsSearchFocused(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isSearchFocused]);
+
+  const searchRefCoordRef = useRef<{ lon: number; lat: number }>({
+    lon: 34.8134,
+    lat: 30.8281,
+  });
+  searchRefCoordRef.current = userLocation ?? { lon: cursorCoords.lon, lat: cursorCoords.lat };
+
+  // Live unified search over all PMTiles vector features + POIs + saved routes + ITM/WGS84 coords
+  useEffect(() => {
+    if (!isSearchFocused && !searchQuery.trim()) {
       setSearchResults([]);
       return;
     }
-    PoiManager.searchPois(searchQuery).then((res) => {
-      setSearchResults(res.slice(0, 14));
+    const results = pmtilesSearchService.search(searchQuery, {
+      filter: searchFilter,
+      referenceCoord: searchRefCoordRef.current,
+      pois,
+      routes,
+      limit: 30,
     });
-  }, [searchQuery, pois]);
+    setSearchResults(results);
+    setActiveSearchIndex(0);
+  }, [
+    searchQuery,
+    searchFilter,
+    isSearchFocused,
+    searchStatus.totalFeatures,
+    searchStatus.fingerprint,
+    pois,
+    routes,
+  ]);
 
   // Auto-select longest saved route when opening Routes drawer with none active
   useEffect(() => {
@@ -1700,9 +1846,9 @@ export const App: React.FC = () => {
     mapRef.current?.easeTo({ bearing: 0, pitch: visibility.terrain3d ? 60 : 0, duration: 500 });
   };
 
-  const handleSelectPoi = (item: PoiRecord) => {
+  const handleSelectPoi = (item: PoiRecord, zoom = 14) => {
     setSelectedPoi(item);
-    handleFlyTo(item.lon, item.lat, 14);
+    handleFlyTo(item.lon, item.lat, zoom);
     setSearchQuery('');
     setSearchResults([]);
     setIsSearchFocused(false);
@@ -1714,6 +1860,30 @@ export const App: React.FC = () => {
     } else {
       setDesktopDrawer('poi');
     }
+  };
+
+  const handleSelectSearchResult = (item: SearchResultItem) => {
+    setSearchQuery('');
+    setSearchResults([]);
+    setIsSearchFocused(false);
+
+    if (item.kind === 'route' && item.routeRecord) {
+      setSelectedPoi(null);
+      void handleSelectRoute(item.routeRecord);
+      if (isMobile) {
+        setMobileDisplayMode('planning');
+        setMobileTab('routes');
+        setMobilePlanningOverlay(null);
+        setMobileSheetExpanded(true);
+      } else {
+        setDesktopDrawer('routes');
+      }
+      return;
+    }
+
+    const existingMatch = poisRef.current.find((p) => p.id === item.id);
+    const poiRec = existingMatch || item.toPoiRecord();
+    handleSelectPoi(poiRec, item.recommendedZoom || 14.5);
   };
 
   const handleNavigateToPoi = (poi: PoiRecord) => {
@@ -1792,7 +1962,8 @@ export const App: React.FC = () => {
         nextRoutes,
         recordedCoordsRef.current,
         themeRef.current,
-        planOverlayStateRef.current
+        planOverlayStateRef.current,
+        selectedPoiRef.current
       );
     }
 
@@ -2028,7 +2199,8 @@ export const App: React.FC = () => {
           previewPoint: null,
           cursorCoord: null,
           disconnectedCandidate: null,
-        }
+        },
+        selectedPoiRef.current
       );
     }
   }, [syncOverlaySourcesToMap]);
@@ -2258,114 +2430,279 @@ export const App: React.FC = () => {
     Boolean(osmInfo && (osmInfo.record.storageKind === 'opfs' || osmInfo.record.storageKind === 'native-file' || osmInfo.record.storageKind === 'user-file')) &&
     Boolean(demInfo && (demInfo.record.storageKind === 'opfs' || demInfo.record.storageKind === 'native-file' || demInfo.record.storageKind === 'user-file'));
 
-  const renderSearchBar = (compactMobile: boolean) => (
-    <div className="relative">
-      <div
-        className={`flex items-center gap-2 border transition-colors ${
-          compactMobile ? 'rounded-full px-3.5 py-2' : 'rounded-2xl px-3.5 py-2.5'
-        } ${t.panel}`}
-      >
-        <Search className="w-4 h-4 text-emerald-500 shrink-0" />
-        <input
-          type="text"
-          dir="auto"
-          value={searchQuery}
-          onFocus={() => setIsSearchFocused(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              setIsSearchFocused(false);
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
-          onChange={(e) => {
-            setSearchQuery(e.target.value);
-            setIsSearchFocused(true);
-          }}
-          placeholder="חפש מעיין, מעלה 4x4, חניון, הר..."
-          className={`w-full bg-transparent text-sm focus:outline-none ${t.input}`}
-        />
-        {searchQuery && (
-          <button
-            onClick={() => {
-              setSearchQuery('');
-              setSearchResults([]);
-            }}
-            className={`p-1 rounded-full text-xs font-bold shrink-0 ${t.muted}`}
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        )}
+  const renderSearchBar = (compactMobile: boolean) => {
+    const showDropdown = isSearchFocused || searchQuery.trim().length > 0;
+    const isIndexingCustom = Boolean(searchStatus.indexingProgress);
+    const indexPct =
+      searchStatus.indexingProgress && searchStatus.indexingProgress.total > 0
+        ? Math.min(
+            100,
+            Math.round(
+              (searchStatus.indexingProgress.done / searchStatus.indexingProgress.total) * 100
+            )
+          )
+        : 0;
+    const quickExamples = [
+      'ירושלים',
+      'עין עקב',
+      'כביש 6',
+      'הר מירון',
+      'נחל צין',
+      'מעלה זיק',
+      '1813-5828',
+    ];
 
-        {compactMobile ? (
-          <button
-            onClick={() => {
-              setMobileDisplayMode('planning');
-              setMobileTab('offline');
-              setMobilePlanningOverlay(null);
-            }}
-            className={`px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 shrink-0 ${
-              isOfflineReady
-                ? 'bg-emerald-500/15 text-emerald-600'
-                : isOnline
-                  ? 'bg-sky-500/15 text-sky-600'
-                  : 'bg-amber-500/20 text-amber-600'
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isOfflineReady ? 'bg-emerald-500' : isOnline ? 'bg-sky-500' : 'bg-amber-500'
-              }`}
-            />
-            <span>{isOfflineReady ? 'אופליין' : isOnline ? 'מקוון' : 'מנותק'}</span>
-          </button>
-        ) : (
-          <>
-            <div className="h-5 w-px bg-current opacity-15 shrink-0" />
-            <button
-              onClick={() => setDesktopDrawer(desktopDrawer === 'routes' ? null : 'routes')}
-              title="מסלולים ופרופיל גובה"
-              className="p-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shrink-0"
-            >
-              <RouteIcon className="w-4 h-4" />
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Search Results Dropdown */}
-      {isSearchFocused && searchResults.length > 0 && (
+    return (
+      <div ref={searchContainerRef} className="relative">
         <div
-          className={`absolute top-full left-0 right-0 mt-2 rounded-2xl border overflow-hidden max-h-72 overflow-y-auto z-50 ${t.panel}`}
+          className={`flex items-center gap-2 border transition-colors ${
+            compactMobile ? 'rounded-full px-3.5 py-2' : 'rounded-2xl px-3.5 py-2.5'
+          } ${t.panel}`}
         >
-          {searchResults.map((item) => {
-            const meta = POI_CATEGORY_META[item.category] || POI_CATEGORY_META.heritage;
-            return (
+          <Search
+            className={`w-4 h-4 shrink-0 ${
+              isIndexingCustom ? 'text-amber-500 animate-pulse' : 'text-emerald-500'
+            }`}
+          />
+          <input
+            type="text"
+            dir="auto"
+            value={searchQuery}
+            onFocus={() => setIsSearchFocused(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setIsSearchFocused(false);
+                (e.target as HTMLInputElement).blur();
+                return;
+              }
+              if (e.key === 'ArrowDown' && searchResults.length > 0) {
+                e.preventDefault();
+                setActiveSearchIndex((idx) => (idx + 1) % searchResults.length);
+                return;
+              }
+              if (e.key === 'ArrowUp' && searchResults.length > 0) {
+                e.preventDefault();
+                setActiveSearchIndex(
+                  (idx) => (idx - 1 + searchResults.length) % searchResults.length
+                );
+                return;
+              }
+              if (e.key === 'Enter' && searchResults.length > 0) {
+                e.preventDefault();
+                const chosen = searchResults[activeSearchIndex] || searchResults[0];
+                if (chosen) {
+                  handleSelectSearchResult(chosen);
+                  (e.target as HTMLInputElement).blur();
+                }
+              }
+            }}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setIsSearchFocused(true);
+            }}
+            placeholder="חפש עיר, רחוב, נחל, הר, חניון, נ.צ..."
+            className={`w-full bg-transparent text-sm focus:outline-none ${t.input}`}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setSearchResults([]);
+              }}
+              className={`p-1 rounded-full text-xs font-bold shrink-0 ${t.muted}`}
+              title="נקה חיפוש"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {compactMobile ? (
+            <button
+              type="button"
+              onClick={() => {
+                setMobileDisplayMode('planning');
+                setMobileTab('offline');
+                setMobilePlanningOverlay(null);
+              }}
+              className={`px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 shrink-0 ${
+                isOfflineReady
+                  ? 'bg-emerald-500/15 text-emerald-600'
+                  : isOnline
+                    ? 'bg-sky-500/15 text-sky-600'
+                    : 'bg-amber-500/20 text-amber-600'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isOfflineReady ? 'bg-emerald-500' : isOnline ? 'bg-sky-500' : 'bg-amber-500'
+                }`}
+              />
+              <span>{isOfflineReady ? 'אופליין' : isOnline ? 'מקוון' : 'מנותק'}</span>
+            </button>
+          ) : (
+            <>
+              <div className="h-5 w-px bg-current opacity-15 shrink-0" />
               <button
-                key={item.id}
-                onClick={() => handleSelectPoi(item)}
-                className={`w-full text-right px-3.5 py-2.5 border-b flex items-center justify-between gap-2 transition-colors ${t.divider} ${t.hoverRow}`}
+                type="button"
+                onClick={() => setDesktopDrawer(desktopDrawer === 'routes' ? null : 'routes')}
+                title="מסלולים ופרופיל גובה"
+                className="p-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shrink-0"
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="shrink-0">{meta.emoji}</span>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold truncate" dir="auto">
-                      {item.nameHe}
-                    </div>
-                    <div className={`text-xs truncate ${t.muted}`} dir="auto">
-                      {item.descHe || meta.fullLabel}
-                    </div>
+                <RouteIcon className="w-4 h-4" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Rich Unified Search Panel */}
+        {showDropdown && (
+          <div
+            className={`absolute top-full left-0 right-0 mt-2 rounded-2xl border overflow-hidden z-50 flex flex-col max-h-[64vh] md:max-h-[460px] ${t.panel}`}
+          >
+            {/* Category Filter Chips */}
+            <div
+              className={`px-2.5 py-2 border-b flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0 ${t.divider}`}
+            >
+              {SEARCH_FILTER_TABS.map((tab) => {
+                const active = searchFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setSearchFilter(tab.id)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 transition-colors shrink-0 ${
+                      active
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : `border ${t.pillBtn}`
+                    }`}
+                  >
+                    <span>{tab.emoji}</span>
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Indexing Status Strip when extracting custom PMTiles archive */}
+            {isIndexingCustom && (
+              <div
+                className={`px-3 py-1.5 border-b text-xs flex items-center justify-between gap-2 text-amber-500 font-semibold ${t.divider}`}
+              >
+                <span>מעדכן אינדקס חיפוש מהמפה החדשה...</span>
+                <span className="font-mono">{indexPct}%</span>
+              </div>
+            )}
+
+            {/* Body: Suggestions (if empty) OR Ranked Results OR Empty State */}
+            <div className="overflow-y-auto min-h-0 flex-1">
+              {searchResults.length > 0 ? (
+                searchResults.map((item, idx) => {
+                  const isHighlighted = idx === activeSearchIndex;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleSelectSearchResult(item)}
+                      onMouseEnter={() => setActiveSearchIndex(idx)}
+                      className={`w-full text-right px-3.5 py-2.5 border-b flex items-center justify-between gap-2.5 transition-colors ${t.divider} ${
+                        isHighlighted ? 'bg-emerald-500/12' : t.hoverRow
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-base shrink-0">{item.emoji}</span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-xs font-bold truncate" dir="auto">
+                              {item.title}
+                            </span>
+                            {item.ref && item.filterGroup === 'roads' && (
+                              <span
+                                dir="ltr"
+                                className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-500 text-[10px] font-mono font-bold shrink-0"
+                              >
+                                {item.ref}
+                              </span>
+                            )}
+                          </div>
+                          <div className={`text-xs truncate ${t.muted}`} dir="auto">
+                            {item.subtitle}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-left shrink-0 space-y-0.5">
+                        {item.distanceKm !== null && (
+                          <div className="text-xs font-mono font-bold text-emerald-500">
+                            {item.distanceKm < 1
+                              ? `${Math.round(item.distanceKm * 1000)} מ׳`
+                              : `${item.distanceKm.toFixed(1)} ק״מ`}
+                          </div>
+                        )}
+                        <div className={`text-[11px] font-mono ${t.muted}`}>
+                          {item.ele !== null ? `${item.ele}m` : item.locality || item.categoryLabel}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : !searchQuery.trim() ? (
+                <div className="p-3 space-y-2.5">
+                  <div className={`text-xs flex items-center justify-between ${t.muted}`}>
+                    <span>
+                      {searchStatus.ready
+                        ? `מוכנים ${searchStatus.totalFeatures.toLocaleString()} יעדים מהמפה + נ.צ.`
+                        : 'טוען אינדקס מפה...'}
+                    </span>
+                    {osmInfo && (
+                      <button
+                        type="button"
+                        onClick={() => void pmtilesSearchService.rebuildFromPmtiles(osmInfo.pmtiles)}
+                        disabled={isIndexingCustom}
+                        className="text-emerald-500 hover:underline disabled:opacity-40 font-semibold"
+                        title="סרוק מחדש את כל שכבות ה-PMTiles"
+                      >
+                        סרוק מחדש
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {quickExamples.map((ex) => (
+                      <button
+                        key={ex}
+                        type="button"
+                        onClick={() => {
+                          setSearchFilter('all');
+                          setSearchQuery(ex);
+                        }}
+                        className={`px-2.5 py-1 rounded-full border text-xs font-semibold transition-colors ${t.pillBtn}`}
+                      >
+                        {ex}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <span className="text-xs font-mono font-bold text-emerald-500 shrink-0">
-                  {item.ele !== null ? `${item.ele}m` : meta.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+              ) : (
+                <div className={`p-4 text-center text-xs space-y-2 ${t.muted}`}>
+                  <div>לא נמצאו תוצאות עבור &ldquo;{searchQuery}&rdquo;</div>
+                  {searchFilter !== 'all' ? (
+                    <button
+                      type="button"
+                      onClick={() => setSearchFilter('all')}
+                      className="px-3 py-1 rounded-full bg-emerald-600 text-white font-bold"
+                    >
+                      חפש בכל הקטגוריות
+                    </button>
+                  ) : (
+                    <div>נסה שם עיר, רחוב, נחל, הר, כביש 6 או נ.צ. (לדוגמה 31.77, 35.21)</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -2448,7 +2785,11 @@ export const App: React.FC = () => {
                       onNavigateToPoi={handleNavigateToPoi}
                       onPoiUpdated={(updated) => {
                         setSelectedPoi(updated);
-                        setPois((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+                        setPois((prev) =>
+                          prev.some((p) => p.id === updated.id)
+                            ? prev.map((p) => (p.id === updated.id ? updated : p))
+                            : [...prev, updated]
+                        );
                       }}
                       onNotify={showToast}
                     />
@@ -3028,7 +3369,11 @@ export const App: React.FC = () => {
                   onNavigateToPoi={handleNavigateToPoi}
                   onPoiUpdated={(updated) => {
                     setSelectedPoi(updated);
-                    setPois((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+                    setPois((prev) =>
+                      prev.some((p) => p.id === updated.id)
+                        ? prev.map((p) => (p.id === updated.id ? updated : p))
+                        : [...prev, updated]
+                    );
                   }}
                   onNotify={showToast}
                 />
@@ -3349,7 +3694,11 @@ export const App: React.FC = () => {
               onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 14.2)}
               onPoiUpdated={(updated) => {
                 setSelectedPoi(updated);
-                setPois((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+                setPois((prev) =>
+                  prev.some((p) => p.id === updated.id)
+                    ? prev.map((p) => (p.id === updated.id ? updated : p))
+                    : [...prev, updated]
+                );
               }}
               onNotify={showToast}
             />

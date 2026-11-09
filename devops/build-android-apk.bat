@@ -9,7 +9,8 @@ echo   NavApp - Android App Builder ^& Security Signer
 echo   Working Directory: %CD%
 echo ============================================================================
 
-echo [1/5] Generating offline assets and building production web bundle...
+echo [1/5] Generating offline assets, PMTiles search index, and building production web bundle...
+call node devops\build-pmtiles-search-index.mjs --if-present --if-stale
 call node devops\generate-offline-assets.mjs
 call npm.cmd run build
 if errorlevel 1 (
@@ -20,6 +21,7 @@ if errorlevel 1 (
 
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
+if exist "data\Israel.search.idx" copy /Y "data\Israel.search.idx" "dist\data\Israel.search.idx" >nul
 
 if "%ANDROID_HOME%"=="" (
     if exist "%LOCALAPPDATA%\Android\Sdk" (

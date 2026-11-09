@@ -75,11 +75,26 @@ export class PoiManager {
     });
   }
 
-  static async saveUserNote(poiId: string, userNotes: string): Promise<PoiRecord | undefined> {
-    await db.pois.update(poiId, {
+  static async saveUserNote(
+    poiId: string,
+    userNotes: string,
+    fallbackRecord?: PoiRecord
+  ): Promise<PoiRecord | undefined> {
+    const updatedAt = new Date().toISOString();
+    const updatedCount = await db.pois.update(poiId, {
       userNotes,
-      updatedAt: new Date().toISOString(),
+      updatedAt,
     });
+    if (updatedCount === 0 && fallbackRecord) {
+      const created: PoiRecord = {
+        ...fallbackRecord,
+        id: poiId,
+        userNotes,
+        updatedAt,
+      };
+      await db.pois.put(created);
+      return created;
+    }
     return await db.pois.get(poiId);
   }
 
