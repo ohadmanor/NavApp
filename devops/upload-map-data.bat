@@ -63,9 +63,6 @@ if exist "data\Israel.osm.pmtiles" (
 if exist "data\Israel.pois.geojson" (
     copy /Y "data\Israel.pois.geojson" "deploy_data\data\Israel.pois.geojson" >nul
 )
-if exist "data\Israel.trails.geojson" (
-    copy /Y "data\Israel.trails.geojson" "deploy_data\data\Israel.trails.geojson" >nul
-)
 
 if not exist "deploy_data\data\*.pmtiles" goto :NO_FILES
 

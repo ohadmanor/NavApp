@@ -1,14 +1,25 @@
-import React from 'react';
-import { Layers, Sun, Moon, X, ShieldAlert } from 'lucide-react';
-import type { OutdoorLayerVisibility } from '../../core/style/israelOutdoorStyle';
+import React, { useState } from 'react';
+import { Layers, Sun, Moon, Mountain, ChevronDown, X } from 'lucide-react';
+import {
+  countActivePoiCategories,
+  enableAllPoiVisibility,
+  isMasterPoiActive,
+  toggleMasterPoiVisibility,
+  togglePoiCategoryVisibility,
+  type OutdoorLayerVisibility,
+  type PoiLayerKey,
+} from '../../core/style/israelOutdoorStyle';
+import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 
 interface LayerSwitcherSheetProps {
   isOpen: boolean;
   onClose: () => void;
   visibility: OutdoorLayerVisibility;
   onChangeVisibility: (next: OutdoorLayerVisibility) => void;
-  theme: 'topo-day' | 'topo-dark';
-  onToggleTheme: () => void;
+  theme: MapTheme;
+  onSelectTheme: (theme: MapTheme) => void;
+  onToggle3D: () => void;
+  embedded?: boolean;
 }
 
 export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
@@ -17,9 +28,15 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
   visibility,
   onChangeVisibility,
   theme,
-  onToggleTheme,
+  onSelectTheme,
+  onToggle3D,
+  embedded = false,
 }) => {
-  if (!isOpen) return null;
+  const [showPoiSubCategories, setShowPoiSubCategories] = useState(true);
+
+  if (!isOpen && !embedded) return null;
+
+  const t = getSurfaceTheme(theme);
 
   const toggle = (key: keyof OutdoorLayerVisibility) => {
     onChangeVisibility({
@@ -28,109 +45,210 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     });
   };
 
-  return (
-    <div
-      dir="rtl"
-      className="fixed top-20 right-4 z-40 w-84 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl p-4 text-slate-100 space-y-4 max-h-[82vh] overflow-y-auto"
-    >
-      <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+  const terrainToggles: Array<{ key: keyof OutdoorLayerVisibility; label: string; badge: string }> = [
+    { key: 'contours', label: 'קווי גובה כל 10 מ׳ + ראשיים 50 מ׳', badge: 'DEM' },
+    { key: 'tacticalGrid', label: 'רשת קואורדינטות (ITM / UTM)', badge: 'Grid' },
+    { key: 'hillshade', label: 'הצללת תבליט הרים (Hillshade)', badge: 'Relief' },
+    { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing' },
+    { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (1-5)', badge: '4x4' },
+    { key: 'hikingTrails', label: 'שבילים מסומנים ונתיבי הליכה', badge: 'Trails' },
+    { key: 'cycleways', label: 'שבילי אופניים', badge: 'Cycle' },
+    { key: 'natureParks', label: 'גבולות שמורות טבע וגנים', badge: 'Parks' },
+    { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard' },
+  ];
+
+  const poiToggles: Array<{ key: PoiLayerKey; label: string; activeCls: string }> = [
+    { key: 'poiWater', label: '💧 מעיינות וגבים', activeCls: 'border-sky-500 bg-sky-500/15 text-sky-500' },
+    { key: 'poiOffroad', label: '🚙 מעלות 4x4', activeCls: 'border-red-500 bg-red-500/15 text-red-500' },
+    { key: 'poiHeritage', label: '🏛️ תצפיות ומערות', activeCls: 'border-amber-500 bg-amber-500/15 text-amber-500' },
+    { key: 'poiCampsites', label: '⛺ חניוני לילה', activeCls: 'border-emerald-500 bg-emerald-500/15 text-emerald-500' },
+    { key: 'poiPeaks', label: '🏔️ פסגות ונ.ג.', activeCls: 'border-purple-500 bg-purple-500/15 text-purple-500' },
+    { key: 'poiUser', label: '📍 נקודות שטח', activeCls: 'border-teal-500 bg-teal-500/15 text-teal-500' },
+  ];
+
+  const activeSubCount = countActivePoiCategories(visibility);
+  const isMasterPoiOn = isMasterPoiActive(visibility);
+
+  const content = (
+    <div dir="rtl" className="p-4 space-y-3.5 overflow-y-auto max-h-[65vh] md:max-h-[72vh]">
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Layers className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-sm font-bold text-white">שכבות מפה טופוגרפית (1:50k)</h3>
+          <Layers className="w-4 h-4 text-emerald-500" />
+          <h3 className="text-sm font-bold">סוג מפה ושכבות טופוגרפיות</h3>
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+          className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
+          title="סגור"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Map Theme Switcher */}
-      <div className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-        <span className="text-xs font-semibold text-slate-300">תצוגת מפה (יום 1:50k / לילה כהה)</span>
+      {/* Visual Map Type Selector Cards */}
+      <div className="grid grid-cols-3 gap-2">
         <button
-          onClick={onToggleTheme}
-          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-emerald-300 flex items-center gap-1.5"
+          onClick={() => onSelectTheme('topo-day')}
+          className={`p-2 rounded-xl border-2 text-center transition-all ${
+            theme === 'topo-day' && !visibility.terrain3d
+              ? 'border-emerald-500 bg-emerald-500/10'
+              : t.subCard
+          }`}
         >
-          {theme === 'topo-day' ? (
-            <>
-              <Sun className="w-3.5 h-3.5 text-amber-400" />
-              <span>תצוגת יום (טופוגרפי 1:50k)</span>
-            </>
-          ) : (
-            <>
-              <Moon className="w-3.5 h-3.5 text-sky-400" />
-              <span>תצוגת לילה (כהה)</span>
-            </>
-          )}
+          <div className="h-9 rounded-lg bg-[#f4efe2] border border-amber-800/30 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-amber-900">
+            <Sun className="w-3.5 h-3.5 text-amber-600" />
+            <span>1:50k</span>
+          </div>
+          <span className="text-xs font-bold block">טופוגרפי יום</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTheme('topo-dark')}
+          className={`p-2 rounded-xl border-2 text-center transition-all ${
+            theme === 'topo-dark' && !visibility.terrain3d
+              ? 'border-emerald-500 bg-emerald-500/10'
+              : t.subCard
+          }`}
+        >
+          <div className="h-9 rounded-lg bg-slate-900 border border-slate-700 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-sky-400">
+            <Moon className="w-3.5 h-3.5 text-sky-400" />
+            <span>OPS</span>
+          </div>
+          <span className="text-xs font-bold block">לילה טקטי</span>
+        </button>
+
+        <button
+          onClick={onToggle3D}
+          className={`p-2 rounded-xl border-2 text-center transition-all ${
+            visibility.terrain3d ? 'border-emerald-500 bg-emerald-500/10' : t.subCard
+          }`}
+        >
+          <div className="h-9 rounded-lg bg-gradient-to-br from-emerald-700 to-amber-700 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-white">
+            <Mountain className="w-3.5 h-3.5" />
+            <span>3D</span>
+          </div>
+          <span className="text-xs font-bold block">תבליט 3D</span>
         </button>
       </div>
 
-      {/* Topographic & Field Layers */}
+      {/* Navigation & Terrain Toggle Switches */}
       <div className="space-y-1.5">
-        <div className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-          <ShieldAlert className="w-3.5 h-3.5" />
-          <span>שכבות טופוגרפיה וניווט</span>
-        </div>
-        {[
-          { key: 'contours', label: 'קווי גובה כל 10 מ׳ + ראשיים 50/100 מ׳', badge: '10m DEM' },
-          { key: 'tacticalGrid', label: 'רשת קואורדינטות טופוגרפית (ITM / UTM Grid)', badge: 'Grid' },
-          { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing Zone' },
-          { key: 'hillshade', label: 'הצללת תבליט הרים (DEM Hillshade)', badge: 'Israel.dem' },
-          { key: 'terrain3d', label: 'תבליט שטח תלת-ממד (3D Terrain)', badge: '3D GPU' },
-          { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (סיווג עבירות 1-5)', badge: 'Israel.osm' },
-          { key: 'hikingTrails', label: 'שבילים רגליים ונתיבי תנועה', badge: 'Israel.osm' },
-          { key: 'natureParks', label: 'גבולות שמורות טבע וגנים לאומיים', badge: 'Israel.osm' },
-          { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Israel.osm' },
-        ].map((item) => (
-          <label
-            key={item.key}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-950/50 hover:bg-slate-800/60 border border-slate-800/80 cursor-pointer text-xs"
-          >
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={visibility[item.key as keyof OutdoorLayerVisibility]}
-                onChange={() => toggle(item.key as keyof OutdoorLayerVisibility)}
-                className="rounded border-slate-600 text-emerald-500"
-              />
-              <span className="text-slate-200">{item.label}</span>
-            </div>
-            <span className="text-slate-400 font-mono text-xs">{item.badge}</span>
-          </label>
-        ))}
+        <div className={`text-xs font-bold ${t.muted}`}>שכבות ניווט ושטח</div>
+        {terrainToggles.map((item) => {
+          const isOn = visibility[item.key];
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => toggle(item.key)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs transition-colors ${t.subCard}`}
+            >
+              <span className="text-right font-medium">{item.label}</span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className={`font-mono text-xs ${t.muted}`}>{item.badge}</span>
+                <span
+                  className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+                    isOn ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-full bg-white shadow" />
+                </span>
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Interactive POI Dots (Israel Hiking / Off-Road / Amud Anan style) */}
-      <div className="space-y-1.5 pt-1 border-t border-slate-800">
-        <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
-          נקודות עניין ומודיעין שטח (עמוד ענן / Off-Road / IHM)
-        </div>
-        {[
-          { key: 'poiWater', label: 'מעיינות, גבים ובורות מים (כחול)', dot: 'bg-sky-400' },
-          { key: 'poiOffroad', label: 'מעלות ומכשולי עבירות 4x4 (אדום)', dot: 'bg-red-500' },
-          { key: 'poiHeritage', label: 'תצפיות, מערות וחורבות (חום)', dot: 'bg-amber-500' },
-          { key: 'poiCampsites', label: 'חניוני לילה ושטחי כינוס (ירוק)', dot: 'bg-emerald-400' },
-          { key: 'poiPeaks', label: 'כיפות ונקודות גובה טריגונומטריות (▲)', dot: 'bg-purple-400' },
-        ].map((item) => (
-          <label
-            key={item.key}
-            className="flex items-center justify-between p-2 rounded-lg bg-slate-950/50 hover:bg-slate-800/60 border border-slate-800/80 cursor-pointer text-xs"
-          >
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={visibility[item.key as keyof OutdoorLayerVisibility]}
-                onChange={() => toggle(item.key as keyof OutdoorLayerVisibility)}
-                className="rounded border-slate-600 text-emerald-500"
+      {/* Master POI Layer Switch + Category Sub-Toggles */}
+      <div className={`space-y-2 pt-2 border-t ${t.divider}`}>
+        <div className={`text-xs font-bold ${t.muted}`}>נקודות עניין במפה (POI)</div>
+        <div className={`rounded-xl border overflow-hidden ${t.subCard}`}>
+          <div className="flex items-center justify-between px-3 py-2 text-xs gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPoiSubCategories((prev) => !prev)}
+              className={`p-1 -mr-1 rounded-lg transition-colors ${t.muted} hover:bg-slate-500/10`}
+              title={showPoiSubCategories ? 'הסתר קטגוריות' : 'הצג קטגוריות'}
+              aria-expanded={showPoiSubCategories}
+            >
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${
+                  showPoiSubCategories ? '' : 'rotate-90'
+                }`}
               />
-              <span className="text-slate-200">{item.label}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeVisibility(toggleMasterPoiVisibility(visibility))}
+              role="switch"
+              aria-checked={isMasterPoiOn}
+              className="flex-1 flex items-center justify-between gap-2 min-w-0 text-right"
+            >
+              <span className="font-bold truncate">הצג נקודות עניין במפה</span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className={`font-mono text-xs ${t.muted}`}>
+                  {isMasterPoiOn ? `${activeSubCount}/${poiToggles.length}` : 'כבוי'}
+                </span>
+                <span
+                  className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+                    isMasterPoiOn ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-full bg-white shadow" />
+                </span>
+              </span>
+            </button>
+          </div>
+
+          {showPoiSubCategories && (
+            <div className={`px-3 pb-3 pt-2 border-t space-y-2 ${t.divider}`}>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className={`font-semibold ${t.muted}`}>קטגוריות נקודות עניין</span>
+                {(!isMasterPoiOn || activeSubCount < poiToggles.length) && (
+                  <button
+                    type="button"
+                    onClick={() => onChangeVisibility(enableAllPoiVisibility(visibility))}
+                    className="font-bold text-emerald-500 hover:underline"
+                  >
+                    הצג הכל
+                  </button>
+                )}
+              </div>
+              <div className={`flex flex-wrap gap-1.5 ${!isMasterPoiOn ? 'opacity-65' : ''}`}>
+                {poiToggles.map((item) => {
+                  const isOn = visibility.pois && visibility[item.key];
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() =>
+                        onChangeVisibility(togglePoiCategoryVisibility(visibility, item.key))
+                      }
+                      aria-pressed={isOn}
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                        isOn ? item.activeCls : `${t.subCard} opacity-55`
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <span className={`w-3 h-3 rounded-full border border-white ${item.dot}`} />
-          </label>
-        ))}
+          )}
+        </div>
       </div>
+    </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <div className={`fixed bottom-20 left-4 z-40 w-84 rounded-2xl border overflow-hidden ${t.panel}`}>
+      {content}
     </div>
   );
 };

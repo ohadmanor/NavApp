@@ -1,10 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+import maplibregl from 'maplibre-gl';
 import {
   buildIsraelOutdoorStyle,
+  applyLayerVisibilityToMap,
   DEFAULT_LAYER_VISIBILITY,
+  countActivePoiCategories,
+  isMasterPoiActive,
+  toggleMasterPoiVisibility,
+  togglePoiCategoryVisibility,
+  enableAllPoiVisibility,
 } from '../style/israelOutdoorStyle';
+import { PoiManager } from '../pois/PoiManager';
 import {
   convertLineToVisualOrder,
   processBidirectionalText,
@@ -13,8 +22,17 @@ import {
   applyArabicShaping,
 } from '../style/hebrewBidiProcessor';
 import { NativeSliceSource } from '../pmtiles/NativeSliceSource';
+import { CachedFetchSource } from '../pmtiles/CachedFetchSource';
+import { OpfsStorageAdapter } from '../pmtiles/OpfsStorageAdapter';
+import {
+  PMTilesRegistry,
+  getEmptyTerrariumTileBlob,
+  wrapManagerWithSafeContourBuffers,
+} from '../pmtiles/PMTilesRegistry';
 import { RouteManager } from '../navigation/RouteManager';
 import { MilitaryGridService } from '../navigation/MilitaryGridService';
+import { getSurfaceTheme, POI_CATEGORY_META } from '../../components/ui/themeTokens';
+import { formatDuration } from '../../components/navigation/TrackRecorderPanel';
 
 describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Verification', () => {
   it('builds the authentic 247-layer Israel Hiking Map (IHM) StyleSpecification with sprites, zoom stops, road shields, 4x4 grades, and 10m/50m contours', () => {
@@ -123,22 +141,27 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     });
 
     expect(style.version).toBe(8);
-    // Sources strictly come from OSM PMTiles, DEM PMTiles, and trails GeoJSON — NO external raster sources!
+    // Sources strictly come from OSM PMTiles and DEM PMTiles — NO external trail GeoJSON or raster sources!
     expect(style.sources['israel-osm']).toBeDefined();
     expect((style.sources['israel-osm'] as any).url).toContain('Israel.osm.pmtiles');
     expect(style.sources['israel-dem']).toBeDefined();
     expect((style.sources['israel-dem'] as any).url).toContain('Israel.dem.pmtiles');
-    expect(style.sources['israel-trails']).toBeDefined();
+    expect(style.sources['israel-trails']).toBeUndefined();
     expect((style.sources as any)['osm-online-raster']).toBeUndefined();
 
-    // Contains authentic IHM vector layers and trail layers
+    // Contains authentic IHM vector layers wired directly to transportation / transportation_name
     const layerIds = style.layers.map((l) => l.id);
     expect(layerIds).toContain('background');
     expect(layerIds).toContain('Terrain');
-    expect(layerIds).toContain('ihm-marked-int-glow');
-    expect(layerIds).toContain('ihm-marked-track-casing');
-    expect(layerIds).toContain('ihm-marked-path');
-    expect(layerIds).toContain('ihm-marked-trail-label');
+    expect(layerIds).toContain('trail-israel-secondary-');
+    expect(layerIds).toContain('trail-line-road');
+    expect(layerIds).toContain('trail-line-path');
+    expect(layerIds).toContain('casing-marked-path');
+    expect(layerIds).toContain('path-path');
+    expect(layerIds).toContain('track-right');
+    expect(layerIds).toContain('track-left');
+    expect(layerIds).toContain('name-trail-local');
+    expect(layerIds.some((id) => id.startsWith('ihm-marked-'))).toBe(false);
     expect(layerIds).not.toContain('osm-online-raster-layer');
 
     // Run MapLibre GL JS validator on the immediate fallback style
@@ -286,5 +309,856 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     const gpx = RouteManager.exportRouteAsGpx(mockRoute);
     expect(gpx).toContain('<gpx version="1.1"');
     expect(gpx).toContain('<ele>390</ele>');
+  });
+
+  it('provides adaptive day/night surface tokens, full POI category metadata, and HH:MM:SS duration formatting', () => {
+    const day = getSurfaceTheme('topo-day');
+    const night = getSurfaceTheme('topo-dark');
+    expect(day.panel).toContain('bg-white');
+    expect(night.panel).toContain('bg-slate-900');
+
+    for (const cat of ['all', 'water', 'offroad', 'campsite', 'heritage', 'peak', 'user'] as const) {
+      expect(POI_CATEGORY_META[cat]).toBeDefined();
+      expect(POI_CATEGORY_META[cat].label.length).toBeGreaterThan(0);
+    }
+
+    expect(formatDuration(0)).toBe('00:00:00');
+    expect(formatDuration(65)).toBe('00:01:05');
+    expect(formatDuration(3661)).toBe('01:01:01');
+  });
+
+  it('isolates hillshade raster-dem source from 3D terrain source and toggles 3D terrain cleanly', () => {
+    const style = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, terrain3d: true },
+      theme: 'topo-day',
+    });
+
+    const terrainLayer = style.layers.find((l) => l.id === 'Terrain') as any;
+    expect(terrainLayer).toBeDefined();
+    expect(terrainLayer.source).toBe('israel-dem-hillshade');
+    expect(style.sources['israel-dem-hillshade']).toBeDefined();
+    expect(style.terrain?.source).toBe('israel-dem');
+
+    let currentTerrain: any = null;
+    const terrainCalls: any[] = [];
+    const mockMap = {
+      getStyle: () => ({ layers: [] }),
+      getLayer: () => undefined,
+      getSource: (id: string) => (id === 'israel-dem' ? { type: 'raster-dem' } : undefined),
+      getTerrain: () => currentTerrain,
+      setTerrain: (t: any) => {
+        currentTerrain = t;
+        terrainCalls.push(t);
+      },
+      setLayoutProperty: () => {},
+    };
+
+    applyLayerVisibilityToMap(mockMap, { ...DEFAULT_LAYER_VISIBILITY, terrain3d: true });
+    expect(terrainCalls).toEqual([{ source: 'israel-dem', exaggeration: 1.35 }]);
+
+    // Calling again while already enabled should not tear down and recreate terrain mesh
+    applyLayerVisibilityToMap(mockMap, { ...DEFAULT_LAYER_VISIBILITY, terrain3d: true });
+    expect(terrainCalls.length).toBe(1);
+
+    // Turning off clears terrain cleanly
+    applyLayerVisibilityToMap(mockMap, { ...DEFAULT_LAYER_VISIBILITY, terrain3d: false });
+    expect(terrainCalls).toEqual([{ source: 'israel-dem', exaggeration: 1.35 }, null]);
+  });
+
+  it('checks navigation deviation accurately across multi-segment GeoJSON LineStrings', () => {
+    const multiSegRoute = {
+      id: 'multi-seg-test',
+      name: 'Multi-Seg Trail',
+      sourceFormat: 'gpx' as const,
+      distanceKm: 4.0,
+      ascentMeters: 150,
+      descentMeters: 100,
+      minEle: 350,
+      maxEle: 500,
+      color: '#ec4899',
+      visible: true,
+      createdAt: new Date().toISOString(),
+      geojson: {
+        type: 'FeatureCollection' as const,
+        features: [
+          {
+            type: 'Feature' as const,
+            properties: {},
+            geometry: {
+              type: 'LineString' as const,
+              coordinates: [
+                [34.81, 30.83],
+                [34.82, 30.83],
+              ],
+            },
+          },
+          {
+            type: 'Feature' as const,
+            properties: {},
+            geometry: {
+              type: 'LineString' as const,
+              coordinates: [
+                [34.83, 30.84],
+                [34.84, 30.84],
+              ],
+            },
+          },
+        ],
+      },
+      elevationProfile: [],
+    };
+
+    const nearSecondSeg = RouteManager.checkNavigationDeviation(multiSegRoute, 34.835, 30.84005);
+    expect(nearSecondSeg.isOffRoute).toBe(false);
+    expect(nearSecondSeg.distanceFromTrailMeters).toBeLessThan(15);
+
+    const farFromAll = RouteManager.checkNavigationDeviation(multiSegRoute, 34.835, 30.86);
+    expect(farFromAll.isOffRoute).toBe(true);
+    expect(farFromAll.distanceFromTrailMeters).toBeGreaterThan(1000);
+  });
+
+  it('orders hillshade beneath contours/trails, wires SPNI trail colors and purple cycleways, and colors secondary roads #db894f', () => {
+    const style = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, cycleways: true },
+      theme: 'topo-day',
+    });
+
+    const ids = style.layers.map((l) => l.id);
+    const terrainIdx = ids.indexOf('Terrain');
+    const contourIdx = ids.indexOf('contour-line');
+    const markedPathIdx = ids.indexOf('path-path');
+    const trackRightIdx = ids.indexOf('track-right');
+    const firstSymbolIdx = style.layers.findIndex((l) => l.type === 'symbol');
+
+    expect(terrainIdx).toBeGreaterThan(-1);
+    expect(contourIdx).toBeGreaterThan(-1);
+    expect(terrainIdx).toBeLessThan(contourIdx);
+    expect(terrainIdx).toBeLessThan(markedPathIdx);
+    expect(terrainIdx).toBeLessThan(trackRightIdx);
+    expect(markedPathIdx).toBeLessThan(firstSymbolIdx);
+
+    const markedPathCasing = style.layers.find((l) => l.id === 'casing-marked-path') as any;
+    expect(markedPathCasing?.source).toBe('israel-osm');
+    expect(markedPathCasing?.['source-layer']).toBe('transportation');
+    expect(markedPathCasing?.paint?.['line-opacity']).toBe(1);
+
+    const pathLayer = style.layers.find((l) => l.id === 'path-path') as any;
+    const trackRight = style.layers.find((l) => l.id === 'track-right') as any;
+    expect(JSON.stringify(pathLayer)).toContain('#EAB308');
+    expect(JSON.stringify(pathLayer)).toContain('#9333EA');
+    expect(JSON.stringify(trackRight)).toContain('#EAB308');
+    expect(JSON.stringify(trackRight)).toContain('#9333EA');
+
+    // Dark muddy walking trail fallback (#6B3E26) and sac_scale path overrides (#DC2626 / #00A800) remain absent
+    const vectorPaths = style.layers.filter((l) => l.id.includes('path'));
+    for (const l of vectorPaths) {
+      const serialized = JSON.stringify(l);
+      expect(serialized).not.toContain('#6B3E26');
+      expect(serialized).not.toContain('#DC2626');
+      expect(serialized).not.toContain('#00A800');
+    }
+
+    // highway=secondary fill layers render in #db894f across ground, bridges, and tunnels
+    for (const secId of [
+      'road-secondary',
+      'layer-1-road-secondary',
+      'layer1-road-secondary',
+      'layer2-road-secondary',
+    ]) {
+      const secLayer = style.layers.find((l) => l.id === secId) as any;
+      expect(secLayer?.paint?.['line-color'], `Expected #db894f on ${secId}`).toBe('#db894f');
+    }
+  });
+
+  it('uses official #AA8166 unmarked walking trail style, purple cycleways/MTB singletracks, 4x4 grade 1-5 colors, and separates path subclasses', () => {
+    const style = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, cycleways: true },
+      theme: 'topo-day',
+    });
+
+    const require = createRequire(import.meta.url);
+    const styleSpec = require('@maplibre/maplibre-gl-style-spec');
+    const byId = new Map<string, any>(style.layers.map((l) => [l.id, l]));
+
+    const evalColor = (layerId: string, props: Record<string, any>, zoom = 16, layerMap = byId) => {
+      const layer = layerMap.get(layerId);
+      expect(layer).toBeDefined();
+      const raw = layer.paint?.['line-color'];
+      if (typeof raw === 'string') return raw;
+      const compiled = styleSpec.createPropertyExpression(raw, styleSpec.latest.paint_line['line-color']);
+      expect(compiled.result).toBe('success');
+      const rgba = compiled.value.evaluate({ zoom }, { type: 2, properties: props });
+      const hex = (n: number) => Math.round(n * 255).toString(16).padStart(2, '0').toUpperCase();
+      return `#${hex(rgba.r)}${hex(rgba.g)}${hex(rgba.b)}`;
+    };
+
+    const matches = (layerId: string, feat: { type: number; properties: Record<string, any> }, zoom = 18) => {
+      const layer = byId.get(layerId);
+      expect(layer).toBeDefined();
+      if (!layer.filter) return true;
+      return styleSpec.featureFilter(layer.filter).filter({ zoom }, feat);
+    };
+
+    // Unmarked walking paths (even with sac_scale/smoothness) stay official IHM #AA8166
+    const unmarkedWalkingProps = {
+      class: 'path',
+      subclass: 'path',
+      layer: 0,
+      sac_scale: 'demanding_mountain_hiking',
+      smoothness: 'good',
+    };
+    const unmarkedTrackProps = {
+      class: 'track',
+      layer: 0,
+    };
+
+    for (const id of [
+      'path-footway',
+      'path-path',
+      'path-steps-line',
+      'layer-1-path-footway',
+      'layer-1-path-path',
+      'layer-1-path-steps-line',
+      'layer1-path-footway',
+      'layer1-path-path',
+      'layer1-path-steps-line',
+      'layer2-path-footway',
+      'layer2-path-path',
+      'layer3-path-footway',
+    ]) {
+      expect(evalColor(id, unmarkedWalkingProps)).toBe('#AA8166');
+    }
+
+    // Dedicated cycleways, bicycle=designated/mtb paths & tracks, and mtb_scale singletracks render purple (#9333EA) when cycleways ON
+    for (const id of ['path-cycleway', 'layer-1-path-cycleway', 'layer1-path-cycleway', 'layer2-path-cycleway']) {
+      expect(evalColor(id, { class: 'path', subclass: 'cycleway' })).toBe('#9333EA');
+    }
+    expect(evalColor('path-path', { class: 'path', subclass: 'path', bicycle: 'designated' })).toBe('#9333EA');
+    expect(evalColor('path-path', { class: 'path', subclass: 'path', mtb_scale: '2' })).toBe('#9333EA');
+    expect(evalColor('path-footway', { class: 'path', subclass: 'footway', bicycle: 'designated' })).toBe('#9333EA');
+    expect(evalColor('track-right', { class: 'track', bicycle: 'designated' })).toBe('#9333EA');
+    expect(evalColor('track-right', { class: 'track', mtb_scale: '1' })).toBe('#9333EA');
+
+    // 4x4 grades (1-5) color dirt tracks when offroad4x4 is ON, while unspecified unmarked tracks stay #AA8166
+    expect(evalColor('track-right', unmarkedTrackProps)).toBe('#AA8166');
+    expect(evalColor('track-left', unmarkedTrackProps)).toBe('#AA8166');
+    expect(evalColor('track-right-grade1-2', { class: 'track', tracktype: 'grade1' })).toBe('#64748B');
+    expect(evalColor('track-right-grade1-2', { class: 'track', tracktype: 'grade2' })).toBe('#8C6239');
+    expect(evalColor('track-right', { class: 'track', tracktype: 'grade3' })).toBe('#B45309');
+    expect(evalColor('track-right-grade4', { class: 'track', tracktype: 'grade4' })).toBe('#C2410C');
+    expect(evalColor('track-right-grade5', { class: 'track', tracktype: 'grade5' })).toBe('#991B1B');
+    expect(evalColor('track-left-grade5', { class: 'track', tracktype: 'grade5' })).toBe('#991B1B');
+    expect(evalColor('casing-track', { class: 'track', colour: 'red' })).toBe('#FFFFFF');
+    expect(evalColor('casing-track', { class: 'track', tracktype: 'grade5' })).toBe('#F7F4F2');
+    expect(evalColor('casing-track', { class: 'track', tracktype: 'grade1' })).toBe('#E8D3B2');
+
+    // Marked SPNI trail colors & dual-color semi-colon splitting still resolve accurately
+    expect(evalColor('path-path', { class: 'path', subclass: 'path', colour: 'yellow' })).toBe('#EAB308');
+    expect(evalColor('path-footway', { class: 'path', subclass: 'footway', colour: 'red' })).toBe('#FF0000');
+    expect(evalColor('track-right', { class: 'track', colour: 'blue;black' })).toBe('#0044FF');
+    expect(evalColor('track-left', { class: 'track', colour: 'blue;black' })).toBe('#111111');
+
+    // OpenMapTiles path-path layers must match ONLY subclass=path LineStrings, never footway/cycleway/pedestrian/steps/platform
+    for (const pathLayerId of ['path-path', 'layer-1-path-path', 'layer1-path-path', 'layer2-path-path', 'layer3-casing-path']) {
+      const baseProps =
+        pathLayerId === 'layer-1-path-path'
+          ? { brunnel: 'tunnel', layer: -1 }
+          : pathLayerId === 'layer1-path-path'
+          ? { layer: 1 }
+          : pathLayerId.startsWith('layer2-') || pathLayerId.startsWith('layer3-')
+          ? { layer: pathLayerId.startsWith('layer2-') ? 2 : 3, brunnel: 'bridge' }
+          : {};
+
+      expect(matches(pathLayerId, { type: 2, properties: { ...baseProps, class: 'path', subclass: 'path' } })).toBe(true);
+      expect(matches(pathLayerId, { type: 2, properties: { ...baseProps, class: 'path', subclass: 'footway' } })).toBe(false);
+      expect(matches(pathLayerId, { type: 2, properties: { ...baseProps, class: 'path', subclass: 'cycleway' } })).toBe(false);
+      expect(matches(pathLayerId, { type: 2, properties: { ...baseProps, class: 'path', subclass: 'pedestrian' } })).toBe(false);
+      expect(matches(pathLayerId, { type: 2, properties: { ...baseProps, class: 'path', subclass: 'steps' } })).toBe(false);
+      expect(matches(pathLayerId, { type: 2, properties: { ...baseProps, class: 'path', subclass: 'platform' } })).toBe(false);
+      expect(matches(pathLayerId, { type: 3, properties: { ...baseProps, class: 'path', subclass: 'pedestrian' } })).toBe(false);
+    }
+
+    // Pedestrian plaza polygons must NEVER match path-footway, casing-path, or casing-marked-path
+    const pedestrianPolygon = { type: 3, properties: { class: 'path', subclass: 'pedestrian', layer: 0 } };
+    const markedPedestrianPolygon = { type: 3, properties: { class: 'path', subclass: 'pedestrian', colour: 'red', layer: 0 } };
+    expect(matches('casing-path', pedestrianPolygon)).toBe(false);
+    expect(matches('path-footway', pedestrianPolygon)).toBe(false);
+    expect(matches('path-path', pedestrianPolygon)).toBe(false);
+    expect(matches('casing-marked-path', markedPedestrianPolygon)).toBe(false);
+    expect(matches('trail-line-path', markedPedestrianPolygon)).toBe(false);
+
+    // Footway LineStrings match only casing-path + path-footway (not path-path or path-cycleway)
+    const footwayLine = { type: 2, properties: { class: 'path', subclass: 'footway', layer: 0 } };
+    expect(matches('casing-path', footwayLine)).toBe(true);
+    expect(matches('path-footway', footwayLine)).toBe(true);
+    expect(matches('path-path', footwayLine)).toBe(false);
+    expect(matches('path-cycleway', footwayLine)).toBe(false);
+  });
+
+  it('isolates contour ArrayBuffers against worker transfer detachment and provides valid empty Terrarium PNGs', async () => {
+    const sharedPayload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
+    const fakeManager: any = {
+      fetchContourTile: async () => ({ arrayBuffer: sharedPayload }),
+    };
+
+    wrapManagerWithSafeContourBuffers(fakeManager);
+
+    const first = await fakeManager.fetchContourTile(14, 9797, 6699, {});
+    expect(first.arrayBuffer).not.toBe(sharedPayload);
+    expect(first.arrayBuffer.byteLength).toBe(8);
+
+    // Simulate MapLibre Worker transferring (detaching) the first response ArrayBuffer
+    structuredClone(first.arrayBuffer, { transfer: [first.arrayBuffer] });
+    expect(first.arrayBuffer.byteLength).toBe(0);
+
+    // Cached underlying buffer and subsequent fetches remain completely intact
+    const second = await fakeManager.fetchContourTile(14, 9797, 6699, {});
+    expect(second.arrayBuffer.byteLength).toBe(8);
+    expect(Array.from(new Uint8Array(second.arrayBuffer))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    const emptyBlob = getEmptyTerrariumTileBlob();
+    expect(emptyBlob.type).toBe('image/png');
+    const pngBytes = new Uint8Array(await emptyBlob.arrayBuffer());
+    expect(Array.from(pngBytes.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  it('replaces stale OPFS Israel.osm.pmtiles with fresher local /data archive and detects trail color schema', async () => {
+    const pmtilesPath = 'data/Israel.osm.pmtiles';
+    const stat = fs.statSync(pmtilesPath);
+    const fd = fs.openSync(pmtilesPath, 'r');
+
+    const origWindow = (globalThis as any).window;
+    const origFetch = globalThis.fetch;
+    const addProtoSpy = vi.spyOn(maplibregl, 'addProtocol').mockImplementation(() => {});
+    const opfsGetSpy = vi
+      .spyOn(OpfsStorageAdapter, 'getStoredFile')
+      .mockResolvedValue({
+        name: 'Israel.osm.pmtiles',
+        size: 112434955,
+        lastModified: Date.parse('2026-11-07T10:00:00Z'),
+      } as unknown as File);
+    const opfsRemoveSpy = vi.spyOn(OpfsStorageAdapter, 'removeFile').mockResolvedValue();
+
+    try {
+      (globalThis as any).window = {
+        location: { origin: 'http://localhost:5173', hostname: 'localhost' },
+      };
+
+      globalThis.fetch = vi.fn(async (input: any, init?: RequestInit) => {
+        const url = String(input);
+        if (!url.startsWith('http://localhost:5173/data/Israel.osm.pmtiles')) {
+          return new Response('', { status: 404 });
+        }
+        const headers = new Headers({
+          'content-type': 'application/octet-stream',
+          'content-length': String(stat.size),
+          etag: `"${stat.size}-${stat.mtimeMs}"`,
+          'last-modified': stat.mtime.toUTCString(),
+        });
+        if (init?.method === 'HEAD') {
+          return new Response(null, { status: 200, headers });
+        }
+        const reqHeaders = new Headers(init?.headers);
+        const range = reqHeaders.get('range') || 'bytes=0-16383';
+        const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+        const start = match ? Number(match[1]) : 0;
+        const end = match ? Math.min(Number(match[2]), stat.size - 1) : 16383;
+        const len = end - start + 1;
+        const buf = Buffer.allocUnsafe(len);
+        const readLen = fs.readSync(fd, buf, 0, len, start);
+        const slice = buf.buffer.slice(buf.byteOffset, buf.byteOffset + readLen);
+        return new Response(slice, {
+          status: 206,
+          headers: new Headers({
+            'content-type': 'application/octet-stream',
+            'content-length': String(readLen),
+            'content-range': `bytes ${start}-${start + readLen - 1}/${stat.size}`,
+            etag: `"${stat.size}-${stat.mtimeMs}"`,
+          }),
+        });
+      }) as any;
+
+      const registry = new PMTilesRegistry();
+      const mounted = await registry.resolveArchive('israel-osm', 'Israel.osm.pmtiles', false);
+
+      expect(opfsRemoveSpy).toHaveBeenCalledWith('Israel.osm.pmtiles');
+      expect(mounted).not.toBeNull();
+      expect(mounted?.record.storageKind).toBe('local-server');
+      expect(mounted?.record.sizeBytes).toBe(stat.size);
+      expect(mounted?.protocolUrl).toContain('http://localhost:5173/data/Israel.osm.pmtiles?v=');
+      expect(mounted?.hasTrailColorSchema).toBe(true);
+    } finally {
+      fs.closeSync(fd);
+      (globalThis as any).window = origWindow;
+      globalThis.fetch = origFetch;
+      addProtoSpy.mockRestore();
+      opfsGetSpy.mockRestore();
+      opfsRemoveSpy.mockRestore();
+    }
+  });
+
+  it('CachedFetchSource revalidates offset-0 header online and invalidates stale ranges on ETag change', async () => {
+    const store = new Map<string, Response>();
+    let cacheDeleted = false;
+    const fakeCache = {
+      match: async (req: Request) => store.get(req.url)?.clone(),
+      put: async (req: Request, res: Response) => {
+        store.set(req.url, res.clone());
+      },
+    };
+    const origCaches = (globalThis as any).caches;
+    const origFetch = globalThis.fetch;
+
+    try {
+      (globalThis as any).caches = {
+        open: async () => fakeCache,
+        delete: async (name: string) => {
+          if (name === 'pmtiles-range-cache-v3') {
+            cacheDeleted = true;
+            store.clear();
+          }
+          return true;
+        },
+      };
+
+      const url = 'https://navapp-israel-topo-data.web.app/data/Israel.osm.pmtiles';
+      // Pre-populate stale v1 header + tile entry
+      store.set(
+        `https://pmtiles-range-cache.invalid/${encodeURIComponent(url)}/0-16384`,
+        new Response(new Uint8Array([0x50, 0x4d, 0x33, 0x01]), {
+          headers: { 'x-etag': '"old-etag"' },
+        })
+      );
+      store.set(
+        `https://pmtiles-range-cache.invalid/${encodeURIComponent(url)}/16384-100`,
+        new Response(new Uint8Array([9, 9, 9]), {
+          headers: { 'x-etag': '"old-etag"' },
+        })
+      );
+
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(new Uint8Array([0x50, 0x4d, 0x33, 0x02]), {
+          status: 206,
+          headers: { etag: '"new-etag"', 'content-length': '4' },
+        });
+      }) as any;
+
+      const src = new CachedFetchSource(url);
+      const res = await src.getBytes(0, 16384);
+
+      expect(cacheDeleted).toBe(true);
+      expect(res.etag).toBe('"new-etag"');
+      expect(Array.from(new Uint8Array(res.data))).toEqual([0x50, 0x4d, 0x33, 0x02]);
+      expect(
+        store.has(`https://pmtiles-range-cache.invalid/${encodeURIComponent(url)}/16384-100`)
+      ).toBe(false);
+    } finally {
+      (globalThis as any).caches = origCaches;
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('controls master POI visibility and all 6 POI category sub-toggles cleanly in Layers', () => {
+    expect(DEFAULT_LAYER_VISIBILITY.pois).toBe(true);
+    expect(DEFAULT_LAYER_VISIBILITY.poiWater).toBe(true);
+    expect(DEFAULT_LAYER_VISIBILITY.poiOffroad).toBe(true);
+    expect(DEFAULT_LAYER_VISIBILITY.poiHeritage).toBe(true);
+    expect(DEFAULT_LAYER_VISIBILITY.poiCampsites).toBe(true);
+    expect(DEFAULT_LAYER_VISIBILITY.poiPeaks).toBe(true);
+    expect(DEFAULT_LAYER_VISIBILITY.poiUser).toBe(true);
+    expect(isMasterPoiActive(DEFAULT_LAYER_VISIBILITY)).toBe(true);
+    expect(countActivePoiCategories(DEFAULT_LAYER_VISIBILITY)).toBe(6);
+
+    // Filter down to Water + User while master is on, then toggle master OFF and back ON
+    let vis = togglePoiCategoryVisibility(DEFAULT_LAYER_VISIBILITY, 'poiOffroad');
+    vis = togglePoiCategoryVisibility(vis, 'poiHeritage');
+    vis = togglePoiCategoryVisibility(vis, 'poiCampsites');
+    vis = togglePoiCategoryVisibility(vis, 'poiPeaks');
+    expect(countActivePoiCategories(vis)).toBe(2);
+    expect(isMasterPoiActive(vis)).toBe(true);
+
+    const hiddenMaster = toggleMasterPoiVisibility(vis);
+    expect(hiddenMaster.pois).toBe(false);
+    expect(isMasterPoiActive(hiddenMaster)).toBe(false);
+    // Preserves previously chosen subset when toggling master back ON
+    const restoredMaster = toggleMasterPoiVisibility(hiddenMaster);
+    expect(restoredMaster.pois).toBe(true);
+    expect(restoredMaster.poiWater).toBe(true);
+    expect(restoredMaster.poiUser).toBe(true);
+    expect(restoredMaster.poiOffroad).toBe(false);
+
+    // Clicking a single sub-category while master is OFF activates only that category
+    const singleFromOff = togglePoiCategoryVisibility(hiddenMaster, 'poiHeritage');
+    expect(singleFromOff.pois).toBe(true);
+    expect(singleFromOff.poiHeritage).toBe(true);
+    expect(singleFromOff.poiWater).toBe(false);
+    expect(singleFromOff.poiUser).toBe(false);
+
+    // Turning off the last active sub-category automatically turns master OFF
+    const allOff = togglePoiCategoryVisibility(singleFromOff, 'poiHeritage');
+    expect(allOff.pois).toBe(false);
+    expect(countActivePoiCategories(allOff)).toBe(0);
+
+    // Toggling master ON when 0 sub-categories are active enables all 6 categories
+    const reEnabledAll = toggleMasterPoiVisibility(allOff);
+    expect(reEnabledAll.pois).toBe(true);
+    expect(countActivePoiCategories(reEnabledAll)).toBe(6);
+
+    const explicitAll = enableAllPoiVisibility(hiddenMaster);
+    expect(explicitAll.pois).toBe(true);
+    expect(countActivePoiCategories(explicitAll)).toBe(6);
+  });
+
+  it('filters PoiManager GeoJSON and MapLibre POI layers using master POI toggle and category sub-toggles', () => {
+    const samplePois = [
+      { id: '1', category: 'water' as const },
+      { id: '2', category: 'offroad' as const },
+      { id: '3', category: 'heritage' as const },
+      { id: '4', category: 'campsite' as const },
+      { id: '5', category: 'peak' as const },
+      { id: '6', category: 'user' as const },
+    ].map((item) => ({
+      ...item,
+      name: item.id,
+      nameHe: item.id,
+      nameEn: item.id,
+      subcategory: 'test',
+      lon: 34.8,
+      lat: 30.8,
+      ele: 400,
+      waterStatus: null,
+      difficulty4x4: null,
+      descHe: '',
+      descEn: '',
+      source: 'test',
+      wikipedia: null,
+    }));
+
+    expect(PoiManager.toGeoJSON(samplePois, DEFAULT_LAYER_VISIBILITY).features).toHaveLength(6);
+
+    const noMaster = { ...DEFAULT_LAYER_VISIBILITY, pois: false };
+    expect(PoiManager.toGeoJSON(samplePois, noMaster).features).toHaveLength(0);
+
+    const onlyUser = {
+      ...DEFAULT_LAYER_VISIBILITY,
+      poiWater: false,
+      poiOffroad: false,
+      poiHeritage: false,
+      poiCampsites: false,
+      poiPeaks: false,
+      poiUser: true,
+    };
+    const userGeoJson = PoiManager.toGeoJSON(samplePois, onlyUser);
+    expect(userGeoJson.features).toHaveLength(1);
+    expect(userGeoJson.features[0].id).toBe('6');
+
+    const noUser = { ...DEFAULT_LAYER_VISIBILITY, poiUser: false };
+    expect(PoiManager.toGeoJSON(samplePois, noUser).features.map((f) => f.id)).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+    ]);
+
+    const hiddenStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: noMaster,
+      theme: 'topo-day',
+    });
+    for (const id of ['name-peak', 'name-water-point', 'icon-camp_site', 'icon-viewpoint', 'icon-parking']) {
+      const layer = hiddenStyle.layers.find((l) => l.id === id) as any;
+      expect(layer?.layout?.visibility).toBe('none');
+    }
+
+    const layoutUpdates: Array<{ id: string; val: string }> = [];
+    const mockMap = {
+      getStyle: () => ({
+        layers: [{ id: 'name-peak' }, { id: 'icon-viewpoint' }, { id: 'icon-parking' }],
+      }),
+      getLayer: (id: string) =>
+        ['name-peak', 'icon-viewpoint', 'icon-parking', 'israel-pois-labels'].includes(id)
+          ? { id }
+          : undefined,
+      getSource: () => undefined,
+      getTerrain: () => null,
+      setTerrain: () => {},
+      setLayoutProperty: (id: string, prop: string, val: string) => {
+        if (prop === 'visibility') layoutUpdates.push({ id, val });
+      },
+    };
+    applyLayerVisibilityToMap(mockMap, noMaster);
+    expect(layoutUpdates).toEqual([
+      { id: 'name-peak', val: 'none' },
+      { id: 'icon-viewpoint', val: 'none' },
+      { id: 'icon-parking', val: 'none' },
+      { id: 'israel-pois-labels', val: 'none' },
+    ]);
+  });
+
+  it('defaults cycleways switch to OFF, always draws Firing boundary, 4x4 tracks, Hiking paths, and Cycleways in default color, and toggles only colors', () => {
+    expect(DEFAULT_LAYER_VISIBILITY.cycleways).toBe(false);
+    const styleSpec = createRequire(import.meta.url)('@maplibre/maplibre-gl-style-spec');
+
+    const evalPaint = (style: any, layerId: string, props: Record<string, any>, zoom = 14) => {
+      const layer = style.layers.find((l: any) => l.id === layerId) as any;
+      expect(layer, `Missing layer ${layerId}`).toBeDefined();
+      const raw = layer.paint?.['line-color'];
+      if (typeof raw === 'string') return raw;
+      const compiled = styleSpec.createPropertyExpression(raw, styleSpec.latest.paint_line['line-color']);
+      expect(compiled.result).toBe('success');
+      const rgba = compiled.value.evaluate({ zoom }, { type: 2, properties: props });
+      const hex = (n: number) => Math.round(n * 255).toString(16).padStart(2, '0').toUpperCase();
+      return `#${hex(rgba.r)}${hex(rgba.g)}${hex(rgba.b)}`;
+    };
+
+    // 1. Default state (Cycle OFF) keeps cycleways visible in default #AA8166 without purple overlay, keeping hikingTrails
+    const noCycleStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
+
+    for (const id of [
+      'path-cycleway',
+      'casing-cycleway',
+      'casing-marked-cycleway',
+      'trail-line-cycleway',
+      'layer-1-path-cycleway',
+      'layer1-path-cycleway',
+      'layer2-path-cycleway',
+      'path-path',
+      'path-footway',
+      'casing-path',
+      'casing-marked-path',
+      'trail-line-path',
+      'trail-line-road',
+    ]) {
+      const layer = noCycleStyle.layers.find((l) => l.id === id) as any;
+      expect(layer, `Missing layer ${id}`).toBeDefined();
+      expect(layer.layout?.visibility, `Expected ${id} visible`).toBe('visible');
+    }
+    expect((noCycleStyle.layers.find((l) => l.id === 'trail-line-cycleway-purple') as any)?.layout?.visibility).toBe('none');
+    expect((noCycleStyle.layers.find((l) => l.id === 'trail-line-track-cycle') as any)?.layout?.visibility).toBe('none');
+    expect(evalPaint(noCycleStyle, 'path-cycleway', { class: 'path', subclass: 'cycleway' })).toBe('#AA8166');
+    expect(evalPaint(noCycleStyle, 'path-path', { class: 'path', subclass: 'path', bicycle: 'designated', mtb_scale: '2' })).toBe('#AA8166');
+    expect(evalPaint(noCycleStyle, 'path-path', { class: 'path', subclass: 'path', colour: 'red', bicycle: 'designated' })).toBe('#FF0000');
+
+    // 2. Turning ALL 4 switches OFF keeps every base path, track, cycleway, and firing boundary visible in default colors
+    const allColorSwitchesOff = {
+      ...DEFAULT_LAYER_VISIBILITY,
+      militaryZones: false,
+      offroad4x4: false,
+      hikingTrails: false,
+      cycleways: false,
+    };
+    const offStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: allColorSwitchesOff,
+      theme: 'topo-day',
+    });
+
+    // Firing zone keeps red dashed boundary, hides only area fill
+    expect((offStyle.layers.find((l) => l.id === 'boundary-military') as any)?.layout?.visibility).toBe('visible');
+    expect((offStyle.layers.find((l) => l.id === 'area-military') as any)?.layout?.visibility).toBe('none');
+
+    // Trail color overlays hide; base geometry layers remain visible
+    for (const overlayId of [
+      'trail-israel-lowzoom',
+      'trail-israel-secondary-',
+      'trail-israel-primary+',
+      'trail-regional-line',
+      'trail-regional-dash',
+      'trail-regional-line-purple',
+      'trail-line-path',
+      'trail-line-cycleway',
+      'trail-line-road',
+      'trail-line-track',
+      'trail-line-cycleway-purple',
+      'trail-line-track-cycle',
+      'casing-marked-path',
+      'casing-marked-cycleway',
+      'casing-minor-colour2',
+    ]) {
+      expect((offStyle.layers.find((l) => l.id === overlayId) as any)?.layout?.visibility, `Expected overlay ${overlayId} hidden`).toBe('none');
+    }
+
+    for (const baseId of [
+      'path-path',
+      'path-footway',
+      'path-cycleway',
+      'path-steps-line',
+      'casing-path',
+      'casing-cycleway',
+      'track-line-lowzoom',
+      'track-line',
+      'casing-track',
+      'track-right',
+      'track-left',
+      'track-right-grade4',
+      'track-left-grade4',
+      'track-right-grade5',
+      'track-left-grade5',
+      'track-right-grade1-2',
+      'track-left-grade1-2',
+      'casing-minor',
+      'casing-secondary',
+    ]) {
+      expect(
+        (offStyle.layers.find((l) => l.id === baseId) as any)?.layout?.visibility ?? 'visible',
+        `Expected base ${baseId} visible`
+      ).toBe('visible');
+    }
+
+    // Paths, tracks, cycleways & road casings evaluate purely to default colors even on tagged features
+    expect(evalPaint(offStyle, 'path-path', { class: 'path', subclass: 'path', colour: 'red', bicycle: 'designated' })).toBe('#AA8166');
+    expect(evalPaint(offStyle, 'path-cycleway', { class: 'path', subclass: 'cycleway', colour: 'blue' })).toBe('#AA8166');
+    expect(evalPaint(offStyle, 'track-right-grade5', { class: 'track', tracktype: 'grade5', colour: 'red', bicycle: 'designated' })).toBe('#AA8166');
+    expect(evalPaint(offStyle, 'track-left-grade5', { class: 'track', tracktype: 'grade5', colour: 'red;green' })).toBe('#AA8166');
+    expect(evalPaint(offStyle, 'casing-track', { class: 'track', colour: 'red', tracktype: 'grade4' })).toBe('#F7F4F2');
+    expect(evalPaint(offStyle, 'casing-secondary', { class: 'secondary', colour: 'red' })).toBe('#808080');
+
+    // Also validate OFF style passes MapLibre Style Spec v8 completely
+    const mlCode = fs.readFileSync('node_modules/maplibre-gl/dist/maplibre-gl.js', 'utf8');
+    const sharedExports: any = {};
+    vm.runInNewContext(mlCode.slice(mlCode.indexOf('define("shared"'), mlCode.indexOf('define("worker"')), {
+      console, setTimeout, clearTimeout, Uint8Array, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array,
+      Float32Array, Float64Array, ArrayBuffer, DataView, TextDecoder, performance, Math, Object, Array, String,
+      Number, Boolean, RegExp, Error, Map, Set, WeakMap, Symbol, Promise, JSON,
+      define: (_n: string, _d: string[], factory: any) => factory(sharedExports),
+    });
+    expect(sharedExports.F(offStyle)).toEqual([]);
+
+    // 3. In-place toggle via applyLayerVisibilityToMap updates layout AND paint properties cleanly
+    const layoutUpdates: Array<{ id: string; val: string }> = [];
+    const paintUpdates: Array<{ id: string; prop: string; val: any }> = [];
+    const watchedIds = [
+      'area-military',
+      'boundary-military',
+      'trail-line-cycleway-purple',
+      'trail-line-track',
+      'path-cycleway',
+      'path-path',
+      'track-right-grade5',
+      'casing-track',
+    ];
+    const mockMap = {
+      getStyle: () => ({ layers: watchedIds.map((id) => ({ id })) }),
+      getLayer: (id: string) => (watchedIds.includes(id) ? { id } : undefined),
+      getSource: () => undefined,
+      getTerrain: () => null,
+      setTerrain: () => {},
+      setLayoutProperty: (id: string, prop: string, val: string) => {
+        if (prop === 'visibility') layoutUpdates.push({ id, val });
+      },
+      setPaintProperty: (id: string, prop: string, val: any) => {
+        paintUpdates.push({ id, prop, val });
+      },
+    };
+    applyLayerVisibilityToMap(mockMap, allColorSwitchesOff);
+    expect(layoutUpdates).toEqual([
+      { id: 'area-military', val: 'none' },
+      { id: 'boundary-military', val: 'visible' },
+      { id: 'trail-line-cycleway-purple', val: 'none' },
+      { id: 'trail-line-track', val: 'none' },
+      { id: 'path-cycleway', val: 'visible' },
+      { id: 'path-path', val: 'visible' },
+      { id: 'track-right-grade5', val: 'visible' },
+      { id: 'casing-track', val: 'visible' },
+    ]);
+    expect(paintUpdates.find((p) => p.id === 'path-cycleway' && p.prop === 'line-color')?.val).toBe('#AA8166');
+    expect(paintUpdates.find((p) => p.id === 'path-path' && p.prop === 'line-color')?.val).toBe('#AA8166');
+    expect(paintUpdates.find((p) => p.id === 'track-right-grade5' && p.prop === 'line-color')?.val).toBe('#AA8166');
+  });
+
+  it('draws Shvil Israel from zoom 7+, suppresses other trail colors below zoom 11, and renders dashed trails at zoom 11', () => {
+    const styleSpec = createRequire(import.meta.url)('@maplibre/maplibre-gl-style-spec');
+    const style = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
+
+    // 1. Shvil Israel exception draws strictly from zoom 7
+    const shvilLowZoom = style.layers.find((l) => l.id === 'trail-israel-lowzoom') as any;
+    const shvilSecondary = style.layers.find((l) => l.id === 'trail-israel-secondary-') as any;
+    const shvilPrimary = style.layers.find((l) => l.id === 'trail-israel-primary+') as any;
+    expect(shvilLowZoom?.minzoom).toBe(7);
+    expect(shvilLowZoom?.maxzoom).toBe(9);
+    expect(shvilSecondary?.minzoom).toBe(7);
+    expect(shvilPrimary?.minzoom).toBe(7);
+    const shvilGeo = (style.sources['israel-shvil-lowzoom'] as any)?.data;
+    expect(shvilGeo?.features?.[0]?.geometry?.coordinates?.length).toBeGreaterThan(50);
+
+    // 2. No non-Shvil trail color layers draw below zoom 11
+    for (const id of [
+      'trail-line-path',
+      'trail-line-cycleway',
+      'trail-line-cycleway-purple',
+      'trail-line-track-cycle',
+      'trail-line-track',
+      'trail-line-road',
+      'trail-regional-line',
+      'trail-regional-dash',
+      'trail-regional-line-purple',
+      'casing-marked-path',
+      'casing-marked-cycleway',
+      'path-path',
+      'path-footway',
+      'path-cycleway',
+      'track-right',
+      'track-left',
+    ]) {
+      const layer = style.layers.find((l) => l.id === id) as any;
+      expect(layer?.minzoom ?? 0, `Expected ${id} minzoom >= 11`).toBeGreaterThanOrEqual(11);
+    }
+
+    // Even road casings with minzoom < 11 evaluate strictly to neutral gray below z11
+    for (const id of ['casing-trunk', 'casing-primary', 'layer-1-casing-trunk', 'layer-1-casing-primary']) {
+      const layer = style.layers.find((l) => l.id === id) as any;
+      const expr = styleSpec.expression.createExpression(layer.paint['line-color'], { type: 'color' }).value;
+      const colAt10 = expr.evaluate(
+        { zoom: 10 },
+        { type: 2, properties: { class: 'primary', colour: 'red', osmc_symbol: 'red:white:red_stripe' } }
+      ).toString();
+      expect(['rgba(128,128,128,1)', 'rgba(224,224,224,1)']).toContain(colAt10);
+    }
+
+    // Tracks remain drawn at z10..11 via unmarked track-line-lowzoom
+    const trackLow = style.layers.find((l) => l.id === 'track-line-lowzoom') as any;
+    expect(trackLow?.minzoom).toBe(10);
+    expect(trackLow?.maxzoom).toBe(11);
+
+    // 3. At zoom 11, marked trails are dashed (never a single continuous straight line)
+    for (const id of [
+      'trail-line-road',
+      'trail-line-track',
+      'trail-line-path',
+      'trail-line-cycleway',
+      'trail-line-cycleway-purple',
+      'trail-line-track-cycle',
+    ]) {
+      const layer = style.layers.find((l) => l.id === id) as any;
+      expect(Array.isArray(layer?.paint?.['line-dasharray'])).toBe(true);
+      expect(layer.paint['line-dasharray'].length).toBeGreaterThanOrEqual(2);
+      expect(layer?.layout?.['line-cap']).toBe('butt');
+    }
   });
 });

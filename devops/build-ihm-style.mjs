@@ -26,12 +26,33 @@ function transformFilter(filter) {
   if (!Array.isArray(filter)) return filter;
   const op = filter[0];
 
+  const pathSubclasses = new Set(['footway', 'pedestrian', 'cycleway', 'steps']);
+
   // Legacy ["==", "ihm_class", val] or ["!=", "ihm_class", val]
   if ((op === '==' || op === '!=') && filter[1] === 'ihm_class') {
     const val = filter[2];
-    if (['footway', 'pedestrian', 'cycleway', 'steps'].includes(val)) {
+    if (val === 'path') {
       return op === '=='
-        ? ['any', ['==', 'class', val], ['==', 'subclass', val]]
+        ? [
+            'all',
+            ['==', 'class', 'path'],
+            ['!in', 'subclass', 'footway', 'pedestrian', 'cycleway', 'steps', 'platform'],
+            ['==', '$type', 'LineString'],
+          ]
+        : ['any', ['!=', 'class', 'path'], ['in', 'subclass', 'footway', 'pedestrian', 'cycleway', 'steps', 'platform']];
+    }
+    if (pathSubclasses.has(val)) {
+      if (val === 'steps') {
+        return op === '=='
+          ? ['any', ['==', 'class', 'steps'], ['all', ['==', 'class', 'path'], ['==', 'subclass', 'steps']]]
+          : ['all', ['!=', 'class', 'steps'], ['!=', 'subclass', 'steps']];
+      }
+      return op === '=='
+        ? [
+            'all',
+            ['any', ['==', 'class', val], ['all', ['==', 'class', 'path'], ['==', 'subclass', val]]],
+            ['==', '$type', 'LineString'],
+          ]
         : ['all', ['!=', 'class', val], ['!=', 'subclass', val]];
     }
     return [op, 'class', val];
@@ -40,19 +61,41 @@ function transformFilter(filter) {
   // Legacy ["in", "ihm_class", ...vals] or ["!in", "ihm_class", ...vals]
   if ((op === 'in' || op === '!in') && filter[1] === 'ihm_class') {
     const vals = filter.slice(2);
-    const hasSub = vals.some((v) => ['footway', 'pedestrian', 'cycleway', 'steps'].includes(v));
+    const hasPathOrSub = vals.some((v) => v === 'path' || pathSubclasses.has(v));
     const expanded = vals.includes('minor') && !vals.includes('minor_construction')
       ? [...vals, 'minor_construction']
       : vals;
-    if (hasSub) {
-      return op === 'in'
-        ? ['any', ['in', 'class', ...expanded], ['in', 'subclass', ...expanded]]
-        : ['all', ['!in', 'class', ...expanded], ['!in', 'subclass', ...expanded]];
+    if (hasPathOrSub) {
+      if (op === 'in') {
+        const directSub = expanded.filter((v) => pathSubclasses.has(v));
+        const branches = [];
+        if (directSub.length > 0) branches.push(['in', 'class', ...directSub]);
+        branches.push(['all', ['==', 'class', 'path'], ['in', 'subclass', ...expanded]]);
+        const matchExpr = branches.length === 1 ? branches[0] : ['any', ...branches];
+        return ['all', matchExpr, ['==', '$type', 'LineString']];
+      }
+      return ['all', ['!in', 'class', ...expanded], ['!in', 'subclass', ...expanded]];
     }
     return [op, 'class', ...expanded];
   }
 
-  return filter.map(transformFilter);
+  const mapped = filter.map(transformFilter);
+  if (mapped[0] === 'all') {
+    const flattened = ['all'];
+    for (const item of mapped.slice(1)) {
+      if (Array.isArray(item) && item[0] === 'all') {
+        for (const sub of item.slice(1)) {
+          if (JSON.stringify(sub) !== '["==","$type","LineString"]' || !flattened.some((x) => JSON.stringify(x) === JSON.stringify(sub))) {
+            flattened.push(sub);
+          }
+        }
+      } else if (JSON.stringify(item) !== '["==","$type","LineString"]' || !flattened.some((x) => JSON.stringify(x) === JSON.stringify(item))) {
+        flattened.push(item);
+      }
+    }
+    return flattened;
+  }
+  return mapped;
 }
 
 function transformExpression(expr) {
@@ -96,27 +139,11 @@ function transformExpression(expr) {
     expr[1][1] === 'colour'
   ) {
     const last = expr[expr.length - 1];
-    let fallback = '#6B3E26';
+    let fallback = '#AA8166';
     if (typeof last === 'string') {
       fallback = last;
     } else if (Array.isArray(last) && last[0] === 'to-color' && typeof last[2] === 'string') {
       fallback = last[2];
-    }
-    if (fallback === '#AA8166') {
-      fallback = [
-        'case',
-        ['==', ['get', 'bicycle'], 'designated'],
-        '#9333EA',
-        ['in', ['coalesce', ['get', 'sac_scale'], ''], ['literal', ['demanding_mountain_hiking', 'alpine_hiking']]],
-        '#DC2626',
-        ['==', ['get', 'sac_scale'], 'mountain_hiking'],
-        '#00A800',
-        ['in', ['coalesce', ['get', 'tracktype'], ''], ['literal', ['grade4', 'grade5']]],
-        '#991B1B',
-        ['in', ['coalesce', ['get', 'smoothness'], ''], ['literal', ['very_bad', 'horrible', 'impassable']]],
-        '#991B1B',
-        '#6B3E26',
-      ];
     }
     return [
       'match',
@@ -133,22 +160,15 @@ function transformExpression(expr) {
       '#800080',
       'orange',
       '#FF8000',
+      'yellow',
+      '#EAB308',
       fallback,
     ];
   }
 
   // Replace ["let", "colour", ["coalesce", ["get", "colour2"], ["get", "colour"], FALLBACK], ...]
   if (expr[0] === 'let' && expr[1] === 'colour' && Array.isArray(expr[2])) {
-    const fallback = [
-      'case',
-      ['==', ['get', 'bicycle'], 'designated'],
-      '#9333EA',
-      ['in', ['coalesce', ['get', 'tracktype'], ''], ['literal', ['grade4', 'grade5']]],
-      '#991B1B',
-      ['in', ['coalesce', ['get', 'smoothness'], ''], ['literal', ['very_bad', 'horrible', 'impassable']]],
-      '#991B1B',
-      '#6B3E26',
-    ];
+    const fallback = typeof expr[2][3] === 'string' ? expr[2][3] : '#AA8166';
     return [
       'match',
       ['coalesce', ['get', 'colour2'], ['get', 'colour'], ''],
@@ -164,6 +184,8 @@ function transformExpression(expr) {
       '#800080',
       'orange',
       '#FF8000',
+      'yellow',
+      '#EAB308',
       fallback,
     ];
   }
@@ -281,7 +303,22 @@ for (const rawLayer of ihm.layers) {
     layer.maxzoom = 16;
   }
 
-  // Ensure tracks, footpaths, buildings, and road names are visible from medium zoom (z10-12+)
+  // Ensure tracks, footpaths, buildings, and road names follow visibility & zoom rules
+  if (layer.id === 'trail-israel-secondary-' || layer.id === 'trail-israel-primary+') {
+    layer.minzoom = 7;
+  }
+  if (layer.id === 'trail-line-path' || layer.id === 'trail-line-road') {
+    layer.minzoom = 11;
+  }
+  if (layer.id === 'trail-line-road') {
+    layer.maxzoom = 12;
+    layer.layout = { ...(layer.layout || {}), 'line-cap': 'butt', 'line-join': 'round' };
+    layer.paint = {
+      ...(layer.paint || {}),
+      'line-dasharray': [4.5, 2.5],
+      'line-width': { base: 2, stops: [[11, 2.2], [12, 2.6]] },
+    };
+  }
   if (layer.id === 'track-line') {
     layer.minzoom = 10;
   }

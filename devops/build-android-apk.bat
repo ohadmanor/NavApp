@@ -20,7 +20,6 @@ if errorlevel 1 (
 
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
-if exist "data\Israel.trails.geojson" copy /Y "data\Israel.trails.geojson" "dist\data\Israel.trails.geojson" >nul
 
 if "%ANDROID_HOME%"=="" (
     if exist "%LOCALAPPDATA%\Android\Sdk" (

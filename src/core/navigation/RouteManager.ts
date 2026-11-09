@@ -19,29 +19,49 @@ export class RouteManager {
     id?: string;
     name: string;
     coordinates: Array<[number, number]>;
+    segments?: Array<Array<[number, number]>>;
     sourceFormat: SavedRouteRecord['sourceFormat'];
     color?: string;
   }): Promise<SavedRouteRecord> {
-    const line = turf.lineString(params.coordinates);
-    const totalLengthKm = turf.length(line, { units: 'kilometers' });
+    const rawSegments =
+      params.segments && params.segments.length > 0 ? params.segments : [params.coordinates];
+    const validSegments = rawSegments.filter((seg) => seg.length >= 2);
+    const lines = validSegments.map((seg) => turf.lineString(seg));
+    const segmentLengths = lines.map((l) => turf.length(l, { units: 'kilometers' }));
+    const totalLengthKm = segmentLengths.reduce((sum, len) => sum + len, 0);
 
-    // Resample up to 45 points along route to compute elevation profile from Israel.dem.pmtiles
-    const numSamples = Math.max(10, Math.min(45, Math.ceil(totalLengthKm * 5)));
+    // Resample points proportionally across all segments to compute continuous elevation profile from Israel.dem.pmtiles
+    const totalSamples = Math.max(12, Math.min(60, Math.ceil(totalLengthKm * 5)));
     const elevationProfile: SavedRouteRecord['elevationProfile'] = [];
+    const routeColor = params.color || '#ec4899';
+    const routeId =
+      params.id || `route-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-    for (let i = 0; i <= numSamples; i++) {
-      const distKm = (totalLengthKm * i) / numSamples;
-      const pt = turf.along(line, distKm, { units: 'kilometers' });
-      const [lon, lat] = pt.geometry.coordinates;
-      const sampledEle = await ElevationService.getElevationAt(lon, lat, 11);
-      // Fallback topographic estimation if DEM not yet mounted
-      const fallbackEle = Math.round(350 + Math.sin(i * 0.4) * 120);
-      elevationProfile.push({
-        distKm: Number(distKm.toFixed(2)),
-        ele: sampledEle ?? fallbackEle,
-        lon,
-        lat,
-      });
+    let cumDistKm = 0;
+    for (let sIdx = 0; sIdx < lines.length; sIdx++) {
+      const segLine = lines[sIdx];
+      const segLen = segmentLengths[sIdx];
+      const segSamples =
+        totalLengthKm > 0
+          ? Math.max(3, Math.round((segLen / totalLengthKm) * totalSamples))
+          : Math.max(2, validSegments[sIdx].length - 1);
+
+      for (let i = 0; i <= segSamples; i++) {
+        // Avoid duplicating junction sample if next segment starts very close
+        if (sIdx > 0 && i === 0) continue;
+        const localDistKm = segSamples > 0 ? (segLen * i) / segSamples : 0;
+        const pt = turf.along(segLine, localDistKm, { units: 'kilometers' });
+        const [lon, lat] = pt.geometry.coordinates;
+        const sampledEle = await ElevationService.getElevationAt(lon, lat, 11);
+        const fallbackEle = Math.round(350 + Math.sin(elevationProfile.length * 0.4) * 120);
+        elevationProfile.push({
+          distKm: Number((cumDistKm + localDistKm).toFixed(2)),
+          ele: sampledEle ?? fallbackEle,
+          lon,
+          lat,
+        });
+      }
+      cumDistKm += segLen;
     }
 
     let ascentMeters = 0;
@@ -61,7 +81,7 @@ export class RouteManager {
     }
 
     const record: SavedRouteRecord = {
-      id: params.id || `route-${Date.now()}`,
+      id: routeId,
       name: params.name,
       sourceFormat: params.sourceFormat,
       distanceKm: Number(totalLengthKm.toFixed(2)),
@@ -69,21 +89,20 @@ export class RouteManager {
       descentMeters: Math.round(descentMeters),
       minEle: isFinite(minEle) ? minEle : 0,
       maxEle: isFinite(maxEle) ? maxEle : 0,
-      color: params.color || '#10b981',
+      color: routeColor,
       visible: true,
       geojson: {
         type: 'FeatureCollection',
-        features: [
-          {
-            type: 'Feature',
-            properties: {
-              id: params.id || `route-${Date.now()}`,
-              name: params.name,
-              color: params.color || '#10b981',
-            },
-            geometry: line.geometry,
+        features: lines.map((line, idx) => ({
+          type: 'Feature',
+          properties: {
+            id: `${routeId}-seg-${idx}`,
+            routeId,
+            name: params.name,
+            color: routeColor,
           },
-        ],
+          geometry: line.geometry,
+        })),
       },
       elevationProfile,
       createdAt: new Date().toISOString(),
@@ -97,13 +116,16 @@ export class RouteManager {
    * Re-samples route elevations directly from Israel.dem.pmtiles once mounted.
    */
   static async refreshRouteElevationsFromDem(route: SavedRouteRecord): Promise<SavedRouteRecord> {
-    const feature = route.geojson.features[0];
-    if (!feature || feature.geometry.type !== 'LineString') return route;
-    const coords = feature.geometry.coordinates as Array<[number, number]>;
+    const segments = route.geojson.features
+      .filter((f) => f.geometry?.type === 'LineString')
+      .map((f) => (f.geometry as GeoJSON.LineString).coordinates as Array<[number, number]>)
+      .filter((coords) => coords.length >= 2);
+    if (segments.length === 0) return route;
     return await this.createAndSaveRoute({
       id: route.id,
       name: route.name,
-      coordinates: coords,
+      coordinates: segments[0],
+      segments,
       sourceFormat: route.sourceFormat,
       color: route.color,
     });
@@ -121,16 +143,32 @@ export class RouteManager {
     isOffRoute: boolean;
     snappedCoord: [number, number];
   } {
-    const feature = route.geojson.features[0] as GeoJSON.Feature<GeoJSON.LineString>;
+    const lineFeatures = route.geojson.features.filter(
+      (f) => f.geometry?.type === 'LineString'
+    ) as Array<GeoJSON.Feature<GeoJSON.LineString>>;
     const userPt = turf.point([userLon, userLat]);
-    const distMeters = turf.pointToLineDistance(userPt, feature, { units: 'meters' });
-    const snapped = turf.nearestPointOnLine(feature, userPt);
+    let minDistMeters = Infinity;
+    let bestSnapped: [number, number] = [userLon, userLat];
 
+    for (const feature of lineFeatures) {
+      const distMeters = turf.pointToLineDistance(userPt, feature, { units: 'meters' });
+      if (distMeters < minDistMeters) {
+        minDistMeters = distMeters;
+        const snapped = turf.nearestPointOnLine(feature, userPt);
+        bestSnapped = snapped.geometry.coordinates as [number, number];
+      }
+    }
+
+    const rounded = Number.isFinite(minDistMeters) ? Math.round(minDistMeters) : 0;
     return {
-      distanceFromTrailMeters: Math.round(distMeters),
-      isOffRoute: distMeters > 50,
-      snappedCoord: snapped.geometry.coordinates as [number, number],
+      distanceFromTrailMeters: rounded,
+      isOffRoute: rounded > 50,
+      snappedCoord: bestSnapped,
     };
+  }
+
+  static async deleteRoute(id: string): Promise<void> {
+    await db.routes.delete(id);
   }
 
   static exportRouteAsGpx(route: SavedRouteRecord): string {

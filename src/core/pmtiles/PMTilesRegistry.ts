@@ -23,6 +23,7 @@ export interface MountedArchiveInfo {
   pmtiles: PMTiles;
   record: MapArchiveRecord;
   vectorLayers: string[];
+  hasTrailColorSchema?: boolean;
 }
 
 export type ArchiveUpdateListener = (
@@ -35,6 +36,62 @@ export type DownloadProgressListener = (
   loaded: number,
   total: number
 ) => void;
+
+const EMPTY_TERRARIUM_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAA1UlEQVR42u3BMQEAAADCoPVP7WULoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAGwEtAAGey8LtAAAAAElFTkSuQmCC';
+
+let cachedEmptyTerrariumBlob: Blob | null = null;
+
+/**
+ * Valid 256x256 RGB(0,0,0) PNG representing -32768m in Terrarium encoding.
+ * maplibre-contour treats elevations below -12000m as invalid (NaN) and skips them cleanly
+ * without failing neighboring valid tiles along borders or coastlines.
+ */
+export function getEmptyTerrariumTileBlob(): Blob {
+  if (!cachedEmptyTerrariumBlob) {
+    const raw =
+      typeof atob === 'function'
+        ? atob(EMPTY_TERRARIUM_PNG_BASE64)
+        : Buffer.from(EMPTY_TERRARIUM_PNG_BASE64, 'base64').toString('binary');
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      bytes[i] = raw.charCodeAt(i);
+    }
+    cachedEmptyTerrariumBlob = new Blob([bytes], { type: 'image/png' });
+  }
+  return cachedEmptyTerrariumBlob;
+}
+
+/**
+ * Wraps LocalDemManager.fetchContourTile so each response returns an independent ArrayBuffer copy.
+ * MapLibre transfers protocol response ArrayBuffers to its Web Worker via postMessage (detaching them);
+ * without slicing, subsequent loads of cached tiles (style reload, theme switch, pan-back) receive a
+ * detached 0-byte ArrayBuffer and fail with "ArrayBuffer at index 0 is already detached".
+ */
+export function wrapManagerWithSafeContourBuffers(manager: any): void {
+  if (!manager || typeof manager.fetchContourTile !== 'function' || manager.__navappSafeContours) {
+    return;
+  }
+  const rawFetchContourTile = manager.fetchContourTile.bind(manager);
+  manager.fetchContourTile = async (
+    z: number,
+    x: number,
+    y: number,
+    options: any,
+    parentAbortController?: AbortController,
+    timer?: any
+  ) => {
+    const res = await rawFetchContourTile(z, x, y, options, parentAbortController, timer);
+    if (!res || !res.arrayBuffer) {
+      return { arrayBuffer: new ArrayBuffer(0) };
+    }
+    return {
+      ...res,
+      arrayBuffer: res.arrayBuffer.slice(0),
+    };
+  };
+  manager.__navappSafeContours = true;
+}
 
 /**
  * Central PMTiles Engine managing the dual-file Israel architecture:
@@ -57,17 +114,21 @@ export class PMTilesRegistry {
   private autoDownloadQueue: Array<'israel-osm' | 'israel-dem'> = [];
   private isAutoDownloading = false;
   private forcedDownloads = new Set<string>();
+  private defaultInitPromise: Promise<{
+    dem: MountedArchiveInfo | null;
+    osm: MountedArchiveInfo | null;
+  }> | null = null;
 
   constructor() {
     this.protocol = new Protocol({ metadata: true });
   }
 
   getDefaultOsmProtocolUrl(): string {
-    return `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.osm.pmtiles`;
+    return `pmtiles://${pmtilesUrl('Israel.osm.pmtiles')}`;
   }
 
   getDefaultDemProtocolUrl(): string {
-    return `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`;
+    return `pmtiles://${pmtilesUrl('Israel.dem.pmtiles')}`;
   }
 
   getDefaultContourProtocolUrl(): string | undefined {
@@ -106,16 +167,28 @@ export class PMTilesRegistry {
     registerOfflineGlyphsProtocol();
     registerOfflineRtlTextPlugin();
 
-    // Pre-register remote Firebase sources as default fallbacks so MapLibre can stream immediately
-    const defaultOsmUrl = `${REMOTE_DATA_ORIGIN}/data/Israel.osm.pmtiles`;
-    const defaultOsmSource = new CachedFetchSource(defaultOsmUrl);
+    // Pre-register default local (/data on localhost) or remote Firebase sources so MapLibre can stream immediately
+    const defaultOsmUrl = pmtilesUrl('Israel.osm.pmtiles');
+    const osmIsRemote =
+      defaultOsmUrl.startsWith(REMOTE_DATA_ORIGIN) ||
+      defaultOsmUrl.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
+      defaultOsmUrl.startsWith('https://');
+    const defaultOsmSource = osmIsRemote
+      ? new CachedFetchSource(defaultOsmUrl)
+      : new FetchSource(defaultOsmUrl);
     const defaultOsmPmtiles = new PMTiles(defaultOsmSource);
     this.attachInMemoryTileCache(defaultOsmPmtiles, 400);
     this.protocol.add(defaultOsmPmtiles);
     (this.protocol as any).tiles?.set('israel-osm', defaultOsmPmtiles);
 
-    const defaultDemUrl = `${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`;
-    const defaultDemSource = new CachedFetchSource(defaultDemUrl);
+    const defaultDemUrl = pmtilesUrl('Israel.dem.pmtiles');
+    const demIsRemote =
+      defaultDemUrl.startsWith(REMOTE_DATA_ORIGIN) ||
+      defaultDemUrl.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
+      defaultDemUrl.startsWith('https://');
+    const defaultDemSource = demIsRemote
+      ? new CachedFetchSource(defaultDemUrl)
+      : new FetchSource(defaultDemUrl);
     const defaultDemPmtiles = new PMTiles(defaultDemSource);
     this.attachInMemoryTileCache(defaultDemPmtiles, 500);
     this.protocol.add(defaultDemPmtiles);
@@ -127,12 +200,50 @@ export class PMTilesRegistry {
     this.isProtocolRegistered = true;
   }
 
+  private async probeLocalServer(fileName: string): Promise<{
+    url: string;
+    versionedUrl: string;
+    size: number;
+    etag?: string;
+    lastModifiedMs?: number;
+  } | null> {
+    if (typeof window === 'undefined' || !window.location?.origin || isNativePlatform()) {
+      return null;
+    }
+    const localUrl = `${window.location.origin}/data/${fileName}`;
+    try {
+      const head = await fetch(localUrl, {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(4000),
+      });
+      const contentType = head.headers.get('content-type') || '';
+      if (!head.ok || contentType.includes('text/html')) {
+        return null;
+      }
+      const size = Number(head.headers.get('content-length') || 0);
+      const etag = head.headers.get('etag') || undefined;
+      const lastModHeader = head.headers.get('last-modified');
+      const parsedLastMod = lastModHeader ? Date.parse(lastModHeader) : NaN;
+      const lastModifiedMs = Number.isFinite(parsedLastMod) ? parsedLastMod : undefined;
+      const rawTag = etag
+        ? etag.replace(/[^a-zA-Z0-9._-]/g, '')
+        : size > 0 || lastModifiedMs
+          ? `${size}-${lastModifiedMs || 0}`
+          : '';
+      const versionedUrl = rawTag ? `${localUrl}?v=${encodeURIComponent(rawTag)}` : localUrl;
+      return { url: localUrl, versionedUrl, size, etag, lastModifiedMs };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Resolves a PMTiles archive:
-   * 1. Checks device storage (OPFS) for local offline file.
-   * 2. Checks local development server (/data/{fileName}).
-   * 3. If not found locally, automatically connects to Firebase (REMOTE_DATA_ORIGIN)
-   *    and triggers an automatic background download to OPFS.
+   * 1. Checks local development/preview server (/data/{fileName}) and device storage (OPFS).
+   *    If OPFS holds an older/different size copy than local /data/{fileName}, mounts the fresh local server copy.
+   * 2. Otherwise mounts OPFS offline copy (and checks Firebase for updates on updatable OSM archives).
+   * 3. If not found locally, connects to Firebase (REMOTE_DATA_ORIGIN).
    */
   async resolveArchive(
     id: 'israel-dem' | 'israel-osm',
@@ -141,32 +252,57 @@ export class PMTilesRegistry {
   ): Promise<MountedArchiveInfo | null> {
     this.initProtocols();
 
-    // 1. Already stored on this device? Mount instantly and NEVER re-download an identical file.
-    try {
-      const opfsFile = await OpfsStorageAdapter.getStoredFile(fileName);
-      if (opfsFile && opfsFile.size > 0) {
-        console.log(`[PMTilesRegistry] Found ${fileName} in local storage. Mounting...`);
-        const mounted = await this.mountFromFile(id, fileName, opfsFile, isConstant, 'opfs');
-        return mounted;
+    const [opfsFile, localServer] = await Promise.all([
+      OpfsStorageAdapter.getStoredFile(fileName).catch((err) => {
+        console.warn(`[PMTilesRegistry] Local storage lookup warning for ${fileName}:`, err);
+        return null;
+      }),
+      this.probeLocalServer(fileName),
+    ]);
+
+    // 1. Stored in OPFS? Verify it isn't stale compared to local dev server /data/{fileName}
+    if (opfsFile && opfsFile.size > 0) {
+      const localSizeDiffers =
+        !!localServer && localServer.size > 0 && localServer.size !== opfsFile.size;
+      const localServerNewer =
+        !!localServer &&
+        !isConstant &&
+        !!localServer.lastModifiedMs &&
+        !!opfsFile.lastModified &&
+        localServer.lastModifiedMs > opfsFile.lastModified + 2000;
+
+      if (localServer && (localSizeDiffers || localServerNewer)) {
+        console.warn(
+          `[PMTilesRegistry] Cached OPFS ${fileName} (${opfsFile.size} bytes) is stale vs local /data (${localServer.size} bytes). Switching to fresh local /data file.`
+        );
+        await OpfsStorageAdapter.removeFile(fileName).catch(() => {});
+        return await this.mountFromUrl(
+          id,
+          fileName,
+          localServer.versionedUrl,
+          isConstant,
+          localServer.size
+        );
       }
-    } catch (err) {
-      console.warn(`[PMTilesRegistry] Local storage lookup warning for ${fileName}:`, err);
+
+      console.log(`[PMTilesRegistry] Found ${fileName} in local storage (OPFS). Mounting...`);
+      const mounted = await this.mountFromFile(id, fileName, opfsFile, isConstant, 'opfs');
+      if (!isConstant && !localServer) {
+        void this.checkForRemoteUpdate(id, fileName, opfsFile.size);
+      }
+      return mounted;
     }
 
-    // 2. Check local development server (/data/{fileName}) if on web
-    if (typeof window !== 'undefined' && window.location?.origin && !isNativePlatform()) {
-      const localUrl = `${window.location.origin}/data/${fileName}`;
-      try {
-        const head = await fetch(localUrl, { method: 'HEAD', signal: AbortSignal.timeout(1200) });
-        const looksLikeArchive =
-          head.ok && !(head.headers.get('content-type') || '').includes('text/html');
-        if (looksLikeArchive) {
-          console.log(`[PMTilesRegistry] Found ${fileName} on local server. Mounting...`);
-          return await this.mountFromUrl(id, fileName, localUrl, isConstant);
-        }
-      } catch {
-        // Not on local server
-      }
+    // 2. Local development/preview server (/data/{fileName})
+    if (localServer) {
+      console.log(`[PMTilesRegistry] Found ${fileName} on local server. Mounting...`);
+      return await this.mountFromUrl(
+        id,
+        fileName,
+        localServer.versionedUrl,
+        isConstant,
+        localServer.size
+      );
     }
 
     // 3. Not stored locally -> check if hosted on Firebase
@@ -182,7 +318,7 @@ export class PMTilesRegistry {
       }
 
       console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remote.url}`);
-      const mounted = await this.mountFromUrl(id, fileName, remote.url, isConstant);
+      const mounted = await this.mountFromUrl(id, fileName, remote.url, isConstant, remote.size);
       return mounted;
     } catch (err) {
       console.warn(`[PMTilesRegistry] Could not mount ${fileName} from Firebase:`, err);
@@ -199,6 +335,7 @@ export class PMTilesRegistry {
       try {
         const res = await fetch(targetUrl, {
           headers: { Range: 'bytes=0-0' },
+          cache: 'no-store',
           signal: AbortSignal.timeout(6000),
         });
         if (!res.ok) continue;
@@ -302,7 +439,7 @@ export class PMTilesRegistry {
 
   /**
    * Boots both Israel.dem.pmtiles (Constant) and Israel.osm.pmtiles (Updatable).
-   * Checks OPFS first -> local server -> automatically downloads from Firebase.
+   * Deduplicates concurrent callers (e.g. React StrictMode) so archives resolve cleanly once.
    */
   async initializeDefaultIsraelArchives(): Promise<{
     dem: MountedArchiveInfo | null;
@@ -310,27 +447,43 @@ export class PMTilesRegistry {
   }> {
     this.initProtocols();
 
-    const [osm, dem] = await Promise.all([
-      this.resolveArchive('israel-osm', 'Israel.osm.pmtiles', false),
-      this.resolveArchive('israel-dem', 'Israel.dem.pmtiles', true),
-    ]);
+    if (!this.defaultInitPromise) {
+      this.defaultInitPromise = Promise.all([
+        this.resolveArchive('israel-osm', 'Israel.osm.pmtiles', false),
+        this.resolveArchive('israel-dem', 'Israel.dem.pmtiles', true),
+      ])
+        .then(([osm, dem]) => ({ dem, osm }))
+        .finally(() => {
+          this.defaultInitPromise = null;
+        });
+    }
 
-    return { dem, osm };
+    return this.defaultInitPromise;
   }
 
   async mountFromUrl(
     id: 'israel-dem' | 'israel-osm',
     fileName: string,
     url: string,
-    isConstant: boolean
+    isConstant: boolean,
+    knownSizeBytes = 0
   ): Promise<MountedArchiveInfo> {
     this.initProtocols();
     const isRemote =
       url.startsWith(REMOTE_DATA_ORIGIN) ||
       url.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
-      url.startsWith('https://');
+      (url.startsWith('https://') &&
+        (typeof window === 'undefined' || !url.startsWith(window.location?.origin || 'https://__none__')));
     const source = isRemote ? new CachedFetchSource(url) : new FetchSource(url);
-    return this.registerArchiveSource(id, fileName, source, 'local-server', url, 0, isConstant);
+    return this.registerArchiveSource(
+      id,
+      fileName,
+      source,
+      isRemote ? 'remote-url' : 'local-server',
+      url,
+      knownSizeBytes,
+      isConstant
+    );
   }
 
   async mountFromFile(
@@ -359,13 +512,9 @@ export class PMTilesRegistry {
   }
 
   /**
-   * Hot-swaps Israel.osm.pmtiles from a newly selected local File or remote URL
-   * while leaving the 1.40 GB Israel.dem.pmtiles untouched.
-   */
-  /**
-   * Downloads Israel.dem.pmtiles or Israel.osm.pmtiles from the hosted Firebase site into the
-   * device's persistent storage (OPFS) on user request, then mounts the local copy so the map
-   * works 100% offline.
+   * Downloads Israel.dem.pmtiles or Israel.osm.pmtiles from the local /data server (in dev) or
+   * hosted Firebase site into the device's persistent storage (OPFS) on user request, then mounts
+   * the local copy so the map works 100% offline.
    */
   async downloadOfflineArchive(
     id: 'israel-dem' | 'israel-osm',
@@ -376,20 +525,23 @@ export class PMTilesRegistry {
       throw new Error('Offline storage (OPFS) is not supported on this device/browser.');
     }
     const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
-    const remote = await this.probeRemote(fileName);
-    if (!remote) {
-      throw new Error(`Archive ${fileName} is not available on Firebase Hosting (404/missing).`);
+    const local = await this.probeLocalServer(fileName);
+    const remote = local ? null : await this.probeRemote(fileName);
+    if (!local && !remote) {
+      throw new Error(`Archive ${fileName} is not available locally or on Firebase Hosting (404/missing).`);
     }
-    const url = remote.url;
+    const url = local ? local.versionedUrl : remote!.url;
+    const expectedSize = local ? local.size : remote!.size;
+    const etag = local ? local.etag : remote!.etag;
     OpfsStorageAdapter.getStorageEstimate().catch(() => {}); // also requests persistent storage
     const file = await OpfsStorageAdapter.saveOrReplaceFromStream(
       fileName,
       url,
       onProgress,
       signal,
-      remote.size
+      expectedSize
     );
-    this.writeMeta(fileName, { size: remote.size, etag: remote.etag });
+    this.writeMeta(fileName, { size: expectedSize || file.size, etag });
     await CachedFetchSource.clear(); // streamed ranges of the old file are obsolete
     return this.mountFromFile(id, fileName, file, id === 'israel-dem', 'opfs');
   }
@@ -398,6 +550,7 @@ export class PMTilesRegistry {
     newSource: { kind: 'file'; file: File; persistToOpfs?: boolean } | { kind: 'url'; url: string },
     onProgress?: (loaded: number, total: number) => void
   ): Promise<MountedArchiveInfo> {
+    await CachedFetchSource.clear();
     if (newSource.kind === 'file') {
       let targetFile = newSource.file;
       let storageKind: 'opfs' | 'user-file' = 'user-file';
@@ -407,6 +560,7 @@ export class PMTilesRegistry {
           newSource.file,
           onProgress
         );
+        this.writeMeta('Israel.osm.pmtiles', { size: targetFile.size });
         storageKind = 'opfs';
       }
       return await this.mountFromFile('israel-osm', 'Israel.osm.pmtiles', targetFile, false, storageKind);
@@ -417,6 +571,7 @@ export class PMTilesRegistry {
           newSource.url,
           onProgress
         );
+        this.writeMeta('Israel.osm.pmtiles', { size: savedFile.size });
         return await this.mountFromFile('israel-osm', 'Israel.osm.pmtiles', savedFile, false, 'opfs');
       }
       return await this.mountFromUrl('israel-osm', 'Israel.osm.pmtiles', newSource.url, false);
@@ -448,14 +603,29 @@ export class PMTilesRegistry {
       metadata?.createdUtc ||
       new Date().toISOString();
 
-    const vectorLayers: string[] = Array.isArray(metadata?.vector_layers)
-      ? metadata.vector_layers.map((l: any) => l.id)
+    const vectorLayersMeta: any[] = Array.isArray(metadata?.vector_layers)
+      ? metadata.vector_layers
       : [];
+    const vectorLayers: string[] = vectorLayersMeta.map((l: any) => l.id);
+
+    let hasTrailColorSchema: boolean | undefined;
+    if (id === 'israel-osm') {
+      const transLayer = vectorLayersMeta.find((l: any) => l?.id === 'transportation');
+      if (transLayer?.fields && typeof transLayer.fields === 'object') {
+        const fields = Object.keys(transLayer.fields);
+        hasTrailColorSchema = fields.includes('colour') || fields.includes('osmc_symbol');
+        if (!hasTrailColorSchema) {
+          console.warn(
+            `[PMTilesRegistry] Mounted ${fileName} (${storageKind}, ${knownSizeBytes || '?'} bytes) lacks 'colour'/'osmc_symbol' in transportation schema — trail colors cannot render from this archive!`
+          );
+        }
+      }
+    }
 
     const sizeBytes =
       knownSizeBytes ||
       Number(header.tileDataOffset + (header.tileDataLength ?? 0)) ||
-      (id === 'israel-dem' ? 1402183369 : 112434955);
+      (id === 'israel-dem' ? 1402183369 : 112258784);
 
     const record: MapArchiveRecord = {
       id,
@@ -487,6 +657,7 @@ export class PMTilesRegistry {
       pmtiles,
       record,
       vectorLayers,
+      hasTrailColorSchema,
     };
 
     this.mountedInfo.set(id, info);
@@ -587,18 +758,34 @@ export class PMTilesRegistry {
             y: number,
             parentAbortController?: AbortController
           ) => {
+            if (parentAbortController?.signal?.aborted) {
+              throw new Error('aborted');
+            }
             const activeDem = this.activeDemPmtiles || demPmtiles;
             const tileRes = await activeDem.getZxy(z, x, y, parentAbortController?.signal);
+            if (parentAbortController?.signal?.aborted) {
+              throw new Error('aborted');
+            }
             if (!tileRes || !tileRes.data) {
-              throw new Error(`Empty DEM tile ${z}/${x}/${y}`);
+              return { data: getEmptyTerrariumTileBlob() };
             }
             return {
               data: new Blob([tileRes.data], { type: 'image/png' }),
             };
           };
+          wrapManagerWithSafeContourBuffers(manager);
         }
 
         this.demContourSource.setupMaplibre(maplibregl);
+      } else {
+        const manager = this.demContourSource.manager;
+        if (manager) {
+          if (maxZoom) manager.maxzoom = maxZoom;
+          manager.tileCache?.clear?.();
+          manager.parsedCache?.clear?.();
+          manager.contourCache?.clear?.();
+          wrapManagerWithSafeContourBuffers(manager);
+        }
       }
 
       // Generate contours every 10m (minor, level=0) and every 50m (major index, level=1)

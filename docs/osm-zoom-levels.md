@@ -69,7 +69,7 @@ In MapLibre GL JS:
 | **Aerialways (Cable Cars, Chair Lifts)** | `transportation` (`subclass: cable_car, gondola`) | **z12** *(layer minzoom: z4)* | **z14** | **z14** |
 | **Airport Runways** | `aeroway` (`class: runway`) | **z11** | **z0** | **z11** |
 | **Airport Taxiways** | `aeroway` (`class: taxiway`) | **z11** | **z13** | **z13** |
-| **Marked Hiking & Regional Trails** | `transportation` / `israel-trails` | **z4** | **z5** *(regional at z11, local at z12)* | **z5 / z11** |
+| **Marked Hiking & Regional Trails** | `transportation` (`colour`, `colour2`, `osmc_symbol`, `network`) | **z4** | **z5** *(INT glow z5, regional/local z10+)* | **z5 / z10** |
 
 ---
 

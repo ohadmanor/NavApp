@@ -119,19 +119,29 @@ export class PoiManager {
   static toGeoJSON(
     pois: PoiRecord[],
     visibility: {
+      pois?: boolean;
       poiWater: boolean;
       poiHeritage: boolean;
       poiCampsites: boolean;
       poiOffroad: boolean;
       poiPeaks: boolean;
+      poiUser?: boolean;
     }
   ): GeoJSON.FeatureCollection {
+    if (visibility.pois === false) {
+      return {
+        type: 'FeatureCollection',
+        features: [],
+      };
+    }
+
     const filtered = pois.filter((p) => {
       if (p.category === 'water') return visibility.poiWater;
       if (p.category === 'heritage') return visibility.poiHeritage;
       if (p.category === 'campsite') return visibility.poiCampsites;
       if (p.category === 'offroad') return visibility.poiOffroad;
       if (p.category === 'peak') return visibility.poiPeaks;
+      if (p.category === 'user') return visibility.poiUser ?? true;
       return true;
     });
 

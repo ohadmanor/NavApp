@@ -45,6 +45,7 @@ function pmtilesDataRangePlugin(): Plugin {
       'Accept-Ranges, Content-Range, Content-Length, ETag, Last-Modified'
     );
     res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('ETag', `"${stat.size}-${stat.mtimeMs}"`);
     res.setHeader('Last-Modified', stat.mtime.toUTCString());
 

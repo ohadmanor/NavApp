@@ -23,10 +23,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/4] Copying offline vector POIs and trails into dist\data\...
+echo [3/4] Copying offline vector POIs into dist\data\...
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
-if exist "data\Israel.trails.geojson" copy /Y "data\Israel.trails.geojson" "dist\data\Israel.trails.geojson" >nul
 echo       [OK] Ready to deploy web app code.
 
 echo [4/4] Deploying Web App to Firebase Hosting (Code only - Map data is independent)...
