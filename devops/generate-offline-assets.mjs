@@ -34,22 +34,26 @@ const manifest = {
   orientation: 'any',
   icons: [
     {
-      src: '/assets/icon.svg',
-      sizes: 'any',
-      type: 'image/svg+xml',
-      purpose: 'any maskable'
+      src: '/icon-192.png',
+      sizes: '192x192',
+      type: 'image/png',
+      purpose: 'any'
+    },
+    {
+      src: '/icon-512.png',
+      sizes: '512x512',
+      type: 'image/png',
+      purpose: 'any'
+    },
+    {
+      src: '/icon-512-maskable.png',
+      sizes: '512x512',
+      type: 'image/png',
+      purpose: 'maskable'
     }
   ]
 };
 fs.writeFileSync(path.join(PUBLIC_DIR, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2), 'utf-8');
-
-// 2. App SVG Icon
-const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="28" fill="#064e3b"/>
-  <path d="M20 96 L52 36 L76 76 L92 52 L108 96 Z" fill="#10b981" opacity="0.9"/>
-  <circle cx="94" cy="34" r="10" fill="#38bdf8"/>
-</svg>`;
-fs.writeFileSync(path.join(ASSETS_DIR, 'icon.svg'), svgIcon, 'utf-8');
 
 // 3. 100% Offline MapLibre GL JS RTL / Hebrew BiDi Worker Plugin (public/assets/rtl-text-plugin.js)
 const rtlPluginCode = `/**
@@ -299,12 +303,15 @@ const rtlPluginCode = `/**
 fs.writeFileSync(path.join(ASSETS_DIR, 'rtl-text-plugin.js'), rtlPluginCode, 'utf-8');
 
 // 4. Offline Service Worker (public/sw.js)
-const swCode = `const CACHE_NAME = 'navapp-offline-v2';
+const swCode = `const CACHE_NAME = 'navapp-offline-v5';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
-  '/assets/icon.svg',
+  '/favicon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-512-maskable.png',
   '/assets/rtl-text-plugin.js',
   '/assets/sprites/sprite.json',
   '/assets/sprites/sprite.png',
@@ -358,4 +365,4 @@ self.addEventListener('fetch', (event) => {
 `;
 fs.writeFileSync(path.join(PUBLIC_DIR, 'sw.js'), swCode, 'utf-8');
 
-console.log('[Offline Assets] Generated manifest.webmanifest, icon.svg, rtl-text-plugin.js, and sw.js in public/');
+console.log('[Offline Assets] Generated manifest.webmanifest, rtl-text-plugin.js, and sw.js in public/');

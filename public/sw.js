@@ -1,9 +1,12 @@
-const CACHE_NAME = 'navapp-offline-v4';
+const CACHE_NAME = 'navapp-offline-v5';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
-  '/assets/icon.svg',
+  '/favicon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-512-maskable.png',
   '/assets/rtl-text-plugin.js',
   '/assets/sprites/sprite.json',
   '/assets/sprites/sprite.png',

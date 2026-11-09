@@ -1,0 +1,2562 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NavApp — Web &amp; Mobile UI/UX Interactive Mockup (Synced to Current Build)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --background: #0f172a;
+      --content: #1e293b;
+      --card: #111827;
+      --border: #334155;
+      --foreground: #f8fafc;
+      --muted-foreground: #94a3b8;
+      --primary: #10b981;
+      --primary-foreground: #052e16;
+    }
+    * { box-sizing: border-box; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    .map-canvas { touch-action: none; cursor: grab; }
+    .map-canvas:active { cursor: grabbing; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased min-h-screen p-3 sm:p-5">
+
+  <div class="max-w-[1600px] mx-auto space-y-4">
+    <!-- STUDIO CONTROL HEADER -->
+    <header class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 shadow-sm space-y-3.5" dir="ltr">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div class="space-y-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="px-2.5 py-1 rounded-lg text-xs font-bold bg-[var(--primary)] text-[var(--primary-foreground)]">
+              SYNCED TO SHIPPED APP
+            </span>
+            <span class="text-xs font-medium text-[var(--muted-foreground)]">
+              NavApp Outdoor Israel • React 19 + MapLibre + PMTiles + Capacitor (v1.1)
+            </span>
+          </div>
+          <h1 class="text-lg sm:text-xl font-bold text-[var(--foreground)]">
+            NavApp UI/UX Mockup — Web Desktop &amp; Mobile Dual-Mode Experience
+          </h1>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            Updated to match current implementation: clean map-first search (no category strip), IHM SPNI trail colors &amp; 4x4 grades, pink rail-cased GPX routes, dropdown route/waypoint elevation scrub &amp; pin, 9 terrain + 6 POI layer filters, and Desktop Storage Modal.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="inline-flex bg-[var(--content)] border border-[var(--border)] rounded-xl p-1 gap-1">
+            <button onclick="setViewMode('split')" id="vm-split" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">Side-by-Side</button>
+            <button onclick="setViewMode('web')" id="vm-web" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">Web Desktop</button>
+            <button onclick="setViewMode('mobile')" id="vm-mobile" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile App</button>
+          </div>
+
+          <div class="inline-flex bg-[var(--content)] border border-[var(--border)] rounded-xl p-1 gap-1">
+            <button onclick="setMobileDisplayMode('planning')" id="mdm-planning" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile: Planning</button>
+            <button onclick="setMobileDisplayMode('navigating')" id="mdm-navigating" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile: Navigating</button>
+          </div>
+
+          <button onclick="toggleMapTheme()" id="theme-toggle-btn" class="px-3.5 py-2 rounded-xl border border-[var(--border)] bg-[var(--content)] hover:border-[var(--primary)] text-xs font-semibold flex items-center gap-2 transition-all">
+            <span id="theme-toggle-label">☀️ Topo Day (1:50k)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[var(--border)]">
+        <span class="text-xs font-semibold text-[var(--muted-foreground)] mr-1">Flows:</span>
+        <button onclick="setScenario('explore')" data-sc="explore" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">1. Explore &amp; Search</button>
+        <button onclick="setScenario('poi')" data-sc="poi" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">2. POI Inspector</button>
+        <button onclick="setScenario('route')" data-sc="route" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">3. Routes &amp; Elevation</button>
+        <button onclick="setScenario('nav')" data-sc="nav" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">4. Active Nav &amp; Off-Route</button>
+        <button onclick="setScenario('record')" data-sc="record" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">5. Track Recorder</button>
+        <button onclick="setScenario('layers')" data-sc="layers" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">6. Layers &amp; 3D</button>
+        <button onclick="setScenario('offline')" data-sc="offline" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">7. Offline Maps &amp; GPX</button>
+        <button onclick="setScenario('add-poi')" data-sc="add-poi" class="sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all">8. Report Field POI</button>
+      </div>
+    </header>
+
+    <!-- DEVICE SHOWCASE STAGE -->
+    <div id="stage-grid" class="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start" dir="ltr">
+
+      <!-- ==================== WEB DESKTOP MOCKUP ==================== -->
+      <section id="web-wrapper" class="xl:col-span-8 flex flex-col gap-2">
+        <div class="flex items-center justify-between px-1">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <h2 class="text-sm font-bold text-[var(--foreground)]">Web Desktop (PWA / Browser)</h2>
+          </div>
+          <span class="text-xs text-[var(--muted-foreground)]">Floating search capsule + contextual drawer + centered MapStorageModal + full HUD</span>
+        </div>
+
+        <div class="rounded-2xl overflow-hidden border border-[var(--border)] shadow-2xl bg-slate-950 flex flex-col h-[700px]">
+          <!-- Browser Top Bar -->
+          <div class="h-9 bg-slate-900 border-b border-slate-800 px-3 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-1.5">
+              <span class="w-3 h-3 rounded-full bg-rose-500/80"></span>
+              <span class="w-3 h-3 rounded-full bg-amber-500/80"></span>
+              <span class="w-3 h-3 rounded-full bg-emerald-500/80"></span>
+            </div>
+            <div class="bg-slate-950/90 border border-slate-800 rounded-lg px-4 py-1 text-xs text-slate-300 font-mono flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span>navapp-israel-topo.web.app</span>
+            </div>
+            <div class="text-xs text-slate-400 font-medium" id="browser-offline-badge">100% Offline Ready</div>
+          </div>
+
+          <!-- Web App Viewport (RTL Hebrew) -->
+          <div id="web-viewport" dir="rtl" class="relative flex-1 overflow-hidden select-none">
+            <canvas id="web-map-canvas" class="map-canvas absolute inset-0 w-full h-full block"></canvas>
+
+            <!-- Center Tactical Reticle Crosshair -->
+            <div id="web-crosshair" class="hidden pointer-events-none absolute inset-0 items-center justify-center z-10">
+              <div class="relative flex items-center justify-center">
+                <div class="w-9 h-[2px] bg-red-600/85"></div>
+                <div class="h-9 w-[2px] bg-red-600/85 absolute"></div>
+                <div class="w-5 h-5 rounded-full border-2 border-red-600/85 absolute"></div>
+              </div>
+            </div>
+
+            <!-- Top-Right (RTL Start): Search Capsule + Contextual Drawer -->
+            <div class="absolute top-3 right-3 z-30 w-[380px] max-w-[calc(100%-24px)] flex flex-col gap-2 pointer-events-none">
+              <div class="pointer-events-auto relative">
+                <div id="web-search-pill" class="flex items-center gap-2 rounded-2xl px-3.5 py-2.5 border shadow-xl transition-colors">
+                  <svg class="w-4 h-4 text-emerald-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                  <input id="web-search-input" type="text" dir="auto" placeholder="חפש מעיין, מעלה 4x4, חניון, הר..."
+                    oninput="handleSearchInput(this.value)"
+                    onfocus="openSearchDropdown(true)"
+                    class="w-full bg-transparent text-sm focus:outline-none" />
+                  <button id="web-search-clear" onclick="clearSearch()" class="hidden p-1 rounded-full text-xs font-bold shrink-0">✕</button>
+                  <div class="h-5 w-px bg-current opacity-15 shrink-0"></div>
+                  <button onclick="toggleDesktopDrawer('routes')" title="מסלולים ופרופיל גובה" class="p-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shrink-0">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>
+                  </button>
+                </div>
+                <div id="web-search-dropdown" class="hidden absolute top-full left-0 right-0 mt-2 rounded-2xl border overflow-hidden max-h-72 overflow-y-auto z-50 shadow-2xl"></div>
+              </div>
+
+              <!-- Contextual Floating Drawer -->
+              <div id="web-drawer" class="hidden pointer-events-auto rounded-2xl border overflow-hidden flex flex-col max-h-[515px] shadow-2xl"></div>
+            </div>
+
+            <!-- Top-Left (RTL End): Active Nav Alert + Offline Readiness + Quick Action Pills -->
+            <div class="absolute top-3 left-3 z-30 flex flex-wrap items-center gap-2 pointer-events-auto">
+              <div id="web-nav-top-banner" class="hidden"></div>
+
+              <button onclick="openOfflineModal()" id="web-offline-pill" class="px-3 py-2 rounded-full border text-xs font-semibold flex items-center gap-2 transition-colors shadow-xl"></button>
+
+              <div id="web-top-actions" class="flex items-center gap-1 rounded-full p-1 border shadow-xl">
+                <button onclick="toggleDesktopDrawer('routes')" id="web-btn-routes" class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors">
+                  <svg class="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>
+                  <span>מסלולים</span>
+                </button>
+                <button onclick="toggleDesktopDrawer('record')" id="web-btn-record" class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors">
+                  <span id="web-rec-dot" class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                  <span id="web-rec-pill-label">הקלטה</span>
+                </button>
+                <button onclick="toggleDesktopDrawer('add-poi')" id="web-btn-addpoi" class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors">
+                  <svg class="w-4 h-4 text-sky-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                  <span>דווח נקודה</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Layer Switcher Floating Popover -->
+            <div id="web-layers-popover" class="hidden absolute bottom-20 left-4 z-40 w-[336px] max-w-[calc(100%-32px)] rounded-2xl border overflow-hidden shadow-2xl"></div>
+
+            <!-- Bottom-Left (RTL End): Layers Preview Card + Map Controls Stack -->
+            <div class="absolute bottom-4 left-4 z-20 flex items-end gap-2.5 pointer-events-auto">
+              <button onclick="toggleWebLayers()" id="web-layers-thumb" class="w-16 h-16 rounded-2xl border-2 shadow-xl overflow-hidden relative transition-transform hover:scale-105" title="שכבות וסוג מפה">
+                <div id="web-layers-thumb-bg" class="absolute inset-0 flex items-center justify-center"></div>
+                <div class="absolute inset-x-0 bottom-0 bg-slate-950/80 text-white text-xs font-bold py-0.5 text-center flex items-center justify-center gap-1">
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                  <span>שכבות</span>
+                </div>
+              </button>
+
+              <div class="flex flex-col gap-1.5">
+                <button onclick="toggle3D()" id="web-btn-3d" class="w-10 h-10 rounded-xl border shadow-lg text-xs font-bold flex items-center justify-center transition-all" title="תבליט 3D">3D</button>
+                <button onclick="resetNorth()" id="web-btn-compass" class="w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all" title="אפס כיוון לצפון">
+                  <svg id="web-compass-svg" class="w-4 h-4 text-rose-500 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+                </button>
+                <button onclick="toggleCrosshair()" id="web-btn-crosshair" class="w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all" title="צלב נ.צ. מרכז מפה">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+                </button>
+                <div id="web-zoom-group" class="flex flex-col rounded-xl border shadow-lg overflow-hidden">
+                  <button onclick="adjustZoom(0.6)" class="w-10 h-9 flex items-center justify-center text-base font-bold hover:bg-black/10 transition-colors" title="התקרב">+</button>
+                  <div class="h-px bg-current opacity-15"></div>
+                  <button onclick="adjustZoom(-0.6)" class="w-10 h-9 flex items-center justify-center text-base font-bold hover:bg-black/10 transition-colors" title="התרחק">−</button>
+                </div>
+                <button onclick="recenterGps()" id="web-btn-gps" class="w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all" title="המיקום שלי (GPS)">
+                  <svg class="w-4 h-4 text-sky-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Bottom-Right Scale Bar -->
+            <div id="web-scale-bar" class="absolute bottom-4 right-4 z-20 pointer-events-none px-2 py-0.5 border-b-2 border-x text-xs font-mono opacity-80"></div>
+
+            <!-- Bottom-Center Click-to-Copy Tactical HUD Pill -->
+            <button id="web-hud-pill" class="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full border text-xs font-mono flex items-center gap-3 pointer-events-auto transition-colors shadow-xl"></button>
+
+            <!-- Desktop Centered Modal: MapStorageModal -->
+            <div id="web-storage-modal" class="hidden absolute inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== MOBILE APP MOCKUP ==================== -->
+      <section id="mobile-wrapper" class="xl:col-span-4 flex flex-col items-center gap-2">
+        <div class="w-full max-w-[385px] flex items-center justify-between px-1">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
+            <h2 class="text-sm font-bold text-[var(--foreground)]">Mobile App (Android / iOS)</h2>
+          </div>
+          <span id="mobile-mode-caption" class="text-xs font-semibold text-emerald-500">Planning Mode</span>
+        </div>
+
+        <div class="w-[375px] h-[745px] rounded-[42px] border-[8px] border-slate-800 shadow-2xl overflow-hidden bg-slate-950 flex flex-col relative">
+          <!-- Phone Status Bar -->
+          <div id="mobile-status-bar" class="h-8 px-6 flex items-center justify-between text-xs font-semibold shrink-0 z-30" dir="ltr">
+            <span class="tabular-nums">15:18</span>
+            <div class="w-20 h-4 bg-black rounded-full"></div>
+            <div class="flex items-center gap-1.5">
+              <span>GPS</span>
+              <span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-xs leading-none">91%</span>
+            </div>
+          </div>
+
+          <!-- Mobile App Viewport (RTL Hebrew) -->
+          <div id="mobile-viewport" dir="rtl" class="relative flex-1 overflow-hidden select-none flex flex-col">
+            <!-- Map Area -->
+            <div class="relative flex-1 overflow-hidden">
+              <canvas id="mobile-map-canvas" class="map-canvas absolute inset-0 w-full h-full block"></canvas>
+
+              <!-- Mobile Center Crosshair -->
+              <div id="mobile-crosshair" class="hidden pointer-events-none absolute inset-0 items-center justify-center z-10">
+                <div class="relative flex items-center justify-center">
+                  <div class="w-9 h-[2px] bg-red-600/85"></div>
+                  <div class="h-9 w-[2px] bg-red-600/85 absolute"></div>
+                  <div class="w-5 h-5 rounded-full border-2 border-red-600/85 absolute"></div>
+                </div>
+              </div>
+
+              <!-- MODE A: PLANNING — Single Clean Search Pill (NO Category Chips!) -->
+              <div id="mobile-top-chrome" class="absolute top-3 right-3 left-3 z-30 pointer-events-none">
+                <div id="mobile-search-pill" class="relative flex items-center gap-2 rounded-full px-3.5 py-2 border shadow-xl pointer-events-auto">
+                  <svg class="w-4 h-4 text-emerald-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                  <input id="mobile-search-input" type="text" dir="auto" placeholder="חפש מעיין, מעלה 4x4, חניון, הר..."
+                    oninput="handleSearchInput(this.value)"
+                    onfocus="openSearchDropdown(true)"
+                    class="w-full bg-transparent text-sm focus:outline-none" />
+                  <button id="mobile-search-clear" onclick="clearSearch()" class="hidden p-1 rounded-full text-xs font-bold shrink-0">✕</button>
+                  <button onclick="setMobileTab('offline')" id="mobile-status-chip" class="px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 shrink-0"></button>
+                  <div id="mobile-search-dropdown" class="hidden absolute top-full left-0 right-0 mt-2 rounded-2xl border overflow-hidden max-h-60 overflow-y-auto z-50 shadow-2xl"></div>
+                </div>
+              </div>
+
+              <!-- MODE B: NAVIGATING — Top Navigation / Free Status Banner -->
+              <div id="mobile-nav-top-banner" class="hidden absolute top-3 right-3 left-3 z-30 pointer-events-auto"></div>
+
+              <!-- Mobile Left-Edge Floating Controls (Layers, 3D, Compass, Crosshair) -->
+              <div id="mobile-top-left-controls" class="absolute left-3 z-20 flex flex-col gap-2 pointer-events-auto">
+                <button onclick="toggleMobileLayers()" id="mobile-btn-layers" class="w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all" title="שכבות מפה">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                </button>
+                <button onclick="toggle3D()" id="mobile-btn-3d" class="w-10 h-10 rounded-full border shadow-lg text-xs font-bold flex items-center justify-center transition-all">3D</button>
+                <button onclick="resetNorth()" id="mobile-btn-compass" class="hidden w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all" title="צפון">
+                  <svg id="mobile-compass-svg" class="w-4 h-4 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+                </button>
+                <button onclick="toggleCrosshair()" id="mobile-btn-crosshair" class="w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all" title="כוונת נ.צ.">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+                </button>
+              </div>
+
+              <!-- Mobile Bottom-Left Thumb FABs (Add Pin + Locate GPS) -->
+              <div class="absolute bottom-3 left-3 z-20 flex flex-col gap-2 pointer-events-auto">
+                <button onclick="openMobileAddPoi()" id="mobile-btn-addpoi" class="w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all" title="דווח נקודת שטח">
+                  <svg class="w-5 h-5 text-sky-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                </button>
+                <button onclick="recenterGps()" class="w-12 h-12 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl flex items-center justify-center transition-all" title="מיקום שלי (GPS)">
+                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+                </button>
+              </div>
+
+              <!-- Mobile Planning Mode Compact HUD Pill -->
+              <button id="mobile-hud-pill" class="absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-full border shadow-lg text-xs font-mono pointer-events-auto"></button>
+            </div>
+
+            <!-- Mobile Bottom Area (Planning Sheet OR Slim Navigating Telemetry Strip) -->
+            <div id="mobile-bottom-sheet" class="relative z-30 border-t shadow-2xl shrink-0"></div>
+
+            <!-- Mobile Bottom 4-Tab Bar (Planning Mode Only) -->
+            <nav id="mobile-bottom-nav" class="h-16 border-t px-2 flex items-center justify-around shrink-0 z-40"></nav>
+
+            <!-- Device Home Indicator -->
+            <div id="mobile-home-bar" class="h-4 flex items-center justify-center shrink-0 z-40">
+              <div class="w-28 h-1 rounded-full bg-slate-500/50"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- SYNCED ARCHITECTURE SUMMARY CARDS -->
+    <section class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 shadow-sm space-y-3" dir="ltr">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h3 class="text-sm font-bold text-[var(--foreground)]">Changes Synced to Actual Codebase (`src/`)</h3>
+        <span class="text-xs text-[var(--muted-foreground)]">Matches commit 2c5ebda &amp; PWA v1.1</span>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="p-3 rounded-xl bg-[var(--content)] border border-[var(--border)] space-y-1">
+          <div class="text-xs font-bold text-[var(--primary)]">1. Pure Map-First Search</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Removed the unimplemented category chip strip under the search bars; POI filtering lives inside <strong>LayerSwitcherSheet</strong> (master toggle + 6 categories).
+          </p>
+        </div>
+        <div class="p-3 rounded-xl bg-[var(--content)] border border-[var(--border)] space-y-1">
+          <div class="text-xs font-bold text-[var(--primary)]">2. IHM Trails &amp; Pink Rail Routes</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Canvas renders authentic SPNI colors, 4x4 grades, red military boundary vs toggleable fill, pink highlighter routes with rail borders, and start/end markers.
+          </p>
+        </div>
+        <div class="p-3 rounded-xl bg-[var(--content)] border border-[var(--border)] space-y-1">
+          <div class="text-xs font-bold text-[var(--primary)]">3. Route Dropdown + Scrub Chart</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            <strong>ElevationProfileDrawer</strong> uses a dropdown selector + All/Import buttons, waypoint dropdown along route, min/mid/max DEM labels, slope %, and click-to-pin unlock.
+          </p>
+        </div>
+        <div class="p-3 rounded-xl bg-[var(--content)] border border-[var(--border)] space-y-1">
+          <div class="text-xs font-bold text-[var(--primary)]">4. Desktop Storage Modal &amp; 9 Layers</div>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Offline manager opens as a centered modal on Web Desktop (embedded on Mobile) with OPFS/Cloud toggle, Trail Schema status, and collapsible Advanced DevOps tools.
+          </p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-banner" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full bg-emerald-600 text-white text-xs font-bold shadow-2xl"></div>
+
+  <script>
+    // =========================================================================
+    // DATA MODEL (Mirrors NavApp Real Israeli Outdoor Data)
+    // =========================================================================
+    const POIS = [
+      {
+        id: 'ein-aqev',
+        nameHe: 'עין עקב תחתון',
+        nameEn: 'Lower Ein Aqev Spring',
+        category: 'water',
+        lon: 34.8134,
+        lat: 30.8281,
+        ele: 382,
+        distKm: 1.8,
+        mapX: 0.48,
+        mapY: 0.50,
+        waterStatus: 'מעיין איתן • בריכה עמוקה ונקייה לרחצה (עודכן לאחרונה)',
+        difficulty4x4: null,
+        descHe: 'נביעה מרשימה של מים מתוקים וקרירים בלב המדבר, מוקפת מצוקי גיר לבנים ומפלים קטנים. הגעה בהליכה משביל עין עקב או ברכב 4x4 עד רחבת החניה.',
+        source: 'IsraelHiking / OSM',
+        wikipedia: 'he:עין_עקב',
+        userNotes: 'מים קרים ונקיים, יש צל תחת המצוק בצד מזרח.'
+      },
+      {
+        id: 'gev-aqev',
+        nameHe: 'עין עקב עליון',
+        nameEn: 'Upper Ein Aqev',
+        category: 'water',
+        lon: 34.8195,
+        lat: 30.8162,
+        ele: 435,
+        distKm: 3.1,
+        mapX: 0.62,
+        mapY: 0.66,
+        waterStatus: 'גב מים קטן • מים עונתיים',
+        difficulty4x4: null,
+        descHe: 'נביעה שקטה במעלה נחל עקב, מתאימה לעצירת קפה ותצפית אל הקניון הלבן.',
+        source: 'OpenStreetMap',
+        wikipedia: null,
+        userNotes: ''
+      },
+      {
+        id: 'maale-zik',
+        nameHe: 'מעלה זיק (ציר אדום)',
+        nameEn: 'Maale Zik 4x4 Ascent',
+        category: 'offroad',
+        lon: 34.8412,
+        lat: 30.8448,
+        ele: 468,
+        distKm: 4.2,
+        mapX: 0.74,
+        mapY: 0.31,
+        waterStatus: null,
+        difficulty4x4: 'קשה מאוד (5/5) • דרדרת עמוקה + מדרגות סלע, הילוך כוח ונעילות חובה',
+        descHe: 'אחד ממעלות ה-4x4 המפורסמים והמאתגרים בבקעת צין. שיפוע תלול עם אבנים משוחררות — מומלץ בעלייה בלבד עם הכוונה מהקרקע.',
+        source: 'Off-Road / קהילת השטח',
+        wikipedia: null,
+        userNotes: 'מדרגת האמצע חפורה אחרי שיטפונות החורף.'
+      },
+      {
+        id: 'camp-zin',
+        nameHe: 'חניון לילה מצוק הצינים',
+        nameEn: 'Tzin Cliffs Night Camp',
+        category: 'campsite',
+        lon: 34.7920,
+        lat: 30.8390,
+        ele: 495,
+        distKm: 2.5,
+        mapX: 0.25,
+        mapY: 0.36,
+        waterStatus: null,
+        difficulty4x4: 'נגיש לרכב גבוה / 4x4 קל',
+        descHe: 'חניון לילה מוסדר של רשות הטבע והגנים מול נוף בקעת צין. חניה מרווחת, ללא מים זורמים.',
+        source: 'רט״ג / IsraelHiking',
+        wikipedia: null,
+        userNotes: 'רוח מערבית חזקה בערב.'
+      },
+      {
+        id: 'mitzpor',
+        nameHe: 'תצפית חוד עקב',
+        nameEn: 'Hod Aqev Viewpoint',
+        category: 'heritage',
+        lon: 34.8035,
+        lat: 30.8220,
+        ele: 542,
+        distKm: 2.1,
+        mapX: 0.34,
+        mapY: 0.58,
+        waterStatus: null,
+        difficulty4x4: null,
+        descHe: 'תצפית פנורמית 360 מעלות על בקעת צין, שדה בוקר ורמת עבדת. נקודת עצירה מרכזית בשביל ישראל.',
+        source: 'IsraelHiking / OSM',
+        wikipedia: null,
+        userNotes: ''
+      },
+      {
+        id: 'har-aqev',
+        nameHe: 'הר עקב (נ.ג. 576)',
+        nameEn: 'Har Aqev Peak',
+        category: 'peak',
+        lon: 34.7890,
+        lat: 30.8120,
+        ele: 576,
+        distKm: 3.7,
+        mapX: 0.21,
+        mapY: 0.72,
+        waterStatus: null,
+        difficulty4x4: null,
+        descHe: 'פסגה שולחנית בולטת ממערב לנחל עקב. עלייה תלולה במסלול כחול.',
+        source: 'סקר ישראל / OSM',
+        wikipedia: null,
+        userNotes: ''
+      }
+    ];
+
+    const ROUTES = [
+      {
+        id: 'route-ein-aqev',
+        name: 'בקעת צין – עין עקב וחוד עקב',
+        sourceFormat: 'gpx',
+        distanceKm: 11.4,
+        ascentMeters: 340,
+        descentMeters: 290,
+        minEle: 365,
+        maxEle: 576,
+        color: '#ec4899',
+        coords: [
+          [0.25, 0.36], [0.33, 0.42], [0.41, 0.47], [0.48, 0.50], [0.55, 0.57], [0.62, 0.66], [0.48, 0.62], [0.34, 0.58], [0.21, 0.72]
+        ],
+        elevationProfile: [
+          { distKm: 0.0, ele: 495, lon: 34.7920, lat: 30.8390, label: 'נקודת התחלה', kind: 'start', emoji: '🟢' },
+          { distKm: 1.4, ele: 460, lon: 34.7990, lat: 30.8350 },
+          { distKm: 2.9, ele: 415, lon: 34.8070, lat: 30.8310 },
+          { distKm: 4.3, ele: 382, lon: 34.8134, lat: 30.8281, label: 'עין עקב תחתון', kind: 'wpt', emoji: '💧' },
+          { distKm: 5.8, ele: 405, lon: 34.8168, lat: 30.8215 },
+          { distKm: 7.2, ele: 435, lon: 34.8195, lat: 30.8162, label: 'עין עקב עליון', kind: 'wpt', emoji: '💧' },
+          { distKm: 8.6, ele: 470, lon: 34.8110, lat: 30.8190 },
+          { distKm: 9.9, ele: 542, lon: 34.8035, lat: 30.8220, label: 'תצפית חוד עקב', kind: 'wpt', emoji: '🏛️' },
+          { distKm: 11.4, ele: 576, lon: 34.7890, lat: 30.8120, label: 'הר עקב (נ.ג. 576)', kind: 'end', emoji: '🔴' }
+        ]
+      },
+      {
+        id: 'route-zik',
+        name: 'ציר האתגר: בקעת צין – מעלה זיק',
+        sourceFormat: 'kml',
+        distanceKm: 18.6,
+        ascentMeters: 485,
+        descentMeters: 310,
+        minEle: 310,
+        maxEle: 520,
+        color: '#ec4899',
+        coords: [
+          [0.16, 0.28], [0.32, 0.26], [0.49, 0.29], [0.61, 0.32], [0.74, 0.31], [0.85, 0.22]
+        ],
+        elevationProfile: [
+          { distKm: 0.0, ele: 340, lon: 34.7810, lat: 30.8480, label: 'נקודת התחלה', kind: 'start', emoji: '🟢' },
+          { distKm: 3.8, ele: 325, lon: 34.7980, lat: 30.8495 },
+          { distKm: 7.4, ele: 310, lon: 34.8140, lat: 30.8468 },
+          { distKm: 11.2, ele: 390, lon: 34.8280, lat: 30.8452 },
+          { distKm: 14.8, ele: 468, lon: 34.8412, lat: 30.8448, label: 'מעלה זיק (ציר אדום)', kind: 'wpt', emoji: '🚙' },
+          { distKm: 18.6, ele: 520, lon: 34.8540, lat: 30.8520, label: 'נקודת סיום', kind: 'end', emoji: '🔴' }
+        ]
+      }
+    ];
+
+    // Exact match to src/components/ui/themeTokens.ts -> POI_CATEGORY_META
+    const POI_CATEGORY_META = {
+      water:    { id: 'water',    label: 'מעיינות', fullLabel: 'מעיין / גב / בור מים', emoji: '💧', badgeClass: 'bg-sky-500/15 text-sky-500 border-sky-500/35', dayText: '#125595', darkText: '#38bdf8', pinColor: '#0284c7' },
+      offroad:  { id: 'offroad',  label: '4x4',     fullLabel: 'מעלה / עבירות 4x4',   emoji: '🚙', badgeClass: 'bg-red-500/15 text-red-500 border-red-500/35', dayText: '#991b1b', darkText: '#f87171', pinColor: '#dc2626' },
+      campsite: { id: 'campsite', label: 'חניונים', fullLabel: 'חניון לילה / שטח כינוס', emoji: '⛺', badgeClass: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/35', dayText: '#166534', darkText: '#34d399', pinColor: '#16a34a' },
+      heritage: { id: 'heritage', label: 'תצפיות',  fullLabel: 'תצפית / מערה / אתר מורשת', emoji: '🏛️', badgeClass: 'bg-amber-500/15 text-amber-500 border-amber-500/35', dayText: '#404040', darkText: '#fbbf24', pinColor: '#d97706' },
+      peak:     { id: 'peak',     label: 'פסגות',   fullLabel: 'פסגה / נ.ג. טריגונומטרית', emoji: '🏔️', badgeClass: 'bg-purple-500/15 text-purple-500 border-purple-500/35', dayText: '#404040', darkText: '#e2e8f0', pinColor: '#7c3aed' },
+      user:     { id: 'user',     label: 'שטח',     fullLabel: 'דיווח מטייל', emoji: '📍', badgeClass: 'bg-teal-500/15 text-teal-500 border-teal-500/35', dayText: '#0f766e', darkText: '#2dd4bf', pinColor: '#0d9488' }
+    };
+
+    // =========================================================================
+    // CENTRAL APPLICATION STATE (Matches src/App.tsx)
+    // =========================================================================
+    const state = {
+      viewMode: 'split',
+      theme: 'topo-day', // 'topo-day' | 'topo-dark'
+      scenario: 'explore', // 'explore' | 'poi' | 'route' | 'nav' | 'record' | 'layers' | 'offline' | 'add-poi'
+      desktopDrawer: null, // null | 'poi' | 'routes' | 'record' | 'add-poi'
+      isStorageOpen: false,
+      isLayerSheetOpen: false,
+      mobileDisplayMode: 'planning', // 'planning' | 'navigating'
+      mobileTab: 'explore', // 'explore' | 'routes' | 'record' | 'offline'
+      mobilePlanningOverlay: null, // null | 'poi' | 'layers' | 'add-poi'
+      mobileNavOverlay: null, // null | 'poi-mini' | 'layers' | 'add-poi'
+      mobileSheetExpanded: true,
+      selectedPoiId: 'ein-aqev',
+      activeRouteId: 'route-ein-aqev',
+      isNavigatingRoute: false,
+      offRouteWarning: 78,
+      searchQuery: '',
+      searchOpen: false,
+      zoom: 12.6,
+      bearing: 0,
+      panX: 0,
+      panY: 0,
+      showCenterCrosshair: false,
+      hoverChartIdx: null,
+      pinnedChartIdx: null,
+      isRoutesMenuOpen: false,
+      isPointsMenuOpen: false,
+      showPoiSubCategories: true,
+      showAdvancedStorage: false,
+      isRecordingTrack: false,
+      isRecordingPaused: false,
+      recordElapsedSeconds: 5058,
+      recordedDistanceKm: 6.34,
+      recordedAscentMeters: 215,
+      newPoiDraft: { category: 'water', nameHe: '', descHe: '' },
+      visibility: {
+        hillshade: true,
+        terrain3d: false,
+        contours: true,
+        tacticalGrid: true,
+        militaryZones: true,
+        hikingTrails: true,
+        cycleways: false,
+        offroad4x4: true,
+        natureParks: true,
+        fuelAndFlood: true,
+        pois: true,
+        poiWater: true,
+        poiHeritage: true,
+        poiCampsites: true,
+        poiOffroad: true,
+        poiPeaks: true,
+        poiUser: true
+      },
+      archives: {
+        osm: { local: true, sizeBytes: 112258784, createdUtc: '2026-11-09', hasTrailColorSchema: true },
+        dem: { local: true, sizeBytes: 1402183369, minZoom: 0, maxZoom: 14 }
+      }
+    };
+
+    // Exact surface tokens from src/components/ui/themeTokens.ts
+    function getSurfaceTheme() {
+      if (state.theme === 'topo-day') {
+        return {
+          panel: 'bg-white/95 text-slate-900 border-slate-200/90 backdrop-blur-md shadow-xl',
+          panelSolid: 'bg-white text-slate-900 border-slate-200 shadow-2xl',
+          subCard: 'bg-slate-50/95 border-slate-200 text-slate-800',
+          pillBtn: 'bg-white/95 hover:bg-slate-100 text-slate-800 border-slate-200/90',
+          muted: 'text-slate-500',
+          divider: 'border-slate-200',
+          input: 'text-slate-900 placeholder-slate-400',
+          fieldBox: 'bg-white border-slate-300 text-slate-900 placeholder-slate-400',
+          navBar: 'bg-white/95 border-slate-200 text-slate-500 backdrop-blur-md',
+          hoverRow: 'hover:bg-emerald-50/80',
+          statusBg: 'bg-slate-100 text-slate-900',
+          homeBg: 'bg-white'
+        };
+      }
+      return {
+        panel: 'bg-slate-900/95 text-slate-100 border-slate-700/80 backdrop-blur-md shadow-2xl',
+        panelSolid: 'bg-slate-900 text-slate-100 border-slate-700 shadow-2xl',
+        subCard: 'bg-slate-950/80 border-slate-800 text-slate-200',
+        pillBtn: 'bg-slate-900/95 hover:bg-slate-800 text-slate-100 border-slate-700/80',
+        muted: 'text-slate-400',
+        divider: 'border-slate-800',
+        input: 'text-white placeholder-slate-400',
+        fieldBox: 'bg-slate-950 border-slate-700 text-slate-100 placeholder-slate-500',
+        navBar: 'bg-slate-950/95 border-slate-800 text-slate-400 backdrop-blur-md',
+        hoverRow: 'hover:bg-slate-800/80',
+        statusBg: 'bg-slate-950 text-slate-100',
+        homeBg: 'bg-slate-950'
+      };
+    }
+
+    // =========================================================================
+    // COORDINATES & HELPERS (MilitaryGridService + Formatting)
+    // =========================================================================
+    function toMilitaryCoords(lon, lat) {
+      const itmE = Math.round(178420 + (lon - 34.8134) * 95600);
+      const itmN = Math.round(530940 + (lat - 30.8281) * 110800);
+      const e4 = String(Math.floor(itmE / 100)).padStart(4, '0').slice(-4);
+      const n4 = String(Math.floor((itmN % 100000) / 100)).padStart(4, '0');
+      const utmE = Math.round(673510 + (lon - 34.8134) * 95600);
+      const utmN = Math.round(3412140 + (lat - 30.8281) * 110800);
+      return {
+        idfGrid8Digit: `${e4} ${n4}`,
+        itmFormatted: `${itmE} / ${itmN}`,
+        utmFormatted: `36R ${utmE} ${utmN}`
+      };
+    }
+
+    function getCenterCoords() {
+      const lon = 34.8134 - state.panX * 0.00018;
+      const lat = 30.8281 + state.panY * 0.00015;
+      const ele = Math.max(210, Math.round(390 + Math.sin(lon * 90) * 65 + Math.cos(lat * 80) * 45));
+      return { lon, lat, ele, ...toMilitaryCoords(lon, lat) };
+    }
+
+    function formatDuration(seconds) {
+      const h = String(Math.floor(seconds / 3600)).padStart(2, '0');
+      const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+      const s = String(seconds % 60).padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    function formatSize(bytes) {
+      if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function isOfflineReady() {
+      return state.archives.osm.local && state.archives.dem.local;
+    }
+
+    function isMasterPoiActive() {
+      const v = state.visibility;
+      const cnt = ['poiWater', 'poiOffroad', 'poiHeritage', 'poiCampsites', 'poiPeaks', 'poiUser'].filter(k => v[k]).length;
+      return v.pois && cnt > 0;
+    }
+
+    function activePoiCatCount() {
+      const v = state.visibility;
+      return ['poiWater', 'poiOffroad', 'poiHeritage', 'poiCampsites', 'poiPeaks', 'poiUser'].filter(k => v[k]).length;
+    }
+
+    function isPoiVisible(cat) {
+      if (!state.visibility.pois) return false;
+      if (cat === 'water') return state.visibility.poiWater;
+      if (cat === 'offroad') return state.visibility.poiOffroad;
+      if (cat === 'campsite') return state.visibility.poiCampsites;
+      if (cat === 'heritage') return state.visibility.poiHeritage;
+      if (cat === 'peak') return state.visibility.poiPeaks;
+      if (cat === 'user') return state.visibility.poiUser;
+      return true;
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast-banner');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => el.classList.add('hidden'), 2800);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
+      showToast(`הועתק ללוח: ${text}`);
+    }
+
+    // =========================================================================
+    // TOPOGRAPHIC MAP CANVAS RENDERER (Mirrors israelOutdoorStyle + App.tsx)
+    // =========================================================================
+    function projectPoint(nx, ny, w, h) {
+      const scale = Math.pow(1.22, state.zoom - 12.6);
+      const cx = w / 2;
+      const cy = h / 2;
+      let dx = ((nx - 0.5) * w * scale) + state.panX;
+      let dy = ((ny - 0.5) * h * scale) + state.panY;
+      if (state.bearing !== 0) {
+        const rad = (-state.bearing * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const rx = dx * cos - dy * sin;
+        const ry = dx * sin + dy * cos;
+        dx = rx;
+        dy = ry;
+      }
+      if (state.visibility.terrain3d) {
+        return [cx + dx * (1 - dy * 0.00032), cy + dy * 0.78];
+      }
+      return [cx + dx, cy + dy];
+    }
+
+    function strokeParallelRails(ctx, screenPts, offsetPx, color, lineWidth, alpha) {
+      if (screenPts.length < 2) return;
+      const getSegNormal = (a, b) => {
+        const vx = b[0] - a[0];
+        const vy = b[1] - a[1];
+        const len = Math.hypot(vx, vy) || 1;
+        return [-vy / len, vx / len];
+      };
+      [-1, 1].forEach((side) => {
+        ctx.save();
+        ctx.beginPath();
+        for (let i = 0; i < screenPts.length; i++) {
+          let nx = 0, ny = 0;
+          if (i === 0) {
+            [nx, ny] = getSegNormal(screenPts[0], screenPts[1]);
+          } else if (i === screenPts.length - 1) {
+            [nx, ny] = getSegNormal(screenPts[i - 1], screenPts[i]);
+          } else {
+            const [n1x, n1y] = getSegNormal(screenPts[i - 1], screenPts[i]);
+            const [n2x, n2y] = getSegNormal(screenPts[i], screenPts[i + 1]);
+            const sx = n1x + n2x;
+            const sy = n1y + n2y;
+            const sLen = Math.hypot(sx, sy);
+            if (sLen > 0.05) { nx = sx / sLen; ny = sy / sLen; }
+            else { nx = n1x; ny = n1y; }
+          }
+          const px = screenPts[i][0] + nx * offsetPx * side;
+          const py = screenPts[i][1] + ny * offsetPx * side;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = alpha;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+        ctx.restore();
+      });
+    }
+
+    function drawTopoMap(canvas) {
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      const w = rect.width;
+      const h = rect.height;
+      const isDay = state.theme === 'topo-day';
+      const v = state.visibility;
+
+      // 1. Base Background (IHM Day #f4efe2 / Dark #0b1015)
+      ctx.fillStyle = isDay ? '#f4efe2' : '#0b1015';
+      ctx.fillRect(0, 0, w, h);
+
+      // 2. Hillshade Relief
+      if (v.hillshade) {
+        const g1 = ctx.createRadialGradient(w * 0.24 + state.panX * 0.4, h * 0.66 + state.panY * 0.4, 20, w * 0.24, h * 0.66, w * 0.52);
+        g1.addColorStop(0, isDay ? 'rgba(180, 155, 110, 0.34)' : 'rgba(56, 189, 248, 0.14)');
+        g1.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g1;
+        ctx.fillRect(0, 0, w, h);
+
+        const g2 = ctx.createRadialGradient(w * 0.75 + state.panX * 0.4, h * 0.30 + state.panY * 0.4, 15, w * 0.75, h * 0.30, w * 0.45);
+        g2.addColorStop(0, isDay ? 'rgba(165, 140, 96, 0.32)' : 'rgba(16, 185, 129, 0.12)');
+        g2.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g2;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      // 3. Nature Parks (Green dashed boundary + subtle fill)
+      if (v.natureParks) {
+        ctx.save();
+        ctx.beginPath();
+        [[0.14,0.34],[0.52,0.38],[0.70,0.55],[0.66,0.82],[0.18,0.82]].forEach(([nx, ny], i) => {
+          const [px, py] = projectPoint(nx, ny, w, h);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+        ctx.fillStyle = isDay ? 'rgba(34, 197, 94, 0.08)' : 'rgba(16, 185, 129, 0.07)';
+        ctx.fill();
+        ctx.setLineDash([7, 5]);
+        ctx.strokeStyle = isDay ? '#16a34a' : '#34d399';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 4. Military Zones: Boundary outline ALWAYS stays drawn (red dashed), area fill toggles with militaryZones!
+      {
+        ctx.save();
+        ctx.beginPath();
+        [[0.68,0.02],[0.99,0.02],[0.99,0.28],[0.76,0.22]].forEach(([nx, ny], i) => {
+          const [px, py] = projectPoint(nx, ny, w, h);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+        if (v.militaryZones) {
+          ctx.fillStyle = isDay ? 'rgba(239, 68, 68, 0.11)' : 'rgba(248, 113, 113, 0.12)';
+          ctx.fill();
+        }
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = isDay ? 'rgba(220, 38, 38, 0.60)' : 'rgba(248, 113, 113, 0.60)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        if (v.militaryZones) {
+          const [lx, ly] = projectPoint(0.84, 0.13, w, h);
+          ctx.fillStyle = isDay ? '#b91c1c' : '#fca5a5';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('שטח אש 610', lx, ly);
+        }
+        ctx.restore();
+      }
+
+      // 5. 10m / 50m Contours
+      if (v.contours) {
+        const peaks = [
+          { cx: 0.22, cy: 0.71, rx: 0.24, ry: 0.21, base: 576 },
+          { cx: 0.76, cy: 0.30, rx: 0.21, ry: 0.19, base: 520 },
+          { cx: 0.56, cy: 0.62, rx: 0.17, ry: 0.15, base: 460 }
+        ];
+        peaks.forEach((pk) => {
+          for (let ring = 1; ring <= 6; ring++) {
+            const isMajor = ring % 2 === 0;
+            ctx.beginPath();
+            for (let a = 0; a <= 360; a += 15) {
+              const rad = (a * Math.PI) / 180;
+              const wobble = 1 + 0.08 * Math.sin(rad * 3 + ring) + 0.05 * Math.cos(rad * 2);
+              const nx = pk.cx + Math.cos(rad) * pk.rx * (ring / 6) * wobble;
+              const ny = pk.cy + Math.sin(rad) * pk.ry * (ring / 6) * wobble;
+              const [px, py] = projectPoint(nx, ny, w, h);
+              if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = isDay
+              ? (isMajor ? 'rgba(138, 97, 50, 0.52)' : 'rgba(166, 128, 82, 0.28)')
+              : (isMajor ? 'rgba(148, 163, 184, 0.30)' : 'rgba(100, 116, 139, 0.16)');
+            ctx.lineWidth = isMajor ? 1.4 : 0.8;
+            ctx.stroke();
+            if (isMajor) {
+              const [tx, ty] = projectPoint(pk.cx + pk.rx * (ring / 6), pk.cy, w, h);
+              ctx.fillStyle = isDay ? '#7c5326' : '#94a3b8';
+              ctx.font = 'bold 12px monospace';
+              ctx.textAlign = 'center';
+              ctx.fillText(String(pk.base - ring * 25), tx, ty);
+            }
+          }
+        });
+      }
+
+      // 6. Wadis (Nahal Tzin & Nahal Aqev)
+      ctx.save();
+      ctx.beginPath();
+      [[0.05,0.22],[0.26,0.25],[0.48,0.28],[0.72,0.34],[0.96,0.28]].forEach(([nx, ny], i) => {
+        const [px, py] = projectPoint(nx, ny, w, h);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.strokeStyle = isDay ? '#38bdf8' : '#0284c7';
+      ctx.lineWidth = 2.6;
+      ctx.setLineDash([8, 4]);
+      ctx.stroke();
+      ctx.beginPath();
+      [[0.66,0.74],[0.58,0.61],[0.48,0.50],[0.45,0.38],[0.48,0.28]].forEach(([nx, ny], i) => {
+        const [px, py] = projectPoint(nx, ny, w, h);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.restore();
+      const [wnx, wny] = projectPoint(0.55, 0.25, w, h);
+      ctx.fillStyle = isDay ? '#0369a1' : '#38bdf8';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('נחל צין', wnx, wny);
+
+      // 7. Tactical Grid (ITM / UTM)
+      if (v.tacticalGrid) {
+        ctx.save();
+        ctx.strokeStyle = isDay ? 'rgba(127, 127, 127, 0.35)' : 'rgba(148, 163, 184, 0.22)';
+        ctx.lineWidth = 1;
+        for (let g = 0.2; g <= 0.85; g += 0.2) {
+          const [gx] = projectPoint(g, 0, w, h);
+          ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke();
+          const [, gy] = projectPoint(0, g, w, h);
+          ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+          ctx.fillStyle = isDay ? 'rgba(100, 116, 139, 0.72)' : 'rgba(148, 163, 184, 0.60)';
+          ctx.font = '12px monospace';
+          ctx.fillText(String(176 + Math.round(g * 10)), gx + 14, h - 60);
+        }
+        ctx.restore();
+      }
+
+      // 8. Hazard Lines (fuelAndFlood: barriers / power lines)
+      if (v.fuelAndFlood) {
+        ctx.save();
+        ctx.beginPath();
+        [[0.08,0.14],[0.38,0.16],[0.65,0.19]].forEach(([nx, ny], i) => {
+          const [px, py] = projectPoint(nx, ny, w, h);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = isDay ? 'rgba(100, 116, 139, 0.55)' : 'rgba(148, 163, 184, 0.45)';
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([2, 6]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 9. Base Tracks & Paths (Always visible in default brown #AA8166, colored by SPNI/4x4 grades when switches ON!)
+      {
+        ctx.save();
+        // 4x4 Track (Red SPNI / Grade4-5 #C2410C or default brown #AA8166)
+        ctx.beginPath();
+        [[0.08,0.34],[0.25,0.36],[0.42,0.31],[0.62,0.33],[0.74,0.31],[0.90,0.20]].forEach(([nx, ny], i) => {
+          const [px, py] = projectPoint(nx, ny, w, h);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = v.offroad4x4 ? '#FF0000' : '#AA8166';
+        ctx.lineWidth = 2.6;
+        ctx.setLineDash([8, 4]);
+        ctx.stroke();
+        ctx.restore();
+
+        // Hiking Trail (Blue SPNI #0044FF or default brown #AA8166)
+        ctx.save();
+        ctx.beginPath();
+        [[0.21,0.72],[0.34,0.58],[0.48,0.50],[0.62,0.66],[0.78,0.76]].forEach(([nx, ny], i) => {
+          const [px, py] = projectPoint(nx, ny, w, h);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = v.hikingTrails ? '#0044FF' : '#AA8166';
+        ctx.lineWidth = 2.6;
+        ctx.setLineDash([5, 3]);
+        ctx.stroke();
+        ctx.restore();
+
+        // Shvil Israel (Orange #FF8000 / Gold #FFC264)
+        if (v.hikingTrails) {
+          ctx.save();
+          ctx.beginPath();
+          [[0.12,0.62],[0.25,0.52],[0.34,0.58],[0.46,0.74]].forEach(([nx, ny], i) => {
+            const [px, py] = projectPoint(nx, ny, w, h);
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          });
+          ctx.strokeStyle = '#FF8000';
+          ctx.lineWidth = 2.6;
+          ctx.setLineDash([6, 3]);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Cycleways (#9333EA purple when cycleways toggle ON)
+        if (v.cycleways) {
+          ctx.save();
+          ctx.beginPath();
+          [[0.15,0.44],[0.35,0.43],[0.55,0.44],[0.75,0.48]].forEach(([nx, ny], i) => {
+            const [px, py] = projectPoint(nx, ny, w, h);
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          });
+          ctx.strokeStyle = '#9333EA';
+          ctx.lineWidth = 2.8;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // 10. Saved & Active Routes — Translucent Pink Highlighter Ribbon (#ec4899) + Crisp Outer Parallel Rails (#831843 / #f9a8d4) + Green/Red Endpoints
+      {
+        const railBorder = isDay ? '#831843' : '#f9a8d4';
+        const activeRoute = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+
+        // Secondary saved route (subtle parallel rails + light translucent ribbon)
+        ROUTES.filter(r => r.id !== activeRoute.id).forEach(sec => {
+          const secPts = sec.coords.map(([nx, ny]) => projectPoint(nx, ny, w, h));
+          ctx.save();
+          ctx.beginPath();
+          secPts.forEach(([px, py], i) => { if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = 'rgba(236, 72, 153, 0.16)';
+          ctx.lineWidth = 6.5;
+          ctx.stroke();
+          ctx.restore();
+          strokeParallelRails(ctx, secPts, 4, railBorder, 1.5, 0.35);
+        });
+
+        // Active Route (Transparent pink fill lets SPNI blue/orange markings shine underneath + crisp outer rails)
+        const actPts = activeRoute.coords.map(([nx, ny]) => projectPoint(nx, ny, w, h));
+        ctx.save();
+        ctx.beginPath();
+        actPts.forEach(([px, py], i) => { if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(236, 72, 153, 0.36)';
+        ctx.lineWidth = 8;
+        ctx.stroke();
+        ctx.restore();
+        strokeParallelRails(ctx, actPts, 4.6, railBorder, 2.1, 0.88);
+
+        // Start (#10b981) & Finish (#ef4444) endpoints
+        const startPt = activeRoute.coords[0];
+        const endPt = activeRoute.coords[activeRoute.coords.length - 1];
+        [[startPt, '#10b981'], [endPt, '#ef4444']].forEach(([pt, col]) => {
+          const [ex, ey] = projectPoint(pt[0], pt[1], w, h);
+          ctx.beginPath();
+          ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+          ctx.fillStyle = col;
+          ctx.fill();
+          ctx.lineWidth = 2.2;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        });
+
+        // Elevation scrub / pinned marker synced with chart
+        const syncIdx = state.hoverChartIdx !== null ? state.hoverChartIdx : state.pinnedChartIdx;
+        if (syncIdx !== null && activeRoute.coords[syncIdx]) {
+          const [hnx, hny] = activeRoute.coords[syncIdx];
+          const [hpx, hpy] = projectPoint(hnx, hny, w, h);
+          ctx.beginPath();
+          ctx.arc(hpx, hpy, 8, 0, Math.PI * 2);
+          ctx.fillStyle = '#ec4899';
+          ctx.fill();
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        }
+      }
+
+      // 11. Live Recorded GPS Breadcrumb (#38bdf8 dashed)
+      if (state.isRecordingTrack || state.scenario === 'record' || state.mobileTab === 'record') {
+        ctx.save();
+        ctx.beginPath();
+        [[0.29,0.44],[0.36,0.46],[0.41,0.48],[0.44,0.49]].forEach(([nx, ny], i) => {
+          const [px, py] = projectPoint(nx, ny, w, h);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([5, 3]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 12. User Live GPS Puck
+      const isOffRoute = state.scenario === 'nav' && state.offRouteWarning !== null;
+      const userPos = isOffRoute ? [0.40, 0.56] : [0.44, 0.49];
+      const [ux, uy] = projectPoint(userPos[0], userPos[1], w, h);
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(ux, uy);
+      ctx.arc(ux, uy, 28, -Math.PI * 0.35, Math.PI * 0.05);
+      ctx.closePath();
+      ctx.fillStyle = isOffRoute ? 'rgba(239,68,68,0.28)' : 'rgba(14,165,233,0.28)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(ux, uy, 10, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(ux, uy, 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = isOffRoute ? '#ef4444' : '#0ea5e9';
+      ctx.fill();
+      ctx.restore();
+
+      // 13. POI Markers & Labels (App.tsx offroad-pass chevron & category colors)
+      canvas._hitPins = [];
+      POIS.forEach((poi) => {
+        if (!isPoiVisible(poi.category)) return;
+        const [px, py] = projectPoint(poi.mapX, poi.mapY, w, h);
+        const isSelected = poi.id === state.selectedPoiId && (state.desktopDrawer === 'poi' || state.scenario === 'poi');
+        const meta = POI_CATEGORY_META[poi.category] || POI_CATEGORY_META.heritage;
+
+        ctx.save();
+        if (isSelected) {
+          ctx.beginPath();
+          ctx.arc(px, py, 18, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.24)';
+          ctx.fill();
+        }
+
+        if (poi.category === 'offroad') {
+          // Exact offroad-pass icon from App.tsx lines 534-565
+          ctx.beginPath();
+          ctx.arc(px, py, 9, 0, Math.PI * 2);
+          ctx.fillStyle = '#dc2626';
+          ctx.fill();
+          ctx.lineWidth = 2.2;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(px - 4, py + 2);
+          ctx.lineTo(px, py - 3);
+          ctx.lineTo(px + 4, py + 2);
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.arc(px, py, isSelected ? 11 : 8.5, 0, Math.PI * 2);
+          ctx.fillStyle = meta.pinColor;
+          ctx.fill();
+          ctx.lineWidth = 2.2;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        }
+
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = isDay ? '#ffffff' : '#0b1015';
+        ctx.strokeText(poi.nameHe, px, py + 22);
+        ctx.fillStyle = isDay ? meta.dayText : meta.darkText;
+        ctx.fillText(poi.nameHe, px, py + 22);
+        ctx.restore();
+
+        canvas._hitPins.push({ id: poi.id, x: px, y: py, r: 20 });
+      });
+
+      ctx.restore();
+    }
+
+    function renderAllMaps() {
+      drawTopoMap(document.getElementById('web-map-canvas'));
+      drawTopoMap(document.getElementById('mobile-map-canvas'));
+    }
+
+    function attachCanvasEvents(canvasId) {
+      const canvas = document.getElementById(canvasId);
+      let dragging = false, moved = false, rotating = false, startX = 0, startY = 0, origPanX = 0, origPanY = 0, origBearing = 0;
+
+      canvas.addEventListener('pointerdown', (e) => {
+        dragging = true; moved = false; rotating = e.shiftKey;
+        startX = e.clientX; startY = e.clientY;
+        origPanX = state.panX; origPanY = state.panY; origBearing = state.bearing;
+        canvas.setPointerCapture(e.pointerId);
+      });
+
+      canvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+        if (rotating) {
+          state.bearing = Math.max(-180, Math.min(180, Math.round(origBearing + dx * 0.5)));
+          const t = getSurfaceTheme();
+          document.getElementById('web-compass-svg').style.transform = `rotate(${-state.bearing}deg)`;
+          document.getElementById('mobile-compass-svg').style.transform = `rotate(${-state.bearing}deg)`;
+          document.getElementById('mobile-btn-compass').className = `${Math.abs(state.bearing) > 2 ? 'flex' : 'hidden'} w-10 h-10 rounded-full border shadow-lg items-center justify-center transition-all ${t.pillBtn}`;
+        } else {
+          state.panX = Math.max(-160, Math.min(160, origPanX + dx));
+          state.panY = Math.max(-140, Math.min(140, origPanY + dy));
+        }
+        renderAllMaps();
+        updateHudPillsOnly();
+      });
+
+      canvas.addEventListener('pointerup', (e) => {
+        if (!dragging) return;
+        dragging = false;
+        if (!moved && canvas._hitPins) {
+          const rect = canvas.getBoundingClientRect();
+          const cx = e.clientX - rect.left;
+          const cy = e.clientY - rect.top;
+          const hit = canvas._hitPins.find(p => Math.hypot(p.x - cx, p.y - cy) <= p.r);
+          if (hit) {
+            state.selectedPoiId = hit.id;
+            if (canvasId === 'mobile-map-canvas' && state.mobileDisplayMode === 'navigating') {
+              state.mobileNavOverlay = 'poi-mini';
+            } else {
+              state.desktopDrawer = 'poi';
+              state.mobileTab = 'explore';
+              state.mobilePlanningOverlay = 'poi';
+              state.mobileSheetExpanded = true;
+              state.scenario = 'poi';
+            }
+            renderAll();
+          }
+        }
+      });
+
+      canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        adjustZoom(e.deltaY < 0 ? 0.4 : -0.4);
+      }, { passive: false });
+    }
+
+    // =========================================================================
+    // COMPONENT RENDERERS (Mirrors src/components/* 1:1)
+    // =========================================================================
+    function renderPoiInspectorContent(isMobile) {
+      const t = getSurfaceTheme();
+      const poi = POIS.find(p => p.id === state.selectedPoiId) || POIS[0];
+      const meta = POI_CATEGORY_META[poi.category] || POI_CATEGORY_META.heritage;
+      const mil = toMilitaryCoords(poi.lon, poi.lat);
+      const closeFn = isMobile ? 'closeMobileOverlay()' : 'closeDesktopDrawer()';
+
+      return `
+        <div dir="rtl" class="p-4 space-y-3 overflow-y-auto min-h-0 flex-1">
+          <div class="flex items-start justify-between gap-2">
+            <div class="space-y-1 min-w-0">
+              <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${meta.badgeClass}">
+                <span>${meta.emoji}</span>
+                <span>${meta.fullLabel}</span>
+              </div>
+              <h3 class="text-base font-bold leading-snug" dir="auto">${poi.nameHe}</h3>
+              <p class="text-xs truncate ${t.muted}">${poi.nameEn} • ${poi.source}</p>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              ${isMobile ? `<button onclick="toggleMobileSheetExpand()" class="px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.pillBtn}">${state.mobileSheetExpanded ? 'צמצם' : 'הרחב'}</button>` : ''}
+              <button onclick="${closeFn}" class="p-1.5 rounded-lg border transition-colors ${t.pillBtn}" title="סגור">✕</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 p-2.5 rounded-xl border text-xs ${t.subCard}">
+            <div>
+              <span class="block ${t.muted}">גובה (DEM)</span>
+              <span class="font-mono font-bold text-emerald-500 text-sm">${poi.ele} m</span>
+            </div>
+            <div>
+              <span class="block ${t.muted}">מרחק</span>
+              <span class="font-mono font-bold text-sm">${poi.distKm.toFixed(1)} ק״מ</span>
+            </div>
+            <div>
+              <span class="block ${t.muted}">נ.צ. ITM</span>
+              <button onclick="copyText('${mil.idfGrid8Digit}')" dir="ltr" class="font-mono font-bold text-amber-500 hover:underline text-left">${mil.idfGrid8Digit}</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <button onclick="navigateToPoi('${poi.id}')" class="py-2 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors">
+              <span>🧭</span><span>נווט לכאן</span>
+            </button>
+            <button onclick="flyToPoi('${poi.id}')" class="py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${t.pillBtn}">
+              <span>📍</span><span>מרכז מפה</span>
+            </button>
+            <button onclick="copyText('${poi.lat.toFixed(5)}, ${poi.lon.toFixed(5)}')" class="py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${t.pillBtn}">
+              <span>📋</span><span>העתק נ.צ.</span>
+            </button>
+          </div>
+
+          ${(!isMobile || state.mobileSheetExpanded) ? `
+            ${poi.waterStatus ? `<div class="p-2.5 rounded-xl bg-sky-500/15 border border-sky-500/35 text-xs flex items-center gap-2"><span>💧</span><span><strong>מצב מים:</strong> ${poi.waterStatus}</span></div>` : ''}
+            ${poi.difficulty4x4 ? `<div class="p-2.5 rounded-xl bg-red-500/15 border border-red-500/35 text-xs flex items-center gap-2"><span>⚠️</span><span><strong>עבירות 4x4:</strong> ${poi.difficulty4x4}</span></div>` : ''}
+            <div class="max-h-32 overflow-y-auto"><p class="text-xs leading-relaxed">${poi.descHe}</p></div>
+            ${poi.wikipedia ? `<button onclick="showToast('פותח ערך ויקיפדיה: ${poi.wikipedia}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold text-sky-500 ${t.pillBtn}"><span>↗</span><span>קרא עוד בויקיפדיה</span></button>` : ''}
+
+            <div class="pt-2.5 border-t space-y-1.5 ${t.divider}">
+              <label class="block text-xs font-bold">הערת שטח אישית (נשמר אופליין במכשיר):</label>
+              <div class="flex gap-2">
+                <input type="text" id="${isMobile ? 'm' : 'w'}-note-input" value="${poi.userNotes.replace(/"/g, '&quot;')}"
+                  placeholder="לדוגמה: המעיין מלא ונקי / מדרגת סלע גבוהה..."
+                  class="flex-1 rounded-xl border px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 ${t.fieldBox}" />
+                <button onclick="savePoiNote('${poi.id}', '${isMobile ? 'm' : 'w'}-note-input')" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shrink-0">שמור</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function renderElevationChartInner(route, prefix) {
+      const t = getSurfaceTheme();
+      const pts = route.elevationProfile;
+      const minEle = Math.min(...pts.map(p => p.ele));
+      const maxEle = Math.max(...pts.map(p => p.ele));
+      const midEle = Math.round((minEle + maxEle) / 2);
+      const span = Math.max(20, maxEle - minEle);
+      const totalDist = pts[pts.length - 1].distKm || 1;
+      const strokeColor = '#ec4899';
+      const w = 520, h = 112, padX = 12, padY = 16;
+
+      const coordsSvg = pts.map((p, idx) => ({
+        x: padX + (p.distKm / totalDist) * (w - padX * 2),
+        y: h - padY - ((p.ele - minEle) / span) * (h - padY * 2),
+        pt: p,
+        idx
+      }));
+
+      const linePath = coordsSvg.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+      const areaPath = `${linePath} L ${coordsSvg[coordsSvg.length - 1].x.toFixed(1)} ${h} L ${coordsSvg[0].x.toFixed(1)} ${h} Z`;
+      const activeIdx = state.hoverChartIdx !== null ? state.hoverChartIdx : state.pinnedChartIdx;
+      const activeSvgPt = activeIdx !== null ? coordsSvg[activeIdx] : null;
+      const activePt = activeSvgPt?.pt || null;
+      const activeMil = activePt ? toMilitaryCoords(activePt.lon, activePt.lat).idfGrid8Digit : null;
+
+      let gradePct = null;
+      if (activeIdx !== null && pts.length >= 2) {
+        const prev = pts[Math.max(0, activeIdx - 1)];
+        const next = pts[Math.min(pts.length - 1, activeIdx + 1)];
+        const dMeters = (next.distKm - prev.distKm) * 1000;
+        if (dMeters >= 15) gradePct = Math.round(((next.ele - prev.ele) / dMeters) * 100);
+      }
+
+      const tooltipLeftPct = activeSvgPt ? Math.max(18, Math.min(82, (activeSvgPt.x / w) * 100)) : 50;
+      const wptSvgPts = coordsSvg.filter(c => c.pt.kind === 'wpt');
+      const gradId = `eleGrad-${prefix}-${route.id}`;
+
+      return {
+        visualHtml: `
+          ${activePt ? `
+            <div style="left:${tooltipLeftPct}%" class="absolute top-0.5 -translate-x-1/2 z-20 pointer-events-none px-2.5 py-1 rounded-xl border shadow-xl whitespace-nowrap text-xs flex items-center gap-2 ${t.panelSolid}">
+              <span class="font-mono font-bold text-pink-500">${activePt.ele}m</span>
+              <span class="opacity-30">•</span>
+              <span class="font-mono">${activePt.distKm} km</span>
+              ${gradePct !== null ? `<span class="opacity-30">•</span><span class="font-mono font-bold ${gradePct > 0 ? 'text-emerald-500' : gradePct < 0 ? 'text-amber-500' : t.muted}">${gradePct > 0 ? '+' + gradePct + '%' : gradePct + '%'}</span>` : ''}
+              ${activePt.label ? `<span class="opacity-30">•</span><span class="font-semibold">${activePt.emoji || ''} ${activePt.label}</span>` : (activeMil ? `<span class="opacity-30 hidden sm:inline">•</span><span class="font-mono hidden sm:inline ${t.muted}" dir="ltr">${activeMil}</span>` : '')}
+            </div>
+          ` : ''}
+
+          <svg viewBox="0 0 ${w} ${h}" class="w-full h-full overflow-visible">
+            <defs>
+              <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="${strokeColor}" stop-opacity="0.42" />
+                <stop offset="100%" stop-color="${strokeColor}" stop-opacity="0.04" />
+              </linearGradient>
+            </defs>
+            ${[padY, h / 2, h - padY].map(gy => `<line x1="${padX}" y1="${gy}" x2="${w - padX}" y2="${gy}" stroke="currentColor" stroke-opacity="0.1" stroke-dasharray="3 3" stroke-width="1" />`).join('')}
+            <path d="${areaPath}" fill="url(#${gradId})" />
+            <path d="${linePath}" fill="none" stroke="${strokeColor}" stroke-width="2.8" stroke-linecap="round" />
+            ${wptSvgPts.map(c => `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3.5" fill="#ffffff" stroke="${strokeColor}" stroke-width="2" />`).join('')}
+            ${activeSvgPt ? `
+              <line x1="${activeSvgPt.x.toFixed(1)}" y1="${padY / 2}" x2="${activeSvgPt.x.toFixed(1)}" y2="${h}" stroke="${strokeColor}" stroke-dasharray="3 3" stroke-width="1.5" />
+              <circle cx="${activeSvgPt.x.toFixed(1)}" cy="${activeSvgPt.y.toFixed(1)}" r="5.5" fill="${strokeColor}" stroke="#ffffff" stroke-width="2" />
+            ` : ''}
+          </svg>
+
+          <div class="absolute top-1 right-1 text-xs font-mono pointer-events-none ${t.muted}">${maxEle}m</div>
+          <div class="absolute top-1/2 -translate-y-1/2 right-1 text-xs font-mono pointer-events-none ${t.muted}">${midEle}m</div>
+          <div class="absolute bottom-1 right-1 text-xs font-mono pointer-events-none ${t.muted}">${minEle}m</div>
+        `,
+        footerHtml: `
+          <span>0 km</span>
+          <span class="flex items-center gap-2 font-sans">
+            <span>${activePt ? `${activePt.distKm} km • ${activePt.ele}m` : 'החלק או לחץ על הגרף לפרטי נקודה'}</span>
+            ${state.pinnedChartIdx !== null ? `<button onclick="unlockPinnedChart()" class="text-pink-500 font-bold hover:underline">שחרר נעילה</button>` : ''}
+          </span>
+          <span>${route.distanceKm} km</span>
+        `
+      };
+    }
+
+    function renderElevationChart(route, prefix) {
+      const t = getSurfaceTheme();
+      const { visualHtml, footerHtml } = renderElevationChartInner(route, prefix);
+      return `
+        <div class="relative w-full rounded-xl border p-2 ${t.subCard}">
+          <div id="${prefix}-ele-hitarea" class="relative w-full h-28 cursor-crosshair touch-none"
+            onmousemove="scrubElevationChart(event, this)"
+            ontouchmove="scrubElevationChart(event.touches[0], this)"
+            onclick="pinElevationChart(event, this)"
+            onmouseleave="leaveElevationChart()">
+            <div id="${prefix}-ele-visual" class="w-full h-full relative">${visualHtml}</div>
+          </div>
+          <div id="${prefix}-ele-footer" class="flex items-center justify-between text-xs font-mono mt-1 ${t.muted}">${footerHtml}</div>
+        </div>
+      `;
+    }
+
+    function renderRoutesContent(isMobile) {
+      const t = getSurfaceTheme();
+      const route = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+      const waypoints = route.elevationProfile.filter(p => p.label);
+      const closeFn = isMobile ? "setMobileTab('explore')" : 'closeDesktopDrawer()';
+      const importFn = isMobile ? "setMobileTab('offline')" : 'openOfflineModal()';
+
+      return `
+        <div dir="rtl" class="p-4 space-y-3 overflow-y-auto min-h-0 flex-1">
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <span class="text-xs font-bold text-pink-500 block">מסלולים ופרופיל גובה (DEM)</span>
+              <h4 class="text-sm font-bold truncate" dir="auto">${route.name}</h4>
+            </div>
+            <button onclick="${closeFn}" class="p-1.5 rounded-lg border shrink-0 ${t.pillBtn}" title="סגור">✕</button>
+          </div>
+
+          <!-- Routes Dropdown + Fit All + Import (Matches ElevationProfileDrawer.tsx) -->
+          <div class="space-y-2 relative">
+            <div class="flex items-center gap-2">
+              <button onclick="toggleRoutesMenu()" class="flex-1 min-w-0 px-3 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 transition-colors ${t.subCard} hover:border-pink-500/70">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${route.color}"></span>
+                  <span class="font-bold truncate">${route.name}</span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span class="font-mono ${t.muted}">${route.distanceKm} km (${ROUTES.length})</span>
+                  <span>${state.isRoutesMenuOpen ? '▲' : '▼'}</span>
+                </div>
+              </button>
+              <button onclick="fitAllRoutes()" class="px-2.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1 shrink-0 ${t.pillBtn}" title="הצג את כל המסלולים במפה">
+                <span class="text-pink-500">⤢</span><span>הכל</span>
+              </button>
+              <button onclick="${importFn}" class="px-2.5 py-2 rounded-xl border border-sky-500/50 bg-sky-500/10 text-sky-500 hover:bg-sky-500/20 text-xs font-bold flex items-center gap-1 shrink-0">
+                <span>⇪</span><span>ייבא</span>
+              </button>
+            </div>
+
+            ${state.isRoutesMenuOpen ? `
+              <div class="rounded-xl border shadow-lg max-h-48 overflow-y-auto divide-y ${t.panelSolid} ${t.divider}">
+                ${ROUTES.map((r, idx) => {
+                  const sel = r.id === route.id;
+                  return `
+                    <button onclick="selectRoute('${r.id}')" class="w-full px-3 py-2.5 text-right text-xs flex items-center justify-between gap-2 transition-colors ${sel ? 'bg-pink-500/15 font-bold' : t.hoverRow}">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${r.color}"></span>
+                        <div class="min-w-0">
+                          <div class="font-bold">${r.name}</div>
+                          <div class="font-mono text-xs ${t.muted}">#${idx + 1} • ${r.distanceKm} km • +${r.ascentMeters}m • ${r.sourceFormat.toUpperCase()}</div>
+                        </div>
+                      </div>
+                      ${sel ? '<span class="text-pink-500 font-bold">✓</span>' : ''}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- 4-Column Telemetry -->
+          <div class="grid grid-cols-4 gap-2 text-xs p-2.5 rounded-xl border ${t.subCard}">
+            <div><span class="block ${t.muted}">אורך</span><span class="font-mono font-bold">${route.distanceKm} km</span></div>
+            <div><span class="block ${t.muted}">טיפוס</span><span class="font-mono font-bold text-emerald-500">+${route.ascentMeters}m</span></div>
+            <div><span class="block ${t.muted}">ירידה</span><span class="font-mono font-bold text-amber-500">-${route.descentMeters}m</span></div>
+            <div><span class="block ${t.muted}">טווח גובה</span><span class="font-mono">${route.minEle}–${route.maxEle}m</span></div>
+          </div>
+
+          <!-- Waypoints Along Route Dropdown -->
+          <div class="relative">
+            <button onclick="togglePointsMenu()" class="w-full px-3 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 transition-colors ${t.subCard} hover:border-pink-500/70">
+              <span class="font-semibold">📍 נקודות לאורך המסלול (${waypoints.length})</span>
+              <span>${state.isPointsMenuOpen ? '▲' : '▼'}</span>
+            </button>
+            ${state.isPointsMenuOpen ? `
+              <div class="mt-1.5 rounded-xl border shadow-lg max-h-44 overflow-y-auto divide-y ${t.panelSolid} ${t.divider}">
+                ${waypoints.map(wp => {
+                  const idx = route.elevationProfile.indexOf(wp);
+                  return `
+                    <button onclick="selectRouteWaypoint(${idx})" class="w-full px-3 py-2 text-right text-xs flex items-center justify-between gap-2 transition-colors ${t.hoverRow}">
+                      <span class="flex items-center gap-2 min-w-0"><span>${wp.emoji || '📍'}</span><span class="font-semibold truncate">${wp.label}</span></span>
+                      <span class="font-mono shrink-0 ${t.muted}">${wp.distKm} km • ${wp.ele}m</span>
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            ` : ''}
+          </div>
+
+          ${renderElevationChart(route, isMobile ? 'm' : 'w')}
+
+          <div class="flex flex-wrap gap-2">
+            ${state.isNavigatingRoute ? `
+              <button onclick="stopRouteNavigation()" class="flex-1 py-2.5 px-3 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center justify-center gap-1.5">
+                <span>🧭</span><span>עצור ניווט</span>
+              </button>
+            ` : `
+              <button onclick="startRouteNavigation()" class="flex-1 py-2.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm">
+                <span>🧭</span><span>התחל ניווט במסלול</span>
+              </button>
+            `}
+            <button onclick="fitAllRoutes()" class="px-3 py-2.5 rounded-xl border text-xs font-bold ${t.pillBtn}">הצג</button>
+            <button onclick="showToast('מייצא ${route.id}.gpx למכשיר')" class="px-3 py-2.5 rounded-xl border text-xs font-bold ${t.pillBtn}">GPX</button>
+            <button onclick="showToast('דמו: המסלול נשאר במאגר')" class="px-2.5 py-2.5 rounded-xl border text-xs font-bold text-red-500 ${t.pillBtn}" title="מחק מסלול">🗑</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderRecordContent(isMobile) {
+      const t = getSurfaceTheme();
+      const g = getCenterCoords();
+      const closeFn = isMobile ? "setMobileTab('explore')" : 'closeDesktopDrawer()';
+      const dotCls = !state.isRecordingTrack ? 'bg-slate-400' : state.isRecordingPaused ? 'bg-amber-500' : 'bg-rose-500 animate-pulse';
+      const title = !state.isRecordingTrack ? 'הקלטת מסלול GPS' : state.isRecordingPaused ? 'הקלטה מושהית' : 'מקליט מסלול שטח...';
+
+      return `
+        <div dir="rtl" class="p-4 space-y-3 overflow-y-auto min-h-0 flex-1">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full ${dotCls}"></span>
+              <div>
+                <h3 class="text-base font-bold leading-tight">${title}</h3>
+                <p class="text-xs ${t.muted}">${state.isRecordingTrack ? 42 : 0} נקודות דגימה בנתיב</p>
+              </div>
+            </div>
+            <button onclick="${closeFn}" class="p-1.5 rounded-lg border ${t.pillBtn}" title="סגור">✕</button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2.5">
+            <div class="p-3 rounded-xl border ${t.subCard}">
+              <span class="text-xs block ${t.muted}">זמן תנועה</span>
+              <span id="${isMobile ? 'm' : 'w'}-rec-timer" class="font-mono font-bold text-lg tabular-nums">${formatDuration(state.recordElapsedSeconds)}</span>
+            </div>
+            <div class="p-3 rounded-xl border ${t.subCard}">
+              <span class="text-xs block ${t.muted}">מרחק שהוקלט</span>
+              <span class="font-mono font-bold text-lg text-sky-500 tabular-nums">${state.recordedDistanceKm.toFixed(2)} km</span>
+            </div>
+            <div class="p-3 rounded-xl border ${t.subCard}">
+              <span class="text-xs block ${t.muted}">טיפוס מצטבר</span>
+              <span class="font-mono font-bold text-base text-emerald-500 tabular-nums">+${state.recordedAscentMeters} m</span>
+            </div>
+            <div class="p-3 rounded-xl border ${t.subCard}">
+              <span class="text-xs block ${t.muted}">גובה נוכחי (DEM)</span>
+              <span class="font-mono font-bold text-base tabular-nums">${g.ele} m</span>
+            </div>
+          </div>
+
+          ${!state.isRecordingTrack ? `
+            <button onclick="startOrResumeRecording()" class="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm">
+              <span>▶</span><span>התחל הקלטת מסלול GPS</span>
+            </button>
+          ` : `
+            <div class="space-y-2">
+              <div class="flex gap-2">
+                <button onclick="toggleRecordPause()" class="flex-1 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 ${t.pillBtn}">
+                  <span>${state.isRecordingPaused ? '▶ המשך הקלטה' : '⏸ השהה'}</span>
+                </button>
+                <button onclick="${isMobile ? 'openMobileAddPoi()' : "toggleDesktopDrawer('add-poi')"}" class="flex-1 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center justify-center gap-1.5">
+                  <span>📍 דווח נקודה</span>
+                </button>
+              </div>
+              <div class="flex gap-2">
+                <button onclick="saveRecordedTrack()" class="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">שמור כמסלול + GPX</button>
+                <button onclick="discardRecordedTrack()" class="px-3 py-2.5 rounded-xl border text-xs font-bold text-red-500 ${t.pillBtn}" title="בטל ונקה הקלטה">🗑</button>
+              </div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    function renderLayersContent(closeFn) {
+      const t = getSurfaceTheme();
+      const v = state.visibility;
+      const terrainToggles = [
+        { key: 'contours', label: 'קווי גובה כל 10 מ׳ + ראשיים 50 מ׳', badge: 'DEM' },
+        { key: 'tacticalGrid', label: 'רשת קואורדינטות (ITM / UTM)', badge: 'Grid' },
+        { key: 'hillshade', label: 'הצללת תבליט הרים (Hillshade)', badge: 'Relief' },
+        { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing' },
+        { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (1-5)', badge: '4x4' },
+        { key: 'hikingTrails', label: 'שבילים מסומנים ונתיבי הליכה', badge: 'Trails' },
+        { key: 'cycleways', label: 'שבילי אופניים', badge: 'Cycle' },
+        { key: 'natureParks', label: 'גבולות שמורות טבע וגנים', badge: 'Parks' },
+        { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard' }
+      ];
+      const poiToggles = [
+        { key: 'poiWater', label: '💧 מעיינות וגבים', activeCls: 'border-sky-500 bg-sky-500/15 text-sky-500' },
+        { key: 'poiOffroad', label: '🚙 מעלות 4x4', activeCls: 'border-red-500 bg-red-500/15 text-red-500' },
+        { key: 'poiHeritage', label: '🏛️ תצפיות ומערות', activeCls: 'border-amber-500 bg-amber-500/15 text-amber-500' },
+        { key: 'poiCampsites', label: '⛺ חניוני לילה', activeCls: 'border-emerald-500 bg-emerald-500/15 text-emerald-500' },
+        { key: 'poiPeaks', label: '🏔️ פסגות ונ.ג.', activeCls: 'border-purple-500 bg-purple-500/15 text-purple-500' },
+        { key: 'poiUser', label: '📍 נקודות שטח', activeCls: 'border-teal-500 bg-teal-500/15 text-teal-500' }
+      ];
+      const masterOn = isMasterPoiActive();
+      const activeCnt = activePoiCatCount();
+
+      return `
+        <div dir="rtl" class="p-4 space-y-3.5 overflow-y-auto max-h-[500px]">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-bold">סוג מפה ושכבות טופוגרפיות</h3>
+            <button onclick="${closeFn}" class="p-1.5 rounded-lg border transition-colors ${t.pillBtn}" title="סגור">✕</button>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <button onclick="setMapTheme('topo-day')" class="p-2 rounded-xl border-2 text-center transition-all ${state.theme === 'topo-day' && !v.terrain3d ? 'border-emerald-500 bg-emerald-500/10' : t.subCard}">
+              <div class="h-9 rounded-lg bg-[#f4efe2] border border-amber-800/30 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-amber-900">☀️ 1:50k</div>
+              <span class="text-xs font-bold block">טופוגרפי יום</span>
+            </button>
+            <button onclick="setMapTheme('topo-dark')" class="p-2 rounded-xl border-2 text-center transition-all ${state.theme === 'topo-dark' && !v.terrain3d ? 'border-emerald-500 bg-emerald-500/10' : t.subCard}">
+              <div class="h-9 rounded-lg bg-slate-900 border border-slate-700 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-sky-400">🌙 OPS</div>
+              <span class="text-xs font-bold block">לילה טקטי</span>
+            </button>
+            <button onclick="toggle3D()" class="p-2 rounded-xl border-2 text-center transition-all ${v.terrain3d ? 'border-emerald-500 bg-emerald-500/10' : t.subCard}">
+              <div class="h-9 rounded-lg bg-gradient-to-br from-emerald-700 to-amber-700 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-white">⛰ 3D</div>
+              <span class="text-xs font-bold block">תבליט 3D</span>
+            </button>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="text-xs font-bold ${t.muted}">שכבות ניווט ושטח</div>
+            ${terrainToggles.map(item => `
+              <button onclick="toggleLayer('${item.key}')" class="w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs transition-colors ${t.subCard}">
+                <span class="text-right font-medium">${item.label}</span>
+                <span class="flex items-center gap-2 shrink-0">
+                  <span class="font-mono text-xs ${t.muted}">${item.badge}</span>
+                  <span class="w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${v[item.key] ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'}">
+                    <span class="w-4 h-4 rounded-full bg-white shadow"></span>
+                  </span>
+                </span>
+              </button>
+            `).join('')}
+          </div>
+
+          <div class="space-y-2 pt-2 border-t ${t.divider}">
+            <div class="text-xs font-bold ${t.muted}">נקודות עניין במפה (POI)</div>
+            <div class="rounded-xl border overflow-hidden ${t.subCard}">
+              <div class="flex items-center justify-between px-3 py-2 text-xs gap-2">
+                <button onclick="togglePoiAccordion()" class="p-1 rounded-lg ${t.muted}">${state.showPoiSubCategories ? '▾' : '▸'}</button>
+                <button onclick="toggleMasterPoi()" class="flex-1 flex items-center justify-between gap-2 text-right">
+                  <span class="font-bold">הצג נקודות עניין במפה</span>
+                  <span class="flex items-center gap-2 shrink-0">
+                    <span class="font-mono text-xs ${t.muted}">${masterOn ? `${activeCnt}/6` : 'כבוי'}</span>
+                    <span class="w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${masterOn ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'}">
+                      <span class="w-4 h-4 rounded-full bg-white shadow"></span>
+                    </span>
+                  </span>
+                </button>
+              </div>
+              ${state.showPoiSubCategories ? `
+                <div class="px-3 pb-3 pt-2 border-t space-y-2 ${t.divider}">
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="font-semibold ${t.muted}">קטגוריות נקודות עניין</span>
+                    ${(!masterOn || activeCnt < 6) ? `<button onclick="enableAllPoi()" class="font-bold text-emerald-500 hover:underline">הצג הכל</button>` : ''}
+                  </div>
+                  <div class="flex flex-wrap gap-1.5 ${!masterOn ? 'opacity-65' : ''}">
+                    ${poiToggles.map(item => {
+                      const on = v.pois && v[item.key];
+                      return `<button onclick="togglePoiCategory('${item.key}')" class="px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all ${on ? item.activeCls : t.subCard + ' opacity-55'}">${item.label}</button>`;
+                    }).join('')}
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAddPoiContent(closeFn) {
+      const t = getSurfaceTheme();
+      const g = getCenterCoords();
+      const cats = [
+        { id: 'water', label: '💧 מעיין / גב' },
+        { id: 'offroad', label: '🚙 מעלה 4x4' },
+        { id: 'campsite', label: '⛺ חניון לילה' },
+        { id: 'heritage', label: '🏛️ תצפית / מערה' },
+        { id: 'peak', label: '🏔️ פסגה / נ.ג.' },
+        { id: 'user', label: '📍 נקודת שטח' }
+      ];
+      return `
+        <div dir="rtl" class="p-4 space-y-3 overflow-y-auto">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <span class="text-xs font-bold text-sky-500 flex items-center gap-1">⌖ הזז את המפה למיקום הרצוי מתחת לצלב</span>
+              <h3 class="text-base font-bold mt-0.5">דווח נקודת עניין בשטח</h3>
+            </div>
+            <button onclick="${closeFn}" class="p-1.5 rounded-lg border ${t.pillBtn}" title="סגור">✕</button>
+          </div>
+
+          <div class="p-2.5 rounded-xl border flex items-center justify-between text-xs font-mono ${t.subCard}">
+            <span class="text-amber-500 font-bold">נ.צ. <span dir="ltr">${g.idfGrid8Digit}</span></span>
+            <span class="text-emerald-500 font-bold">גובה: ${g.ele}m</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-1.5">
+            ${cats.map(cat => `
+              <button onclick="setDraftCat('${cat.id}')" class="py-2 px-1.5 rounded-xl border text-xs font-bold transition-all text-center truncate ${state.newPoiDraft.category === cat.id ? 'border-emerald-500 bg-emerald-500/15 text-emerald-500' : t.subCard}">${cat.label}</button>
+            `).join('')}
+          </div>
+
+          <input type="text" dir="auto" value="${state.newPoiDraft.nameHe}" oninput="state.newPoiDraft.nameHe = this.value"
+            placeholder="שם הנקודה (לדוגמה: גב מים מלא / מדרגת סלע)"
+            class="w-full rounded-xl border px-3 py-2 text-xs focus:outline-none focus:border-emerald-500 ${t.fieldBox}" />
+          <input type="text" dir="auto" value="${state.newPoiDraft.descHe}" oninput="state.newPoiDraft.descHe = this.value"
+            placeholder="תיאור או הערת עבירות/מים למטיילים..."
+            class="w-full rounded-xl border px-3 py-2 text-xs focus:outline-none focus:border-emerald-500 ${t.fieldBox}" />
+
+          <button onclick="submitNewPoi()" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm">
+            ✓ שמור נקודה במפה (אופליין)
+          </button>
+        </div>
+      `;
+    }
+
+    function renderStorageModalContent(closeFn) {
+      const t = getSurfaceTheme();
+      const osm = state.archives.osm;
+      const dem = state.archives.dem;
+      const storedBytes = (osm.local ? osm.sizeBytes : 0) + (dem.local ? dem.sizeBytes : 0);
+      const totalBytes = osm.sizeBytes + dem.sizeBytes;
+
+      return `
+        <div dir="rtl" class="space-y-3.5">
+          <div class="flex items-center justify-between border-b pb-3 ${t.divider}">
+            <div class="flex items-center gap-2.5">
+              <div class="p-2 rounded-xl bg-emerald-500/15 text-emerald-500 font-bold">💾</div>
+              <div>
+                <h2 class="text-base font-bold leading-tight">מפות אופליין וייבוא קבצים</h2>
+                <p class="text-xs ${t.muted}">עבודה מלאה בשטח ללא קליטה סלולרית</p>
+              </div>
+            </div>
+            <button onclick="${closeFn}" class="p-1.5 rounded-lg border ${t.pillBtn}" title="סגור">✕</button>
+          </div>
+
+          <!-- Storage Meter -->
+          <div class="p-3 rounded-xl border space-y-2 ${t.subCard}">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span>מפות שמורות במכשיר (OPFS / מקומי)</span>
+              <span class="text-emerald-500 font-mono">${storedBytes > 0 ? `${formatSize(storedBytes)} שמור` : 'מצב הזרמה מהענן'}</span>
+            </div>
+            <div class="w-full h-2.5 rounded-full bg-slate-500/20 overflow-hidden flex">
+              <div class="bg-emerald-500 h-full transition-all" style="width:${dem.local ? Math.round((dem.sizeBytes / totalBytes) * 100) : 0}%"></div>
+              <div class="bg-sky-500 h-full transition-all" style="width:${osm.local ? Math.round((osm.sizeBytes / totalBytes) * 100) : 0}%"></div>
+            </div>
+            <div class="flex justify-between text-xs ${t.muted}">
+              <span>● גבהים 1.40 GB (${dem.local ? 'במכשיר' : 'בענן'})</span>
+              <span>● שבילים ווקטור 112 MB (${osm.local ? 'במכשיר' : 'בענן'})</span>
+            </div>
+          </div>
+
+          <!-- Package Cards -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            ${[
+              { id: 'osm', title: 'מפת שבילים ודרכים (OSM)', file: 'Israel.osm.pmtiles', info: osm, icon: '🔄' },
+              { id: 'dem', title: 'מודל גבהים וקונטורים (DEM)', file: 'Israel.dem.pmtiles', info: dem, icon: '🔒' }
+            ].map(pkg => `
+              <div class="p-3.5 rounded-xl border space-y-2.5 ${t.subCard}">
+                <div class="flex items-start justify-between gap-2">
+                  <div>
+                    <div class="text-xs font-bold">${pkg.icon} ${pkg.title}</div>
+                    <div class="text-xs font-mono mt-0.5 ${t.muted}">${pkg.file} • ${formatSize(pkg.info.sizeBytes)}</div>
+                  </div>
+                  <span class="px-2.5 py-0.5 rounded-full text-xs font-bold shrink-0 ${pkg.info.local ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}">
+                    ${pkg.info.local ? '✓ אופליין' : 'ענן'}
+                  </span>
+                </div>
+                <div class="text-xs space-y-0.5 ${t.muted}">
+                  <div>${pkg.id === 'dem' ? `קבוע ומוגן • זום z${pkg.info.minZoom}–z${pkg.info.maxZoom}` : `${pkg.info.local ? 'שמור ב-OPFS' : 'מקור: ענן Firebase'} • עודכן: ${pkg.info.createdUtc}`}</div>
+                  ${pkg.id === 'osm' ? `<div class="text-emerald-500 font-semibold">✓ כולל צבעי שבילים מובנים (colour / osmc_symbol)</div>` : ''}
+                </div>
+                <div class="flex gap-2">
+                  <button onclick="toggleArchiveOffline('${pkg.id}', true)" class="flex-1 py-2 px-3 rounded-xl text-xs font-bold text-white ${pkg.info.local ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-amber-600 hover:bg-amber-500'}">
+                    ${pkg.info.local ? 'עדכן / הורד מחדש' : 'הורד לאופליין'}
+                  </button>
+                  ${pkg.info.local ? `<button onclick="toggleArchiveOffline('${pkg.id}', false)" class="px-3 py-2 rounded-xl border text-xs text-red-500 ${t.pillBtn}" title="מחק עותק מקומי">🗑</button>` : ''}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- Community GPX/KML/TWL Importer -->
+          <div class="p-3.5 rounded-xl border border-dashed border-sky-500/60 bg-sky-500/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div class="space-y-0.5">
+              <div class="text-xs font-bold">ייבוא מסלולים ונקודות עניין מהקהילה</div>
+              <p class="text-xs ${t.muted}">תומך בקבצי <code class="font-mono">.gpx</code>, <code class="font-mono">.kml</code>, <code class="font-mono">.twl</code> ו-<code class="font-mono">.geojson</code> (עמוד ענן / Off-Road / IHM)</p>
+            </div>
+            <button onclick="showToast('יובאו בהצלחה 12 נקודות עניין ו-1 מסלול (דמו)!')" class="w-full sm:w-auto px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white shrink-0">
+              ⇪ בחר קובץ GPX / KML / TWL
+            </button>
+          </div>
+
+          <!-- Collapsible Advanced -->
+          <div class="rounded-xl border overflow-hidden ${t.subCard}">
+            <button onclick="toggleAdvancedStorage()" class="w-full px-3.5 py-2.5 flex items-center justify-between text-xs font-bold">
+              <span>⚙ מתקדם: טעינת קובץ PMTiles מקומי ועדכון ענן</span>
+              <span>${state.showAdvancedStorage ? '▲' : '▼'}</span>
+            </button>
+            ${state.showAdvancedStorage ? `
+              <div class="px-3.5 pb-3.5 pt-2 border-t space-y-2.5 text-xs ${t.divider}">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button onclick="showToast('טען קובץ Israel.osm.pmtiles מקומי')" class="py-2 px-3 rounded-xl border font-semibold ${t.pillBtn}">החלף Israel.osm מקובץ</button>
+                  <button onclick="showToast('טען קובץ Israel.dem.pmtiles מקומי')" class="py-2 px-3 rounded-xl border font-semibold ${t.pillBtn}">טען Israel.dem מקובץ</button>
+                </div>
+                <div class="p-2.5 rounded-xl border text-xs ${t.panelSolid}">
+                  <div class="font-bold text-amber-500 mb-1">עדכון ענן למשתמשים (DevOps):</div>
+                  <code class="block font-mono text-emerald-500" dir="ltr">devops\\upload-map-data.bat</code>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // RENDER WEB DESKTOP & MOBILE CHROME
+    // =========================================================================
+    function renderWebUI() {
+      const t = getSurfaceTheme();
+      const offline = isOfflineReady();
+
+      document.getElementById('browser-offline-badge').textContent = offline ? '100% Offline Ready' : 'Cloud Streaming';
+      document.getElementById('web-search-pill').className = `flex items-center gap-2 rounded-2xl px-3.5 py-2.5 border shadow-xl transition-colors ${t.panel}`;
+      document.getElementById('web-search-input').className = `w-full bg-transparent text-sm focus:outline-none ${t.input}`;
+
+      // Offline Status Pill
+      document.getElementById('web-offline-pill').className = `px-3 py-2 rounded-full border text-xs font-semibold flex items-center gap-2 transition-colors shadow-xl ${t.panel}`;
+      document.getElementById('web-offline-pill').innerHTML = `
+        <span class="w-2.5 h-2.5 rounded-full shrink-0 ${offline ? 'bg-emerald-500' : 'bg-sky-500'}"></span>
+        <svg class="w-3.5 h-3.5 text-sky-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>
+        <span>${offline ? '100% אופליין מוכן' : 'מפות אופליין / ייבוא'}</span>
+      `;
+
+      // Active Nav Top Banner
+      const navBanner = document.getElementById('web-nav-top-banner');
+      if (state.isNavigatingRoute) {
+        const route = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+        const isOff = state.offRouteWarning !== null;
+        navBanner.className = `px-3.5 py-2 rounded-full border shadow-xl text-xs font-bold flex items-center gap-2 ${isOff ? 'bg-red-600 border-red-400 text-white animate-pulse' : 'bg-emerald-600 border-emerald-400 text-white'}`;
+        navBanner.innerHTML = `
+          <span>${isOff ? `⚠️ סטייה מציר: ${state.offRouteWarning} מ׳` : `🧭 בניווט: ${route.name} • נותר 6.8 ק״מ`}</span>
+          <button onclick="toggleOffRouteSim()" class="px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-xs">${isOff ? 'חזור לציר' : 'דמה סטייה'}</button>
+          <button onclick="stopRouteNavigation()" class="px-2 py-0.5 rounded-full bg-white/25 hover:bg-white/35 text-xs">סיים</button>
+        `;
+      } else {
+        navBanner.className = 'hidden';
+      }
+
+      // Top Action Pills
+      document.getElementById('web-top-actions').className = `flex items-center gap-1 rounded-full p-1 border shadow-xl ${t.panel}`;
+      document.getElementById('web-btn-routes').className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${state.desktopDrawer === 'routes' ? 'bg-emerald-600 text-white' : t.hoverRow}`;
+      document.getElementById('web-btn-record').className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${state.desktopDrawer === 'record' || state.isRecordingTrack ? 'bg-rose-600 text-white' : t.hoverRow}`;
+      document.getElementById('web-rec-dot').className = `w-2.5 h-2.5 rounded-full ${state.isRecordingTrack ? 'bg-white animate-pulse' : 'bg-rose-500'}`;
+      document.getElementById('web-rec-pill-label').textContent = state.isRecordingTrack ? formatDuration(state.recordElapsedSeconds) : 'הקלטה';
+      document.getElementById('web-btn-addpoi').className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${state.desktopDrawer === 'add-poi' ? 'bg-sky-600 text-white' : t.hoverRow}`;
+
+      // Map Controls
+      document.getElementById('web-btn-3d').className = `w-10 h-10 rounded-xl border shadow-lg text-xs font-bold flex items-center justify-center transition-all ${state.visibility.terrain3d ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn}`;
+      document.getElementById('web-btn-compass').className = `w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`;
+      document.getElementById('web-compass-svg').style.transform = `rotate(${-state.bearing}deg)`;
+      document.getElementById('web-btn-crosshair').className = `w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${(state.showCenterCrosshair || state.desktopDrawer === 'add-poi') ? 'bg-amber-600 border-amber-400 text-white' : t.pillBtn}`;
+      document.getElementById('web-zoom-group').className = `flex flex-col rounded-xl border shadow-lg overflow-hidden ${t.pillBtn}`;
+      document.getElementById('web-btn-gps').className = `w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`;
+
+      // Layers Thumbnail
+      document.getElementById('web-layers-thumb').className = `w-16 h-16 rounded-2xl border-2 shadow-xl overflow-hidden relative transition-transform hover:scale-105 ${state.isLayerSheetOpen ? 'border-emerald-500' : 'border-white'}`;
+      const thumbBg = document.getElementById('web-layers-thumb-bg');
+      thumbBg.className = `absolute inset-0 flex items-center justify-center ${state.theme === 'topo-day' ? 'bg-gradient-to-br from-[#f4efe2] via-amber-200/70 to-emerald-200 text-amber-950' : 'bg-gradient-to-br from-slate-900 via-slate-800 to-sky-950 text-sky-300'}`;
+      thumbBg.innerHTML = state.theme === 'topo-day'
+        ? '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>'
+        : '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>';
+
+      // Crosshair
+      const webCross = document.getElementById('web-crosshair');
+      const showWebCross = state.showCenterCrosshair || state.desktopDrawer === 'add-poi';
+      webCross.className = `${showWebCross ? 'flex' : 'hidden'} pointer-events-none absolute inset-0 items-center justify-center z-10`;
+
+      // Scale bar
+      const scaleEl = document.getElementById('web-scale-bar');
+      scaleEl.className = `absolute bottom-4 right-4 z-20 pointer-events-none px-2 py-0.5 border-b-2 border-x text-xs font-mono ${state.theme === 'topo-day' ? 'border-slate-700 text-slate-800 bg-white/60' : 'border-slate-300 text-slate-200 bg-slate-900/60'}`;
+      scaleEl.textContent = state.zoom >= 13.5 ? '500 מ׳' : '1 ק״מ';
+
+      // Contextual Drawer
+      const drawer = document.getElementById('web-drawer');
+      if (state.desktopDrawer) {
+        drawer.className = `pointer-events-auto rounded-2xl border overflow-hidden flex flex-col max-h-[515px] shadow-2xl ${t.panel}`;
+        if (state.desktopDrawer === 'poi') drawer.innerHTML = renderPoiInspectorContent(false);
+        else if (state.desktopDrawer === 'routes') drawer.innerHTML = renderRoutesContent(false);
+        else if (state.desktopDrawer === 'record') drawer.innerHTML = renderRecordContent(false);
+        else if (state.desktopDrawer === 'add-poi') drawer.innerHTML = renderAddPoiContent('closeDesktopDrawer()');
+      } else {
+        drawer.className = 'hidden';
+      }
+
+      // Layers Popover
+      const layersPop = document.getElementById('web-layers-popover');
+      if (state.isLayerSheetOpen) {
+        layersPop.className = `absolute bottom-20 left-4 z-40 w-[336px] max-w-[calc(100%-32px)] rounded-2xl border overflow-hidden shadow-2xl ${t.panel}`;
+        layersPop.innerHTML = renderLayersContent('toggleWebLayers()');
+      } else {
+        layersPop.className = 'hidden';
+      }
+
+      // Centered Offline Modal
+      const modal = document.getElementById('web-storage-modal');
+      if (state.isStorageOpen) {
+        modal.className = 'absolute inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4';
+        modal.innerHTML = `<div class="rounded-2xl border max-w-2xl w-full max-h-[92%] overflow-y-auto p-5 ${t.panelSolid}">${renderStorageModalContent('closeOfflineModal()')}</div>`;
+      } else {
+        modal.className = 'hidden';
+      }
+
+      updateHudPillsOnly();
+    }
+
+    function renderMobileUI() {
+      const t = getSurfaceTheme();
+      const isNav = state.mobileDisplayMode === 'navigating';
+      const g = getCenterCoords();
+      const offline = isOfflineReady();
+
+      const cap = document.getElementById('mobile-mode-caption');
+      cap.textContent = isNav ? 'Navigating Mode (Max Map)' : 'Planning Mode (Search + 4-Tab Bar)';
+      cap.className = `text-xs font-semibold ${isNav ? 'text-sky-500' : 'text-emerald-500'}`;
+
+      document.getElementById('mobile-status-bar').className = `h-8 px-6 flex items-center justify-between text-xs font-semibold shrink-0 z-30 ${t.statusBg}`;
+      document.getElementById('mobile-home-bar').className = `h-4 flex items-center justify-center shrink-0 z-40 ${t.homeBg}`;
+
+      document.getElementById('mobile-search-pill').className = `relative flex items-center gap-2 rounded-full px-3.5 py-2 border shadow-xl pointer-events-auto ${t.panel}`;
+      document.getElementById('mobile-search-input').className = `w-full bg-transparent text-sm focus:outline-none ${t.input}`;
+
+      const statusChip = document.getElementById('mobile-status-chip');
+      statusChip.className = `px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 shrink-0 ${offline ? 'bg-emerald-500/15 text-emerald-600' : 'bg-sky-500/15 text-sky-600'}`;
+      statusChip.innerHTML = `<span class="w-2 h-2 rounded-full ${offline ? 'bg-emerald-500' : 'bg-sky-500'}"></span><span>${offline ? 'אופליין' : 'מקוון'}</span>`;
+
+      // Floating Controls
+      const layersActive = isNav ? state.mobileNavOverlay === 'layers' : state.mobilePlanningOverlay === 'layers';
+      const addPoiActive = isNav ? state.mobileNavOverlay === 'add-poi' : state.mobilePlanningOverlay === 'add-poi';
+      document.getElementById('mobile-btn-layers').className = `w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${layersActive ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn}`;
+      document.getElementById('mobile-btn-3d').className = `w-10 h-10 rounded-full border shadow-lg text-xs font-bold flex items-center justify-center transition-all ${state.visibility.terrain3d ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn}`;
+      document.getElementById('mobile-btn-crosshair').className = `w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${(state.showCenterCrosshair || addPoiActive) ? 'bg-amber-600 border-amber-400 text-white' : t.pillBtn}`;
+      document.getElementById('mobile-btn-addpoi').className = `w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${addPoiActive ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn}`;
+
+      const compassBtn = document.getElementById('mobile-btn-compass');
+      compassBtn.className = `${Math.abs(state.bearing) > 2 ? 'flex' : 'hidden'} w-10 h-10 rounded-full border shadow-lg items-center justify-center transition-all ${t.pillBtn}`;
+      document.getElementById('mobile-compass-svg').style.transform = `rotate(${-state.bearing}deg)`;
+
+      const mCross = document.getElementById('mobile-crosshair');
+      const showMobCross = state.showCenterCrosshair || addPoiActive;
+      mCross.className = `${showMobCross ? 'flex' : 'hidden'} pointer-events-none absolute inset-0 items-center justify-center z-10`;
+
+      const mTopChrome = document.getElementById('mobile-top-chrome');
+      const mNavTop = document.getElementById('mobile-nav-top-banner');
+      const mTopControls = document.getElementById('mobile-top-left-controls');
+      const mHudPill = document.getElementById('mobile-hud-pill');
+      const sheet = document.getElementById('mobile-bottom-sheet');
+      const nav = document.getElementById('mobile-bottom-nav');
+
+      if (isNav) {
+        mTopChrome.classList.add('hidden');
+        nav.className = 'hidden';
+        mHudPill.classList.add('hidden');
+        mTopControls.className = 'absolute left-3 top-20 z-20 flex flex-col gap-2 pointer-events-auto';
+        mNavTop.classList.remove('hidden');
+
+        if (state.isNavigatingRoute) {
+          const route = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+          const isOff = state.offRouteWarning !== null;
+          mNavTop.innerHTML = `
+            <div class="p-2.5 rounded-2xl shadow-2xl flex items-center justify-between gap-2 text-xs font-bold backdrop-blur-md ${isOff ? 'bg-red-600/95 text-white animate-pulse' : 'bg-emerald-600/95 text-white'}">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="shrink-0">${isOff ? '⚠️' : '🧭'}</span>
+                <div class="min-w-0">
+                  <div class="truncate">${isOff ? `סטייה מציר • ${state.offRouteWarning} מטרים` : route.name}</div>
+                  <div class="font-normal opacity-90 truncate">${isOff ? 'חזור לכיוון הציר המתוכנן' : 'נותרו 6.8 ק״מ • במעקב GPS'}</div>
+                </div>
+              </div>
+              <button onclick="setMobileDisplayMode('planning')" class="px-2.5 py-1.5 rounded-xl bg-slate-950/35 text-white text-xs font-bold shrink-0">תכנון</button>
+            </div>
+          `;
+        } else {
+          mNavTop.innerHTML = `
+            <div class="flex items-center justify-between gap-2">
+              <div class="px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-2 ${t.panel}">
+                <span class="w-2.5 h-2.5 rounded-full ${state.isRecordingTrack && !state.isRecordingPaused ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}"></span>
+                <span class="tabular-nums">${state.isRecordingTrack ? `מקליט <span id="m-nav-rec-timer">${formatDuration(state.recordElapsedSeconds)}</span>` : 'מצב ניווט • GPS'}</span>
+              </div>
+              <button onclick="setMobileDisplayMode('planning')" class="px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-1.5 ${t.panel}">
+                <span>🗺️</span><span>תכנון וחיפוש</span>
+              </button>
+            </div>
+          `;
+        }
+
+        if (state.mobileNavOverlay === 'layers') {
+          sheet.className = `relative z-30 border-t shadow-2xl shrink-0 max-h-[340px] overflow-y-auto ${t.panel}`;
+          sheet.innerHTML = renderLayersContent('closeNavOverlay()');
+        } else if (state.mobileNavOverlay === 'add-poi') {
+          sheet.className = `relative z-30 border-t shadow-2xl shrink-0 max-h-[340px] overflow-y-auto ${t.panel}`;
+          sheet.innerHTML = renderAddPoiContent('closeNavOverlay()');
+        } else if (state.mobileNavOverlay === 'poi-mini') {
+          const poi = POIS.find(p => p.id === state.selectedPoiId) || POIS[0];
+          const meta = POI_CATEGORY_META[poi.category] || POI_CATEGORY_META.heritage;
+          const mil = toMilitaryCoords(poi.lon, poi.lat);
+          sheet.className = `relative z-30 border-t shadow-2xl shrink-0 ${t.panel}`;
+          sheet.innerHTML = `
+            <div dir="rtl" class="px-4 py-3 flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold truncate"><span>${meta.emoji}</span><span class="truncate">${poi.nameHe}</span></div>
+                <div class="text-xs font-mono ${t.muted}">${poi.ele}m • ${poi.distKm.toFixed(1)} ק״מ • נ.צ. <span dir="ltr">${mil.idfGrid8Digit}</span></div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button onclick="openPoiInPlanning('${poi.id}')" class="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold">פרטים</button>
+                <button onclick="closeNavOverlay()" class="p-1.5 rounded-xl border text-xs font-bold ${t.pillBtn}">✕</button>
+              </div>
+            </div>
+          `;
+        } else {
+          sheet.className = `relative z-30 border-t shadow-2xl shrink-0 ${t.panel}`;
+          sheet.innerHTML = `
+            <div class="px-3.5 py-2.5 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-3 text-xs font-mono">
+                <div><span class="block font-sans ${t.muted}">גובה</span><span class="font-bold text-emerald-500 text-sm">${g.ele}m</span></div>
+                <div class="h-6 w-px bg-current opacity-15"></div>
+                <div><span class="block font-sans ${t.muted}">${state.isNavigatingRoute ? 'נותר' : 'הוקלט'}</span><span class="font-bold text-sm">${state.isNavigatingRoute ? '6.8 km' : state.recordedDistanceKm.toFixed(1) + ' km'}</span></div>
+                <div class="h-6 w-px bg-current opacity-15"></div>
+                <div><span class="block font-sans ${t.muted}">נ.צ.</span><button onclick="copyText('${g.idfGrid8Digit}')" dir="ltr" class="font-bold text-amber-500">${g.idfGrid8Digit}</button></div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button onclick="toggleNavRecQuick()" class="px-2.5 py-1.5 rounded-xl border text-xs font-bold ${t.pillBtn}">${state.isRecordingTrack && !state.isRecordingPaused ? '⏸' : '▶'}</button>
+                <button onclick="${state.isNavigatingRoute ? 'stopRouteNavigation()' : "setMobileDisplayMode('planning')"}" class="px-3 py-1.5 rounded-xl text-xs font-bold text-white ${state.isNavigatingRoute ? 'bg-red-600' : 'bg-emerald-600'}">${state.isNavigatingRoute ? 'סיום' : 'תכנון'}</button>
+              </div>
+            </div>
+          `;
+        }
+        return;
+      }
+
+      // Planning Mode
+      mTopChrome.classList.remove('hidden');
+      mNavTop.classList.add('hidden');
+      mHudPill.classList.remove('hidden');
+      mTopControls.className = 'absolute left-3 top-[4.5rem] z-20 flex flex-col gap-2 pointer-events-auto';
+      nav.className = `h-16 border-t px-2 flex items-center justify-around shrink-0 z-40 ${t.navBar}`;
+
+      sheet.className = `relative z-30 rounded-t-3xl border-t shadow-2xl shrink-0 ${t.panel}`;
+      const handleHtml = `<div onclick="toggleMobileSheetExpand()" class="w-full pt-2 pb-1 flex justify-center cursor-pointer"><div class="w-10 h-1 rounded-full bg-slate-400/50"></div></div>`;
+
+      if (state.mobilePlanningOverlay === 'poi') {
+        sheet.innerHTML = handleHtml + `<div class="max-h-[300px] overflow-y-auto">${renderPoiInspectorContent(true)}</div>`;
+      } else if (state.mobilePlanningOverlay === 'layers') {
+        sheet.innerHTML = handleHtml + `<div class="max-h-[300px] overflow-y-auto">${renderLayersContent('closeMobileOverlay()')}</div>`;
+      } else if (state.mobilePlanningOverlay === 'add-poi') {
+        sheet.innerHTML = handleHtml + `<div class="max-h-[300px] overflow-y-auto">${renderAddPoiContent('closeMobileOverlay()')}</div>`;
+      } else if (state.mobileTab === 'routes') {
+        sheet.innerHTML = handleHtml + `<div class="max-h-[300px] overflow-y-auto">${renderRoutesContent(true)}</div>`;
+      } else if (state.mobileTab === 'record') {
+        sheet.innerHTML = handleHtml + `<div class="max-h-[300px] overflow-y-auto">${renderRecordContent(true)}</div>`;
+      } else if (state.mobileTab === 'offline') {
+        sheet.innerHTML = handleHtml + `<div class="p-4 max-h-[300px] overflow-y-auto">${renderStorageModalContent("setMobileTab('explore')")}</div>`;
+      } else {
+        const visiblePois = POIS.filter(p => isPoiVisible(p.category));
+        sheet.innerHTML = handleHtml + `
+          <div class="px-4 pb-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <button onclick="toggleMobileSheetExpand()" class="text-xs font-bold">בקרבתך במפה (${visiblePois.length})</button>
+              <button onclick="setMobileDisplayMode('navigating')" class="px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                <span>🧭</span><span>מצב ניווט (מפה נקייה)</span>
+              </button>
+            </div>
+            ${state.mobileSheetExpanded ? `
+              <div class="flex gap-2 overflow-x-auto no-scrollbar pb-0.5">
+                ${visiblePois.map(p => {
+                  const meta = POI_CATEGORY_META[p.category] || POI_CATEGORY_META.heritage;
+                  return `
+                    <button onclick="selectPoi('${p.id}')" class="shrink-0 w-44 text-right p-2.5 rounded-2xl border hover:border-emerald-500 transition-all space-y-1 ${t.subCard}">
+                      <div class="flex items-center justify-between text-xs"><span>${meta.emoji}</span><span class="font-mono ${t.muted}">${p.distKm.toFixed(1)} ק״מ</span></div>
+                      <div class="text-xs font-bold truncate">${p.nameHe}</div>
+                      <div class="text-xs font-mono ${t.muted}">גובה ${p.ele}m</div>
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+
+      const tabs = [
+        { id: 'explore', label: 'מפה', icon: '🗺️' },
+        { id: 'routes', label: 'מסלולים', icon: '〰️' },
+        { id: 'record', label: 'הקלטה', icon: '⏺' },
+        { id: 'offline', label: 'אופליין', icon: '💾' }
+      ];
+      nav.innerHTML = tabs.map(tab => {
+        const active = state.mobileTab === tab.id && !state.mobilePlanningOverlay;
+        return `
+          <button onclick="setMobileTab('${tab.id}')" class="flex-1 h-full flex flex-col items-center justify-center gap-0.5 text-xs font-bold transition-colors ${active ? 'text-emerald-500' : ''}">
+            <span class="text-sm">${tab.icon}</span>
+            <span>${tab.label}</span>
+          </button>
+        `;
+      }).join('');
+
+      updateHudPillsOnly();
+    }
+
+    function updateHudPillsOnly() {
+      const t = getSurfaceTheme();
+      const g = getCenterCoords();
+
+      const webHud = document.getElementById('web-hud-pill');
+      webHud.className = `absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full border text-xs font-mono flex items-center gap-3 pointer-events-auto transition-colors shadow-xl ${t.panel}`;
+      webHud.onclick = () => copyText(g.idfGrid8Digit);
+      webHud.innerHTML = `
+        <span class="text-emerald-500 font-bold">גובה: ${g.ele}m</span>
+        <span class="opacity-30">|</span>
+        <span class="text-amber-500 font-bold">נ.צ. <span dir="ltr">${g.idfGrid8Digit}</span></span>
+        <span class="opacity-30 hidden lg:inline">|</span>
+        <span class="hidden lg:inline ${t.muted}">ITM: <span dir="ltr">${g.itmFormatted}</span></span>
+        <span class="opacity-30 hidden xl:inline">|</span>
+        <span class="hidden xl:inline ${t.muted}">UTM: <span dir="ltr">${g.utmFormatted}</span></span>
+        <span class="opacity-30">|</span>
+        <span class="${t.muted}" dir="ltr">z${state.zoom.toFixed(1)}</span>
+      `;
+
+      const mobHud = document.getElementById('mobile-hud-pill');
+      mobHud.className = `absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-full border shadow-lg text-xs font-mono pointer-events-auto ${t.panel}`;
+      mobHud.onclick = () => copyText(g.idfGrid8Digit);
+      mobHud.innerHTML = `<span class="text-emerald-500 font-bold">${g.ele}m</span> • <span class="text-amber-500 font-bold">נ.צ. <span dir="ltr">${g.idfGrid8Digit}</span></span>`;
+    }
+
+    function renderSearchDropdown() {
+      const t = getSurfaceTheme();
+      const q = state.searchQuery.trim().toLowerCase();
+      const matches = POIS.filter(p => !q || p.nameHe.toLowerCase().includes(q) || p.nameEn.toLowerCase().includes(q) || p.descHe.toLowerCase().includes(q));
+
+      document.getElementById('web-search-clear').classList.toggle('hidden', state.searchQuery.length === 0);
+      document.getElementById('mobile-search-clear').classList.toggle('hidden', state.searchQuery.length === 0);
+
+      ['web-search-dropdown', 'mobile-search-dropdown'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!state.searchOpen && !q) { el.classList.add('hidden'); return; }
+        el.className = `absolute top-full left-0 right-0 mt-2 rounded-2xl border overflow-hidden max-h-64 overflow-y-auto z-50 shadow-2xl ${t.panel}`;
+        el.innerHTML = matches.length === 0
+          ? `<div class="p-3 text-xs text-center ${t.muted}">לא נמצאו תוצאות באופליין עבור "${state.searchQuery}"</div>`
+          : matches.map(item => {
+              const meta = POI_CATEGORY_META[item.category] || POI_CATEGORY_META.heritage;
+              return `
+                <button onclick="selectPoiFromSearch('${item.id}')" class="w-full text-right px-3.5 py-2.5 border-b flex items-center justify-between gap-2 transition-colors ${t.divider} ${t.hoverRow}">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="shrink-0">${meta.emoji}</span>
+                    <div class="min-w-0">
+                      <div class="text-xs font-bold truncate" dir="auto">${item.nameHe}</div>
+                      <div class="text-xs truncate ${t.muted}" dir="auto">${item.descHe}</div>
+                    </div>
+                  </div>
+                  <span class="text-xs font-mono font-bold text-emerald-500 shrink-0">${item.ele}m</span>
+                </button>
+              `;
+            }).join('');
+      });
+    }
+
+    // =========================================================================
+    // ACTIONS
+    // =========================================================================
+    function setViewMode(mode) {
+      state.viewMode = mode;
+      const webW = document.getElementById('web-wrapper');
+      const mobW = document.getElementById('mobile-wrapper');
+      const grid = document.getElementById('stage-grid');
+      if (mode === 'split') {
+        grid.className = 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start';
+        webW.className = 'xl:col-span-8 flex flex-col gap-2';
+        mobW.className = 'xl:col-span-4 flex flex-col items-center gap-2';
+      } else if (mode === 'web') {
+        grid.className = 'grid grid-cols-1 gap-5';
+        webW.className = 'max-w-6xl w-full mx-auto flex flex-col gap-2';
+        mobW.className = 'hidden';
+      } else {
+        grid.className = 'grid grid-cols-1 gap-5';
+        webW.className = 'hidden';
+        mobW.className = 'flex flex-col items-center gap-2';
+      }
+      ['split', 'web', 'mobile'].forEach(m => {
+        document.getElementById('vm-' + m).className = `px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${state.viewMode === m ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow' : 'text-[var(--muted-foreground)]'}`;
+      });
+      setTimeout(renderAllMaps, 30);
+    }
+
+    function setScenario(sc) {
+      state.scenario = sc;
+      state.searchOpen = false;
+      state.isStorageOpen = false;
+      state.isLayerSheetOpen = false;
+      state.mobilePlanningOverlay = null;
+      state.mobileNavOverlay = null;
+
+      if (sc === 'explore') {
+        state.desktopDrawer = null;
+        state.isNavigatingRoute = false;
+        state.mobileDisplayMode = 'planning';
+        state.mobileTab = 'explore';
+      } else if (sc === 'poi') {
+        state.desktopDrawer = 'poi';
+        state.mobileDisplayMode = 'planning';
+        state.mobileTab = 'explore';
+        state.mobilePlanningOverlay = 'poi';
+        state.mobileSheetExpanded = true;
+      } else if (sc === 'route') {
+        state.desktopDrawer = 'routes';
+        state.isNavigatingRoute = false;
+        state.mobileDisplayMode = 'planning';
+        state.mobileTab = 'routes';
+      } else if (sc === 'nav') {
+        state.desktopDrawer = 'routes';
+        state.isNavigatingRoute = true;
+        state.offRouteWarning = 78;
+        state.mobileDisplayMode = 'navigating';
+      } else if (sc === 'record') {
+        state.desktopDrawer = 'record';
+        state.isRecordingTrack = true;
+        state.isRecordingPaused = false;
+        state.mobileDisplayMode = 'planning';
+        state.mobileTab = 'record';
+      } else if (sc === 'layers') {
+        state.desktopDrawer = null;
+        state.isLayerSheetOpen = true;
+        state.mobileDisplayMode = 'planning';
+        state.mobilePlanningOverlay = 'layers';
+      } else if (sc === 'offline') {
+        state.desktopDrawer = null;
+        state.isStorageOpen = true;
+        state.mobileDisplayMode = 'planning';
+        state.mobileTab = 'offline';
+      } else if (sc === 'add-poi') {
+        state.desktopDrawer = 'add-poi';
+        state.mobileDisplayMode = 'planning';
+        state.mobilePlanningOverlay = 'add-poi';
+      }
+      renderAll();
+    }
+
+    function toggleDesktopDrawer(mode) {
+      state.isStorageOpen = false;
+      state.isLayerSheetOpen = false;
+      state.desktopDrawer = state.desktopDrawer === mode ? null : mode;
+      renderAll();
+    }
+    function closeDesktopDrawer() { state.desktopDrawer = null; renderAll(); }
+    function toggleWebLayers() { state.isLayerSheetOpen = !state.isLayerSheetOpen; renderAll(); }
+    function openOfflineModal() { state.isStorageOpen = true; state.isLayerSheetOpen = false; renderAll(); }
+    function closeOfflineModal() { state.isStorageOpen = false; renderAll(); }
+
+    function setMobileDisplayMode(mode) {
+      state.mobileDisplayMode = mode;
+      state.mobileNavOverlay = null;
+      if (mode === 'planning' && state.isNavigatingRoute) state.mobileTab = 'routes';
+      renderAll();
+    }
+    function setMobileTab(tab) {
+      state.mobileDisplayMode = 'planning';
+      state.mobileTab = tab;
+      state.mobilePlanningOverlay = null;
+      renderAll();
+    }
+    function closeMobileOverlay() { state.mobilePlanningOverlay = null; renderAll(); }
+    function closeNavOverlay() { state.mobileNavOverlay = null; renderAll(); }
+    function toggleMobileSheetExpand() { state.mobileSheetExpanded = !state.mobileSheetExpanded; renderMobileUI(); }
+    function toggleMobileLayers() {
+      if (state.mobileDisplayMode === 'navigating') {
+        state.mobileNavOverlay = state.mobileNavOverlay === 'layers' ? null : 'layers';
+      } else {
+        state.mobilePlanningOverlay = state.mobilePlanningOverlay === 'layers' ? null : 'layers';
+      }
+      renderAll();
+    }
+    function openMobileAddPoi() {
+      if (state.mobileDisplayMode === 'navigating') {
+        state.mobileNavOverlay = state.mobileNavOverlay === 'add-poi' ? null : 'add-poi';
+      } else {
+        state.mobilePlanningOverlay = state.mobilePlanningOverlay === 'add-poi' ? null : 'add-poi';
+      }
+      renderAll();
+    }
+    function openPoiInPlanning(id) {
+      state.selectedPoiId = id;
+      state.mobileNavOverlay = null;
+      state.mobileDisplayMode = 'planning';
+      state.mobileTab = 'explore';
+      state.mobilePlanningOverlay = 'poi';
+      state.mobileSheetExpanded = true;
+      renderAll();
+    }
+
+    function toggleMapTheme() {
+      setMapTheme(state.theme === 'topo-day' ? 'topo-dark' : 'topo-day');
+    }
+    function setMapTheme(theme) {
+      state.theme = theme;
+      document.getElementById('theme-toggle-label').textContent = theme === 'topo-day' ? '☀️ Topo Day (1:50k)' : '🌙 Tactical Dark Ops';
+      renderAll();
+    }
+    function toggle3D() {
+      state.visibility.terrain3d = !state.visibility.terrain3d;
+      renderAll();
+    }
+    function resetNorth() { state.bearing = 0; renderAll(); }
+    function toggleCrosshair() { state.showCenterCrosshair = !state.showCenterCrosshair; renderAll(); }
+    function adjustZoom(delta) {
+      state.zoom = Math.max(9.0, Math.min(16.0, Number((state.zoom + delta).toFixed(1))));
+      renderAllMaps(); updateHudPillsOnly();
+    }
+    function recenterGps() {
+      state.panX = 0; state.panY = 0; state.zoom = 13.4;
+      renderAllMaps(); updateHudPillsOnly();
+      showToast('ממרכז מפה למיקום GPS הנוכחי');
+    }
+
+    function toggleLayer(key) { state.visibility[key] = !state.visibility[key]; renderAll(); }
+    function togglePoiAccordion() { state.showPoiSubCategories = !state.showPoiSubCategories; renderAll(); }
+    function toggleMasterPoi() {
+      const keys = ['poiWater', 'poiOffroad', 'poiHeritage', 'poiCampsites', 'poiPeaks', 'poiUser'];
+      if (isMasterPoiActive()) state.visibility.pois = false;
+      else if (activePoiCatCount() === 0) { state.visibility.pois = true; keys.forEach(k => state.visibility[k] = true); }
+      else state.visibility.pois = true;
+      renderAll();
+    }
+    function enableAllPoi() {
+      state.visibility.pois = true;
+      ['poiWater', 'poiOffroad', 'poiHeritage', 'poiCampsites', 'poiPeaks', 'poiUser'].forEach(k => state.visibility[k] = true);
+      renderAll();
+    }
+    function togglePoiCategory(key) {
+      const keys = ['poiWater', 'poiOffroad', 'poiHeritage', 'poiCampsites', 'poiPeaks', 'poiUser'];
+      if (!state.visibility.pois) {
+        state.visibility.pois = true;
+        keys.forEach(k => state.visibility[k] = (k === key));
+      } else {
+        state.visibility[key] = !state.visibility[key];
+        state.visibility.pois = keys.some(k => state.visibility[k]);
+      }
+      renderAll();
+    }
+
+    function selectPoi(id) {
+      state.selectedPoiId = id;
+      state.desktopDrawer = 'poi';
+      state.mobilePlanningOverlay = 'poi';
+      state.mobileSheetExpanded = true;
+      renderAll();
+    }
+    function selectPoiFromSearch(id) {
+      state.searchOpen = false;
+      state.searchQuery = '';
+      document.getElementById('web-search-input').value = '';
+      document.getElementById('mobile-search-input').value = '';
+      flyToPoi(id);
+      selectPoi(id);
+    }
+    function flyToPoi(id) {
+      const poi = POIS.find(p => p.id === id);
+      if (!poi) return;
+      state.panX = (0.5 - poi.mapX) * 260;
+      state.panY = (0.5 - poi.mapY) * 220;
+      state.zoom = 14.0;
+      renderAllMaps(); updateHudPillsOnly();
+    }
+    function navigateToPoi(id) {
+      flyToPoi(id);
+      const poi = POIS.find(p => p.id === id);
+      if (poi) showToast(`מכוון אל ${poi.nameHe} (${poi.ele}m)`);
+      state.mobileDisplayMode = 'navigating';
+      state.mobileNavOverlay = 'poi-mini';
+      renderAll();
+    }
+    function savePoiNote(id, inputId) {
+      const poi = POIS.find(p => p.id === id);
+      const val = document.getElementById(inputId)?.value || '';
+      if (poi) {
+        poi.userNotes = val;
+        showToast('הערת השטח נשמרה בזיכרון המקומי (IndexedDB)');
+      }
+    }
+
+    function handleSearchInput(val) {
+      state.searchQuery = val;
+      state.searchOpen = true;
+      document.getElementById('web-search-input').value = val;
+      document.getElementById('mobile-search-input').value = val;
+      renderSearchDropdown();
+    }
+    function openSearchDropdown(open) { state.searchOpen = open; renderSearchDropdown(); }
+    function clearSearch() {
+      state.searchQuery = ''; state.searchOpen = false;
+      document.getElementById('web-search-input').value = '';
+      document.getElementById('mobile-search-input').value = '';
+      renderSearchDropdown();
+    }
+
+    // Routes & Elevation Chart interactions
+    function toggleRoutesMenu() { state.isRoutesMenuOpen = !state.isRoutesMenuOpen; state.isPointsMenuOpen = false; renderAll(); }
+    function togglePointsMenu() { state.isPointsMenuOpen = !state.isPointsMenuOpen; state.isRoutesMenuOpen = false; renderAll(); }
+    function selectRoute(id) {
+      state.activeRouteId = id; state.isRoutesMenuOpen = false; state.isPointsMenuOpen = false;
+      state.hoverChartIdx = null; state.pinnedChartIdx = null;
+      renderAll();
+    }
+    function fitAllRoutes() {
+      state.panX = 0; state.panY = 0; state.zoom = 12.2;
+      renderAllMaps(); updateHudPillsOnly();
+      showToast('מציג את כל המסלולים במפה');
+    }
+    function updateElevationChartsOnly() {
+      const route = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+      ['w', 'm'].forEach(prefix => {
+        const vis = document.getElementById(`${prefix}-ele-visual`);
+        const foot = document.getElementById(`${prefix}-ele-footer`);
+        if (vis || foot) {
+          const { visualHtml, footerHtml } = renderElevationChartInner(route, prefix);
+          if (vis) vis.innerHTML = visualHtml;
+          if (foot) foot.innerHTML = footerHtml;
+        }
+      });
+      renderAllMaps();
+    }
+    function selectRouteWaypoint(idx) {
+      state.isPointsMenuOpen = false;
+      state.pinnedChartIdx = idx;
+      state.hoverChartIdx = idx;
+      renderAll();
+    }
+    function scrubElevationChart(e, el) {
+      if (!e || !el) return;
+      const route = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const idx = Math.min(route.elevationProfile.length - 1, Math.round(ratio * (route.elevationProfile.length - 1)));
+      if (state.hoverChartIdx !== idx) {
+        state.hoverChartIdx = idx;
+        updateElevationChartsOnly();
+      }
+    }
+    function pinElevationChart(e, el) {
+      if (!e || !el) return;
+      const route = ROUTES.find(r => r.id === state.activeRouteId) || ROUTES[0];
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const idx = Math.min(route.elevationProfile.length - 1, Math.round(ratio * (route.elevationProfile.length - 1)));
+      state.pinnedChartIdx = idx;
+      state.hoverChartIdx = idx;
+      updateElevationChartsOnly();
+    }
+    function leaveElevationChart() {
+      if (state.hoverChartIdx !== null) {
+        state.hoverChartIdx = null;
+        updateElevationChartsOnly();
+      }
+    }
+    function unlockPinnedChart() {
+      state.pinnedChartIdx = null;
+      state.hoverChartIdx = null;
+      updateElevationChartsOnly();
+    }
+    function startRouteNavigation() {
+      state.isNavigatingRoute = true;
+      state.offRouteWarning = null;
+      state.mobileDisplayMode = 'navigating';
+      state.mobileNavOverlay = null;
+      renderAll();
+      showToast('ניווט פעיל במסלול');
+    }
+    function stopRouteNavigation() {
+      state.isNavigatingRoute = false;
+      state.offRouteWarning = null;
+      state.mobileDisplayMode = 'planning';
+      state.mobileTab = 'explore';
+      renderAll();
+      showToast('הניווט במסלול הופסק');
+    }
+    function toggleOffRouteSim() {
+      state.offRouteWarning = state.offRouteWarning !== null ? null : 78;
+      renderAll();
+    }
+
+    // Recording & Add POI & Storage
+    function startOrResumeRecording() { state.isRecordingTrack = true; state.isRecordingPaused = false; renderAll(); showToast('הקלטת מסלול GPS החלה'); }
+    function toggleRecordPause() { state.isRecordingPaused = !state.isRecordingPaused; renderAll(); }
+    function toggleNavRecQuick() {
+      if (!state.isRecordingTrack || state.isRecordingPaused) startOrResumeRecording();
+      else { state.isRecordingPaused = true; renderAll(); }
+    }
+    function saveRecordedTrack() {
+      state.isRecordingTrack = false; state.isRecordingPaused = false;
+      state.desktopDrawer = 'routes'; state.mobileTab = 'routes'; state.mobileDisplayMode = 'planning';
+      renderAll(); showToast('המסלול נשמר למכשיר!');
+    }
+    function discardRecordedTrack() { state.isRecordingTrack = false; state.isRecordingPaused = false; renderAll(); showToast('ההקלטה בוטלה'); }
+
+    function setDraftCat(cat) { state.newPoiDraft.category = cat; renderAll(); }
+    function submitNewPoi() {
+      const nameHe = state.newPoiDraft.nameHe.trim() || 'נקודת שטח חדשה';
+      const g = getCenterCoords();
+      const id = 'custom-' + Date.now();
+      POIS.unshift({
+        id,
+        nameHe,
+        nameEn: 'User Field Report',
+        category: state.newPoiDraft.category,
+        lon: g.lon, lat: g.lat, ele: g.ele, distKm: 0.1,
+        mapX: Math.max(0.15, Math.min(0.85, 0.5 - state.panX / 260)),
+        mapY: Math.max(0.15, Math.min(0.85, 0.5 - state.panY / 220)),
+        waterStatus: null, difficulty4x4: null,
+        descHe: state.newPoiDraft.descHe.trim() || 'נקודת עניין שדווחה בשטח (אופליין)',
+        source: 'דיווח משתמש', wikipedia: null, userNotes: ''
+      });
+      state.newPoiDraft = { category: 'water', nameHe: '', descHe: '' };
+      state.selectedPoiId = id;
+      state.desktopDrawer = 'poi';
+      if (state.mobileDisplayMode === 'navigating') state.mobileNavOverlay = 'poi-mini';
+      else state.mobilePlanningOverlay = 'poi';
+      renderAll();
+      showToast(`הנקודה "${nameHe}" נשמרה במפה!`);
+    }
+
+    function toggleArchiveOffline(id, local) {
+      state.archives[id].local = local;
+      renderAll();
+      showToast(local ? `✓ קובץ ${id.toUpperCase()} שמור אופליין ב-OPFS` : `העותק המקומי של ${id.toUpperCase()} נמחק — חזר להזרמת ענן`);
+    }
+    function toggleAdvancedStorage() { state.showAdvancedStorage = !state.showAdvancedStorage; renderAll(); }
+
+    function updateStudioButtons() {
+      document.querySelectorAll('.sc-btn').forEach(btn => {
+        const active = btn.getAttribute('data-sc') === state.scenario;
+        btn.className = `sc-btn px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${active ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-transparent shadow-sm' : 'bg-[var(--content)] text-[var(--foreground)] border-[var(--border)] hover:border-[var(--primary)]'}`;
+      });
+      ['planning', 'navigating'].forEach(m => {
+        document.getElementById('mdm-' + m).className = `px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${state.mobileDisplayMode === m ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow' : 'text-[var(--muted-foreground)]'}`;
+      });
+    }
+
+    function renderAll() {
+      updateStudioButtons();
+      renderWebUI();
+      renderMobileUI();
+      renderSearchDropdown();
+      renderAllMaps();
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#web-search-pill') && !e.target.closest('#mobile-search-pill')) {
+        if (state.searchOpen) { state.searchOpen = false; renderSearchDropdown(); }
+      }
+    });
+
+    setInterval(() => {
+      if (state.isRecordingTrack && !state.isRecordingPaused) {
+        state.recordElapsedSeconds += 1;
+        if (state.recordElapsedSeconds % 4 === 0) state.recordedDistanceKm = Number((state.recordedDistanceKm + 0.01).toFixed(2));
+        const dur = formatDuration(state.recordElapsedSeconds);
+        const wt = document.getElementById('w-rec-timer');
+        const mt = document.getElementById('m-rec-timer');
+        const nt = document.getElementById('m-nav-rec-timer');
+        const pill = document.getElementById('web-rec-pill-label');
+        if (wt) wt.textContent = dur;
+        if (mt) mt.textContent = dur;
+        if (nt) nt.textContent = dur;
+        if (pill) pill.textContent = dur;
+      }
+    }, 1000);
+
+    window.addEventListener('resize', renderAllMaps);
+    attachCanvasEvents('web-map-canvas');
+    attachCanvasEvents('mobile-map-canvas');
+    setViewMode('split');
+    renderAll();
+  </script>
+</body>
+</html>
