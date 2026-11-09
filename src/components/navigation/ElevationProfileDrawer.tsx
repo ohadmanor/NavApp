@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as turf from '@turf/turf';
 import {
   TrendingUp,
@@ -13,9 +13,14 @@ import {
   MapPin,
   Maximize2,
   Check,
+  Plus,
 } from 'lucide-react';
 import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
 import { RouteManager } from '../../core/navigation/RouteManager';
+import {
+  PLANNING_MODE_META,
+  PLANNING_ROUTE_COLOR,
+} from '../../core/routing/RoutingProfiles';
 import { MilitaryGridService } from '../../core/navigation/MilitaryGridService';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from '../ui/themeTokens';
 
@@ -44,6 +49,7 @@ interface ElevationProfileDrawerProps {
   onStartNavigation?: (route: SavedRouteRecord) => void;
   onStopNavigation?: () => void;
   onOpenImporter?: () => void;
+  onOpenRoutePlanner?: () => void;
   onDeleteRoute?: (routeId: string) => void;
   onClose: () => void;
   onHoverPoint: (pt: { lon: number; lat: number; ele: number; distKm: number } | null) => void;
@@ -63,6 +69,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   onStartNavigation,
   onStopNavigation,
   onOpenImporter,
+  onOpenRoutePlanner,
   onDeleteRoute,
   onClose,
   onHoverPoint,
@@ -77,8 +84,21 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   const [isPointsMenuOpen, setIsPointsMenuOpen] = useState(false);
   const t = getSurfaceTheme(theme);
 
-  const getDisplayColor = (r: SavedRouteRecord | null) =>
-    !r?.color || r.color === '#10b981' ? '#ec4899' : r.color;
+  useEffect(() => {
+    setHoveredIdx(null);
+    setPinnedIdx(null);
+  }, [route?.id]);
+
+  const getDisplayColor = (r: SavedRouteRecord | null) => {
+    if (!r?.color || r.color === '#10b981') return '#ec4899';
+    if (
+      r.sourceFormat === 'planned' &&
+      (r.color === '#f97316' || r.color === '#ec4899' || r.color === '#06b6d4')
+    ) {
+      return PLANNING_ROUTE_COLOR;
+    }
+    return r.color;
+  };
 
   const routePoints = useMemo<RoutePointOption[]>(() => {
     if (!route || route.elevationProfile.length === 0) return [];
@@ -313,7 +333,9 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               style={{ left: `${tooltipLeftPct}%` }}
               className={`absolute top-0.5 -translate-x-1/2 z-20 pointer-events-none px-2.5 py-1 rounded-xl border shadow-xl backdrop-blur-md whitespace-nowrap text-xs flex items-center gap-2 ${t.panelSolid}`}
             >
-              <span className="font-mono font-bold text-pink-500">{activePt.ele}m</span>
+              <span className="font-mono font-bold" style={{ color: strokeColor }}>
+                {activePt.ele}m
+              </span>
               <span className="opacity-30">•</span>
               <span className="font-mono">{activePt.distKm} km</span>
               {gradePct !== null && (
@@ -445,7 +467,8 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                   setHoveredIdx(null);
                   onHoverPoint(null);
                 }}
-                className="text-pink-500 font-bold hover:underline"
+                style={{ color: strokeColor }}
+                className="font-bold hover:underline"
               >
                 שחרר נעילה
               </button>
@@ -558,6 +581,18 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               </button>
             )}
 
+            {onOpenRoutePlanner && (
+              <button
+                type="button"
+                onClick={onOpenRoutePlanner}
+                className="px-2.5 py-2 rounded-xl border border-blue-500/50 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 text-xs font-bold flex items-center gap-1 shrink-0"
+                title="תכנון מסלול חדש על המפה"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>תכנן</span>
+              </button>
+            )}
+
             {onOpenImporter && (
               <button
                 type="button"
@@ -597,7 +632,14 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                         </div>
                         <div className={`font-mono text-[11px] ${t.muted}`}>
                           #{idx + 1} • {r.distanceKm} km • +{r.ascentMeters}m •{' '}
-                          {r.sourceFormat.toUpperCase()}
+                          {r.planningMode
+                            ? PLANNING_MODE_META[r.planningMode]?.shortLabelHe
+                            : r.sourceFormat.toUpperCase()}
+                          {r.cloudSyncStatus === 'synced'
+                            ? ' • ☁️ בענן'
+                            : r.cloudSyncStatus === 'pending'
+                              ? ' • ⏳ ממתין'
+                              : ''}
                         </div>
                       </div>
                     </div>
@@ -613,17 +655,28 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
           <RouteIcon className="w-6 h-6 text-pink-500 mx-auto" />
           <div className="text-xs font-bold">אין מסלולים שמורים כרגע</div>
           <p className={`text-xs ${t.muted}`}>
-            ייבא קובץ GPX, KML או TWL (מעמוד ענן / Off-Road / IHM) או הקלט מסלול בשטח.
+            תכנן מסלול על גבי רשת הדרכים והשבילים או ייבא קובץ GPX, KML או TWL.
           </p>
-          {onOpenImporter && (
-            <button
-              onClick={onOpenImporter}
-              className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
-            >
-              <FileUp className="w-4 h-4" />
-              <span>ייבא מסלול למכשיר</span>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {onOpenRoutePlanner && (
+              <button
+                onClick={onOpenRoutePlanner}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>תכנן מסלול חדש</span>
+              </button>
+            )}
+            {onOpenImporter && (
+              <button
+                onClick={onOpenImporter}
+                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <FileUp className="w-4 h-4" />
+                <span>ייבא מסלול למכשיר</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -744,7 +797,12 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
 
             {onDeleteRoute && (
               <button
-                onClick={() => onDeleteRoute(route.id)}
+                onClick={() => {
+                  setHoveredIdx(null);
+                  setPinnedIdx(null);
+                  onHoverPoint(null);
+                  onDeleteRoute(route.id);
+                }}
                 className={`px-2.5 py-2.5 rounded-xl border text-xs font-bold text-red-500 ${t.pillBtn}`}
                 title="מחק מסלול"
               >

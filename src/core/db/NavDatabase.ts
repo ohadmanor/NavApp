@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie';
+import type { PlanningMode } from '../routing/RoutingProfiles';
 
 export interface MapArchiveRecord {
   id: 'israel-dem' | 'israel-osm';
@@ -37,10 +38,22 @@ export interface PoiRecord {
   updatedAt?: string;
 }
 
+export interface PlannedWaypoint {
+  lon: number;
+  lat: number;
+  ele?: number | null;
+  roadLabel?: string;
+  legType?: 'network' | 'straight';
+}
+
+export type CloudSyncStatus = 'local-only' | 'pending' | 'synced' | 'error';
+
 export interface SavedRouteRecord {
   id: string;
   name: string;
-  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn';
+  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn' | 'planned';
+  planningMode?: PlanningMode;
+  waypoints?: PlannedWaypoint[];
   distanceKm: number;
   ascentMeters: number;
   descentMeters: number;
@@ -50,7 +63,16 @@ export interface SavedRouteRecord {
   visible: boolean;
   geojson: GeoJSON.FeatureCollection;
   elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
+  gpxXml?: string;
+  ownerUid?: string | null;
+  ownerEmail?: string | null;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudStoragePath?: string;
+  cloudJsonPath?: string;
+  cloudDownloadUrl?: string;
+  cloudError?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface RecordedTrackRecord {
@@ -75,6 +97,12 @@ export class NavDatabase extends Dexie {
       mapRegistry: 'id, role, storageKind, createdUtc',
       pois: 'id, category, subcategory, nameHe, nameEn, source',
       routes: 'id, name, visible, createdAt',
+      tracks: 'id, startedAt',
+    });
+    this.version(2).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source',
+      routes: 'id, name, visible, createdAt, ownerUid, cloudSyncStatus, sourceFormat',
       tracks: 'id, startedAt',
     });
   }

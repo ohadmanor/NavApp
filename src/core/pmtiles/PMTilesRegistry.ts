@@ -180,6 +180,9 @@ export class PMTilesRegistry {
     this.attachInMemoryTileCache(defaultOsmPmtiles, 400);
     this.protocol.add(defaultOsmPmtiles);
     (this.protocol as any).tiles?.set('israel-osm', defaultOsmPmtiles);
+    if (!this.archives.has('israel-osm')) {
+      this.archives.set('israel-osm', defaultOsmPmtiles);
+    }
 
     const defaultDemUrl = pmtilesUrl('Israel.dem.pmtiles');
     const demIsRemote =
@@ -193,6 +196,9 @@ export class PMTilesRegistry {
     this.attachInMemoryTileCache(defaultDemPmtiles, 500);
     this.protocol.add(defaultDemPmtiles);
     (this.protocol as any).tiles?.set('israel-dem', defaultDemPmtiles);
+    if (!this.archives.has('israel-dem')) {
+      this.archives.set('israel-dem', defaultDemPmtiles);
+    }
     this.activeDemPmtiles = defaultDemPmtiles;
 
     this.defaultContourProtocolUrl = this.setupDemContours(defaultDemPmtiles, 14);

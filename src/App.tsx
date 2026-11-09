@@ -21,6 +21,9 @@ import {
   Sun,
   Moon,
   X,
+  PenTool,
+  Undo2,
+  Check,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
 import {
@@ -33,20 +36,90 @@ import { PoiManager } from './core/pois/PoiManager';
 import { RouteManager } from './core/navigation/RouteManager';
 import { ElevationService } from './core/navigation/ElevationService';
 import { MilitaryGridService } from './core/navigation/MilitaryGridService';
-import type { PoiRecord, SavedRouteRecord } from './core/db/NavDatabase';
+import {
+  db,
+  type PoiRecord,
+  type SavedRouteRecord,
+  type PlannedWaypoint,
+} from './core/db/NavDatabase';
+import {
+  PLANNING_MODE_META,
+  PLANNING_ROUTE_COLOR,
+  type PlanningMode,
+} from './core/routing/RoutingProfiles';
+import {
+  routePlannerEngine,
+  type SnappedPoint,
+} from './core/routing/ClientRoutePlannerEngine';
+import { AuthService, type NavUser } from './core/firebase/AuthService';
+import { PlannedTracksCloudService } from './core/firebase/PlannedTracksCloudService';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
 import { MapStorageModal } from './components/maps-manager/MapStorageModal';
 import { ElevationProfileDrawer } from './components/navigation/ElevationProfileDrawer';
 import { TrackRecorderPanel, formatDuration } from './components/navigation/TrackRecorderPanel';
+import {
+  RoutePlannerPanel,
+  type PlannedLeg,
+} from './components/navigation/RoutePlannerPanel';
 import { LayerSwitcherSheet } from './components/map/LayerSwitcherSheet';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from './components/ui/themeTokens';
 
-type DesktopDrawerMode = 'poi' | 'routes' | 'record' | 'add-poi' | null;
+type DesktopDrawerMode = 'poi' | 'routes' | 'record' | 'add-poi' | 'plan-route' | null;
 type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
-type MobileOverlayMode = 'poi' | 'layers' | 'add-poi' | null;
+type MobileOverlayMode = 'poi' | 'layers' | 'add-poi' | 'plan-route' | null;
 type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | null;
+
+interface PlanOverlayState {
+  active: boolean;
+  mode: PlanningMode;
+  waypoints: PlannedWaypoint[];
+  legs: PlannedLeg[];
+  previewPoint: SnappedPoint | null;
+  cursorCoord: [number, number] | null;
+  disconnectedCandidate: SnappedPoint | null;
+}
+
+function ensureWaypointBadgeImage(
+  map: maplibregl.Map,
+  label: string,
+  fillColor: string
+): string {
+  const safeColor = fillColor.replace('#', '');
+  const imageId = `plan-wp-${label}-${safeColor}`;
+  if (map.hasImage(imageId) || typeof document === 'undefined') {
+    return imageId;
+  }
+  const size = 34;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, 12.5, 0, Math.PI * 2);
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${label.length >= 2 ? 12 : 14}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, size / 2, size / 2 + 0.5);
+
+    const imgData = ctx.getImageData(0, 0, size, size);
+    map.addImage(imageId, {
+      width: size,
+      height: size,
+      data: new Uint8Array(imgData.data.buffer),
+    });
+  }
+  return imageId;
+}
 
 function useIsMobile(breakpoint = 768): boolean {
   const [isMobile, setIsMobile] = useState<boolean>(() =>
@@ -126,6 +199,23 @@ export const App: React.FC = () => {
   const [recordedAscentMeters, setRecordedAscentMeters] = useState(0);
   const lastRecordedEleRef = useRef<number | null>(null);
 
+  // Route Planning & Firebase User Sync State
+  const [currentUser, setCurrentUser] = useState<NavUser | null>(() => AuthService.getCurrentUser());
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('4x4');
+  const [planRouteName, setPlanRouteName] = useState('');
+  const [planWaypoints, setPlanWaypoints] = useState<PlannedWaypoint[]>([]);
+  const [planLegs, setPlanLegs] = useState<PlannedLeg[]>([]);
+  const [planPreviewPoint, setPlanPreviewPoint] = useState<SnappedPoint | null>(null);
+  const [planCursorCoord, setPlanCursorCoord] = useState<[number, number] | null>(null);
+  const [disconnectedCandidate, setDisconnectedCandidate] = useState<SnappedPoint | null>(null);
+  const [isRoutingLeg, setIsRoutingLeg] = useState(false);
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [planElevStats, setPlanElevStats] = useState<{ ascent: number; descent: number }>({
+    ascent: 0,
+    descent: 0,
+  });
+
   // Banners & Toasts
   const [downloadStatus, setDownloadStatus] = useState<{
     fileName: string;
@@ -135,6 +225,37 @@ export const App: React.FC = () => {
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  const isAddingPoiMode =
+    (!isMobile && desktopDrawer === 'add-poi') ||
+    (isMobile &&
+      ((mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'add-poi') ||
+        (mobileDisplayMode === 'navigating' && mobileNavOverlay === 'add-poi')));
+
+  const isPlanningRouteMode =
+    (!isMobile && desktopDrawer === 'plan-route') ||
+    (isMobile && mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'plan-route');
+
+  const planOverlayState = useMemo<PlanOverlayState>(
+    () => ({
+      active: isPlanningRouteMode,
+      mode: planningMode,
+      waypoints: planWaypoints,
+      legs: planLegs,
+      previewPoint: planPreviewPoint,
+      cursorCoord: planCursorCoord,
+      disconnectedCandidate,
+    }),
+    [
+      isPlanningRouteMode,
+      planningMode,
+      planWaypoints,
+      planLegs,
+      planPreviewPoint,
+      planCursorCoord,
+      disconnectedCandidate,
+    ]
+  );
 
   const poisRef = useRef<PoiRecord[]>(pois);
   poisRef.current = pois;
@@ -148,6 +269,27 @@ export const App: React.FC = () => {
   routesRef.current = routes;
   const recordedCoordsRef = useRef<Array<[number, number]>>(recordedCoords);
   recordedCoordsRef.current = recordedCoords;
+  const planOverlayStateRef = useRef<PlanOverlayState>(planOverlayState);
+  planOverlayStateRef.current = planOverlayState;
+  const isPlanningRouteRef = useRef<boolean>(isPlanningRouteMode);
+  isPlanningRouteRef.current = isPlanningRouteMode;
+  const planningModeRef = useRef<PlanningMode>(planningMode);
+  planningModeRef.current = planningMode;
+  const planWaypointsRef = useRef<PlannedWaypoint[]>(planWaypoints);
+  planWaypointsRef.current = planWaypoints;
+  const planLegsRef = useRef<PlannedLeg[]>(planLegs);
+  planLegsRef.current = planLegs;
+  const disconnectedCandidateRef = useRef<SnappedPoint | null>(disconnectedCandidate);
+  disconnectedCandidateRef.current = disconnectedCandidate;
+  const isRoutingLegRef = useRef<boolean>(isRoutingLeg);
+  isRoutingLegRef.current = isRoutingLeg;
+  const clickTimerRef = useRef<number | null>(null);
+  const lastPlanSnapTsRef = useRef<number>(0);
+  const snapSeqRef = useRef<number>(0);
+  const activeRoutePromiseRef = useRef<Promise<void> | null>(null);
+  const deletedRouteIdsRef = useRef<Set<string>>(new Set());
+  const handlePlanMapClickRef = useRef<(lon: number, lat: number) => Promise<void>>(async () => {});
+  const handleFinishPlanningRef = useRef<() => Promise<void>>(async () => {});
   const isStyleLoadedRef = useRef<boolean>(false);
   const mobileDisplayModeRef = useRef<MobileDisplayMode>(mobileDisplayMode);
   mobileDisplayModeRef.current = mobileDisplayMode;
@@ -162,11 +304,61 @@ export const App: React.FC = () => {
 
   const t = getSurfaceTheme(theme);
 
-  const isAddingPoiMode =
-    (!isMobile && desktopDrawer === 'add-poi') ||
-    (isMobile &&
-      ((mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'add-poi') ||
-        (mobileDisplayMode === 'navigating' && mobileNavOverlay === 'add-poi')));
+  // Subscribe to Firebase Google/Gmail auth state
+  useEffect(() => {
+    return AuthService.subscribeAuth((user) => {
+      setCurrentUser(user);
+    });
+  }, []);
+
+  // Sync pending planned routes and fetch remote planing_tracks when signed in & online
+  useEffect(() => {
+    if (!currentUser || !isOnline) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const syncedCount = await PlannedTracksCloudService.syncPendingRoutesForUser(currentUser);
+        const downloaded = await PlannedTracksCloudService.fetchUserPlannedRoutes(currentUser);
+        if (cancelled) return;
+        if (syncedCount > 0 || downloaded.length > 0) {
+          if (deletedRouteIdsRef.current.size > 0) {
+            await db.routes.bulkDelete(Array.from(deletedRouteIdsRef.current));
+          }
+          const all = (await db.routes.toArray()).filter(
+            (r) => !deletedRouteIdsRef.current.has(r.id)
+          );
+          if (!cancelled) {
+            setRoutes(all);
+            if (syncedCount > 0) {
+              showToast(`סונכרנו ${syncedCount} מסלולים מתוכננים ל-Firebase`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[NavApp] Planned tracks cloud sync warning:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, isOnline, showToast]);
+
+  // Toggle MapLibre doubleClickZoom & crosshair cursor while Route Planning mode is active
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (isPlanningRouteMode) {
+      map.doubleClickZoom.disable();
+      map.getCanvas().style.cursor = 'crosshair';
+    } else {
+      map.doubleClickZoom.enable();
+      map.getCanvas().style.cursor = '';
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+    }
+  }, [isPlanningRouteMode, isMapReady]);
 
   // Listen to background downloads from Firebase into persistent OPFS
   useEffect(() => {
@@ -351,7 +543,7 @@ export const App: React.FC = () => {
     []
   );
 
-  // Mount GeoJSON overlays (Tactical Grid + POIs + Saved/Active Routes + Live Recorded Breadcrumb)
+  // Mount GeoJSON overlays (Tactical Grid + POIs + Saved/Active Routes + Live Recorded Track + Route Planner)
   const syncOverlaySourcesToMap = useCallback(
     (
       map: maplibregl.Map,
@@ -360,7 +552,8 @@ export const App: React.FC = () => {
       currentRoute: SavedRouteRecord | null,
       allRoutes: SavedRouteRecord[],
       liveTrack: Array<[number, number]>,
-      currentTheme: MapTheme
+      currentTheme: MapTheme,
+      currentPlan: PlanOverlayState
     ) => {
       try {
         if (!map.getStyle()) return;
@@ -373,12 +566,29 @@ export const App: React.FC = () => {
           '#ec4899',
           ['get', 'color'],
         ];
-        const railBorderColor = currentTheme === 'topo-dark' ? '#f9a8d4' : '#831843';
+        const railBorderColor: any = [
+          'case',
+          ['==', ['get', 'color'], PLANNING_ROUTE_COLOR],
+          currentTheme === 'topo-dark' ? '#93c5fd' : '#1e3a8a',
+          currentTheme === 'topo-dark' ? '#f9a8d4' : '#831843',
+        ];
+
+        const normalizeFeaturesForRoute = (r: SavedRouteRecord): GeoJSON.Feature[] => {
+          const feats = r.geojson?.features || [];
+          if (r.sourceFormat !== 'planned') return feats;
+          return feats.map((f) => ({
+            ...f,
+            properties: {
+              ...(f.properties || {}),
+              color: PLANNING_ROUTE_COLOR,
+            },
+          }));
+        };
 
         // Other visible saved routes (renders full multi-route / multi-segment GPX paths clearly)
         const secondaryFeatures = allRoutes
           .filter((r) => r.visible !== false && r.id !== currentRoute?.id)
-          .flatMap((r) => r.geojson?.features || []);
+          .flatMap((r) => normalizeFeaturesForRoute(r));
         const savedRoutesGeoJson: GeoJSON.FeatureCollection = {
           type: 'FeatureCollection',
           features: secondaryFeatures,
@@ -415,7 +625,10 @@ export const App: React.FC = () => {
 
         // Active Route (semi-transparent highlighter ribbon + crisp outer rail casing so original trail colors stay visible through the center)
         const routeGeoJson: GeoJSON.FeatureCollection = currentRoute
-          ? currentRoute.geojson
+          ? {
+              type: 'FeatureCollection',
+              features: normalizeFeaturesForRoute(currentRoute),
+            }
           : { type: 'FeatureCollection', features: [] };
 
         const existingRouteSrc = map.getSource('active-route-src') as maplibregl.GeoJSONSource;
@@ -660,6 +873,228 @@ export const App: React.FC = () => {
           });
         }
 
+        // Route Planning Overlays (draft network legs, straight fallback legs, snapped cursor preview, numbered waypoints)
+        const modeColor = PLANNING_MODE_META[currentPlan.mode].color;
+        const planCasingColor = currentTheme === 'topo-dark' ? '#0f172a' : '#ffffff';
+
+        const networkFeatures: GeoJSON.Feature[] = currentPlan.active
+          ? currentPlan.legs
+              .filter((leg) => leg.legType === 'network' && leg.coordinates.length >= 2)
+              .map((leg, idx) => ({
+                type: 'Feature',
+                properties: { id: `plan-net-${idx}`, color: modeColor },
+                geometry: { type: 'LineString', coordinates: leg.coordinates },
+              }))
+          : [];
+        const planNetGeoJson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: networkFeatures,
+        };
+        const existingPlanNetSrc = map.getSource(
+          'plan-route-network-src'
+        ) as maplibregl.GeoJSONSource;
+        if (existingPlanNetSrc) {
+          existingPlanNetSrc.setData(planNetGeoJson);
+          if (map.getLayer('plan-route-network-casing')) {
+            map.setPaintProperty('plan-route-network-casing', 'line-color', planCasingColor);
+          }
+        } else {
+          map.addSource('plan-route-network-src', { type: 'geojson', data: planNetGeoJson });
+          map.addLayer({
+            id: 'plan-route-network-casing',
+            type: 'line',
+            source: 'plan-route-network-src',
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': planCasingColor,
+              'line-width': 7.5,
+              'line-opacity': 0.9,
+            },
+          });
+          map.addLayer({
+            id: 'plan-route-network-line',
+            type: 'line',
+            source: 'plan-route-network-src',
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': ['coalesce', ['get', 'color'], modeColor],
+              'line-width': 4.2,
+              'line-opacity': 0.95,
+            },
+          });
+        }
+
+        const straightFeatures: GeoJSON.Feature[] = currentPlan.active
+          ? currentPlan.legs
+              .filter((leg) => leg.legType === 'straight' && leg.coordinates.length >= 2)
+              .map((leg, idx) => ({
+                type: 'Feature',
+                properties: { id: `plan-str-${idx}` },
+                geometry: { type: 'LineString', coordinates: leg.coordinates },
+              }))
+          : [];
+        const planStraightGeoJson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: straightFeatures,
+        };
+        const existingPlanStrSrc = map.getSource(
+          'plan-route-straight-src'
+        ) as maplibregl.GeoJSONSource;
+        if (existingPlanStrSrc) {
+          existingPlanStrSrc.setData(planStraightGeoJson);
+        } else {
+          map.addSource('plan-route-straight-src', {
+            type: 'geojson',
+            data: planStraightGeoJson,
+          });
+          map.addLayer({
+            id: 'plan-route-straight-line',
+            type: 'line',
+            source: 'plan-route-straight-src',
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': PLANNING_ROUTE_COLOR,
+              'line-width': 3.5,
+              'line-dasharray': [2, 1.5],
+              'line-opacity': 0.95,
+            },
+          });
+        }
+
+        // Snap hover preview / disconnected candidate preview
+        const previewFeatures: GeoJSON.Feature[] = [];
+        if (currentPlan.active && currentPlan.disconnectedCandidate && currentPlan.waypoints.length > 0) {
+          const lastWp = currentPlan.waypoints[currentPlan.waypoints.length - 1];
+          previewFeatures.push({
+            type: 'Feature',
+            properties: { kind: 'tether', color: '#f59e0b' },
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                [lastWp.lon, lastWp.lat],
+                [currentPlan.disconnectedCandidate.lon, currentPlan.disconnectedCandidate.lat],
+              ],
+            },
+          });
+          previewFeatures.push({
+            type: 'Feature',
+            properties: { kind: 'dot', color: '#f59e0b' },
+            geometry: {
+              type: 'Point',
+              coordinates: [
+                currentPlan.disconnectedCandidate.lon,
+                currentPlan.disconnectedCandidate.lat,
+              ],
+            },
+          });
+        } else if (currentPlan.active && currentPlan.previewPoint) {
+          const snap = currentPlan.previewPoint;
+          if (currentPlan.cursorCoord && snap.distFromClickMeters > 2) {
+            previewFeatures.push({
+              type: 'Feature',
+              properties: { kind: 'tether', color: modeColor },
+              geometry: {
+                type: 'LineString',
+                coordinates: [currentPlan.cursorCoord, [snap.lon, snap.lat]],
+              },
+            });
+          }
+          previewFeatures.push({
+            type: 'Feature',
+            properties: { kind: 'dot', color: modeColor },
+            geometry: { type: 'Point', coordinates: [snap.lon, snap.lat] },
+          });
+        }
+        const previewGeoJson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: previewFeatures,
+        };
+        const existingPreviewSrc = map.getSource(
+          'plan-snap-preview-src'
+        ) as maplibregl.GeoJSONSource;
+        if (existingPreviewSrc) {
+          existingPreviewSrc.setData(previewGeoJson);
+        } else {
+          map.addSource('plan-snap-preview-src', { type: 'geojson', data: previewGeoJson });
+          map.addLayer({
+            id: 'plan-snap-preview-tether',
+            type: 'line',
+            source: 'plan-snap-preview-src',
+            filter: ['==', ['get', 'kind'], 'tether'],
+            paint: {
+              'line-color': ['coalesce', ['get', 'color'], '#f59e0b'],
+              'line-width': 2.2,
+              'line-dasharray': [2, 2],
+              'line-opacity': 0.85,
+            },
+          });
+          map.addLayer({
+            id: 'plan-snap-preview-dot',
+            type: 'circle',
+            source: 'plan-snap-preview-src',
+            filter: ['==', ['get', 'kind'], 'dot'],
+            paint: {
+              'circle-radius': 6.5,
+              'circle-color': ['coalesce', ['get', 'color'], modeColor],
+              'circle-stroke-width': 2.5,
+              'circle-stroke-color': '#ffffff',
+            },
+          });
+        }
+
+        // Numbered snapped waypoints
+        const wpFeatures: GeoJSON.Feature[] = currentPlan.active
+          ? currentPlan.waypoints.map((wp, idx) => {
+              const isStart = idx === 0;
+              const isEnd = idx === currentPlan.waypoints.length - 1 && idx > 0;
+              const wpColor = isStart ? '#10b981' : isEnd ? '#ef4444' : modeColor;
+              const badgeId = ensureWaypointBadgeImage(map, String(idx + 1), wpColor);
+              return {
+                type: 'Feature',
+                properties: {
+                  index: idx + 1,
+                  color: wpColor,
+                  badgeId,
+                },
+                geometry: { type: 'Point', coordinates: [wp.lon, wp.lat] },
+              };
+            })
+          : [];
+        const planWpGeoJson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: wpFeatures,
+        };
+        const existingWpSrc = map.getSource(
+          'plan-route-waypoints-src'
+        ) as maplibregl.GeoJSONSource;
+        if (existingWpSrc) {
+          existingWpSrc.setData(planWpGeoJson);
+        } else {
+          map.addSource('plan-route-waypoints-src', { type: 'geojson', data: planWpGeoJson });
+          map.addLayer({
+            id: 'plan-route-waypoints-circle',
+            type: 'circle',
+            source: 'plan-route-waypoints-src',
+            paint: {
+              'circle-radius': 9,
+              'circle-color': ['coalesce', ['get', 'color'], modeColor],
+              'circle-stroke-width': 2.5,
+              'circle-stroke-color': '#ffffff',
+            },
+          });
+          map.addLayer({
+            id: 'plan-route-waypoints-symbol',
+            type: 'symbol',
+            source: 'plan-route-waypoints-src',
+            layout: {
+              'icon-image': ['get', 'badgeId'],
+              'icon-size': 0.78,
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+            },
+          });
+        }
+
         map.triggerRepaint();
       } catch (err) {
         console.warn('[NavApp] syncOverlaySourcesToMap error:', err);
@@ -739,7 +1174,8 @@ export const App: React.FC = () => {
         activeRouteRef.current,
         routesRef.current,
         recordedCoordsRef.current,
-        themeRef.current
+        themeRef.current,
+        planOverlayStateRef.current
       );
     });
 
@@ -762,6 +1198,23 @@ export const App: React.FC = () => {
     map.on('mousemove', async (e) => {
       if (isCancelled || map.isMoving() || map.isZooming() || map.isRotating()) return;
       const now = performance.now();
+
+      // Snap-to-nearest-highway live preview while Route Planning mode is active (throttled ~75ms)
+      if (isPlanningRouteRef.current && now - lastPlanSnapTsRef.current >= 75) {
+        lastPlanSnapTsRef.current = now;
+        const cLon = Number(e.lngLat.lng.toFixed(6));
+        const cLat = Number(e.lngLat.lat.toFixed(6));
+        setPlanCursorCoord([cLon, cLat]);
+        const seq = ++snapSeqRef.current;
+        const activeMode = planningModeRef.current;
+        void routePlannerEngine
+          .snapToNearestHighway(cLon, cLat, activeMode)
+          .then((snap) => {
+            if (isCancelled || snapSeqRef.current !== seq || !isPlanningRouteRef.current) return;
+            setPlanPreviewPoint(snap);
+          });
+      }
+
       if (now - lastMouseMoveTsRef.current < 150) return;
       lastMouseMoveTsRef.current = now;
 
@@ -779,7 +1232,7 @@ export const App: React.FC = () => {
     });
 
     const handlePoiFeatureClick = (e: maplibregl.MapLayerMouseEvent) => {
-      if (isCancelled) return;
+      if (isCancelled || isPlanningRouteRef.current) return;
       const feature = e.features?.[0];
       if (!feature || !feature.properties) return;
       const p = feature.properties as any;
@@ -815,12 +1268,51 @@ export const App: React.FC = () => {
       }
     };
 
+    const handleMapPlanClick = (e: maplibregl.MapMouseEvent) => {
+      if (isCancelled || !isPlanningRouteRef.current) return;
+      const origDetail = (e.originalEvent as MouseEvent | undefined)?.detail ?? 1;
+      if (origDetail > 1) {
+        if (clickTimerRef.current) {
+          window.clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+        }
+        return;
+      }
+      if (isRoutingLegRef.current) return;
+
+      const clickLon = Number(e.lngLat.lng.toFixed(6));
+      const clickLat = Number(e.lngLat.lat.toFixed(6));
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+      }
+      clickTimerRef.current = window.setTimeout(() => {
+        clickTimerRef.current = null;
+        if (!isCancelled && isPlanningRouteRef.current) {
+          void handlePlanMapClickRef.current(clickLon, clickLat);
+        }
+      }, 220);
+    };
+
+    const handleMapPlanDblClick = (e: maplibregl.MapMouseEvent) => {
+      if (isCancelled || !isPlanningRouteRef.current) return;
+      e.preventDefault();
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      void handleFinishPlanningRef.current();
+    };
+
     map.on('click', 'israel-pois-labels', handlePoiFeatureClick);
+    map.on('click', handleMapPlanClick);
+    map.on('dblclick', handleMapPlanDblClick);
     map.on('mouseenter', 'israel-pois-labels', () => {
-      map.getCanvas().style.cursor = 'pointer';
+      if (!isPlanningRouteRef.current) {
+        map.getCanvas().style.cursor = 'pointer';
+      }
     });
     map.on('mouseleave', 'israel-pois-labels', () => {
-      map.getCanvas().style.cursor = '';
+      map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
     });
 
     (async () => {
@@ -856,6 +1348,10 @@ export const App: React.FC = () => {
       isCancelled = true;
       isStyleLoadedRef.current = false;
       mountedStyleKeyRef.current = '';
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
       resizeObserver?.disconnect();
       hoverMarkerRef.current?.remove();
       hoverMarkerRef.current = null;
@@ -906,7 +1402,9 @@ export const App: React.FC = () => {
       theme,
     });
 
+    let completed = false;
     const restoreOverlays = () => {
+      completed = true;
       if (mapRef.current !== map) return;
       isStyleLoadedRef.current = true;
       applyLayerVisibilityToMap(map, visibilityRef.current);
@@ -917,7 +1415,8 @@ export const App: React.FC = () => {
         activeRouteRef.current,
         routesRef.current,
         recordedCoordsRef.current,
-        themeRef.current
+        themeRef.current,
+        planOverlayStateRef.current
       );
     };
 
@@ -926,16 +1425,35 @@ export const App: React.FC = () => {
 
     return () => {
       map.off('style.load', restoreOverlays);
+      if (!completed && mountedStyleKeyRef.current === nextStyleKey) {
+        mountedStyleKeyRef.current = '';
+      }
     };
   }, [isMapReady, demInfo, osmInfo, theme, syncOverlaySourcesToMap]);
 
-  // Effect B: Instant in-place refresh for layer visibility, POIs, active route, and GPS track
+  // Effect B: Instant in-place refresh for layer visibility, POIs, active route, GPS track, and Route Planner overlays
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !isMapReady || !isStyleLoadedRef.current) return;
+    if (!map || !isMapReady) return;
+    if (!isStyleLoadedRef.current) {
+      if (map.isStyleLoaded()) {
+        isStyleLoadedRef.current = true;
+      } else {
+        return;
+      }
+    }
 
     applyLayerVisibilityToMap(map, visibility);
-    syncOverlaySourcesToMap(map, pois, visibility, activeRoute, routes, recordedCoords, theme);
+    syncOverlaySourcesToMap(
+      map,
+      pois,
+      visibility,
+      activeRoute,
+      routes,
+      recordedCoords,
+      theme,
+      planOverlayState
+    );
   }, [
     isMapReady,
     visibility,
@@ -944,6 +1462,7 @@ export const App: React.FC = () => {
     routes,
     recordedCoords,
     theme,
+    planOverlayState,
     syncOverlaySourcesToMap,
   ]);
 
@@ -1121,14 +1640,21 @@ export const App: React.FC = () => {
       hoverMarkerRef.current = null;
       return;
     }
+    const markerColor =
+      activeRouteRef.current?.sourceFormat === 'planned'
+        ? PLANNING_ROUTE_COLOR
+        : !activeRouteRef.current?.color || activeRouteRef.current.color === '#10b981'
+          ? '#ec4899'
+          : activeRouteRef.current.color;
     if (!hoverMarkerRef.current) {
       const el = document.createElement('div');
-      el.className =
-        'w-4 h-4 rounded-full bg-pink-500 border-2 border-white shadow-lg pointer-events-none';
+      el.className = 'w-4 h-4 rounded-full border-2 border-white shadow-lg pointer-events-none';
+      el.style.backgroundColor = markerColor;
       hoverMarkerRef.current = new maplibregl.Marker({ element: el })
         .setLngLat([pt.lon, pt.lat])
         .addTo(map);
     } else {
+      hoverMarkerRef.current.getElement().style.backgroundColor = markerColor;
       hoverMarkerRef.current.setLngLat([pt.lon, pt.lat]);
     }
   };
@@ -1239,15 +1765,429 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteRoute = async (routeId: string) => {
-    await RouteManager.deleteRoute(routeId);
+    deletedRouteIdsRef.current.add(routeId);
+    const target = routesRef.current.find((r) => r.id === routeId);
+    const wasActive = activeRouteRef.current?.id === routeId;
+    const nextRoutes = routesRef.current.filter((r) => r.id !== routeId);
+    const nextActive = wasActive ? null : activeRouteRef.current;
+
+    // Immediately clear map hover marker, React state, and MapLibre GeoJSON sources
+    handleHoverElevationChart(null);
+    routesRef.current = nextRoutes;
+    activeRouteRef.current = nextActive;
     setRoutes((prev) => prev.filter((r) => r.id !== routeId));
-    if (activeRoute?.id === routeId) {
-      setActiveRoute(null);
+    setActiveRoute((cur) => (cur?.id === routeId ? null : cur));
+    if (wasActive) {
       setIsNavigatingRoute(false);
       setOffRouteWarning(null);
+      setRemainingDistKm(null);
+    }
+
+    if (mapRef.current && mapRef.current.getStyle()) {
+      syncOverlaySourcesToMap(
+        mapRef.current,
+        poisRef.current,
+        visibilityRef.current,
+        nextActive,
+        nextRoutes,
+        recordedCoordsRef.current,
+        themeRef.current,
+        planOverlayStateRef.current
+      );
+    }
+
+    await RouteManager.deleteRoute(routeId);
+    if (target && currentUser && target.sourceFormat === 'planned') {
+      void PlannedTracksCloudService.deleteRemotePlannedRoute(target, currentUser);
     }
     showToast('המסלול נמחק מהמכשיר');
   };
+
+  const recomputePlanElevationStats = useCallback(
+    async (legs: PlannedLeg[], wps: PlannedWaypoint[]) => {
+      const allPts: Array<[number, number]> = [];
+      for (const leg of legs) {
+        for (const c of leg.coordinates) {
+          const prev = allPts[allPts.length - 1];
+          if (!prev || prev[0] !== c[0] || prev[1] !== c[1]) allPts.push(c);
+        }
+      }
+      if (allPts.length < 2) {
+        setPlanElevStats({ ascent: 0, descent: 0 });
+        return;
+      }
+
+      const maxSamples = 35;
+      const step = Math.max(1, Math.floor(allPts.length / maxSamples));
+      const sampledCoords: Array<[number, number]> = [];
+      for (let i = 0; i < allPts.length; i += step) sampledCoords.push(allPts[i]);
+      const last = allPts[allPts.length - 1];
+      const tail = sampledCoords[sampledCoords.length - 1];
+      if (tail[0] !== last[0] || tail[1] !== last[1]) sampledCoords.push(last);
+
+      const eles = await Promise.all(
+        sampledCoords.map(([lon, lat]) => ElevationService.getElevationAt(lon, lat, 11))
+      );
+      if (planLegsRef.current.length !== legs.length) return;
+
+      let ascent = 0;
+      let descent = 0;
+      let prevEle: number | null = null;
+      for (const ele of eles) {
+        if (ele === null) continue;
+        if (prevEle !== null) {
+          const d = ele - prevEle;
+          if (d > 0) ascent += d;
+          else descent += Math.abs(d);
+        }
+        prevEle = ele;
+      }
+
+      if (prevEle === null && wps.length >= 2) {
+        let p: number | null = null;
+        for (const wp of wps) {
+          if (typeof wp.ele !== 'number') continue;
+          if (p !== null) {
+            const d = wp.ele - p;
+            if (d > 0) ascent += d;
+            else descent += Math.abs(d);
+          }
+          p = wp.ele;
+        }
+      }
+
+      setPlanElevStats({ ascent: Math.round(ascent), descent: Math.round(descent) });
+    },
+    []
+  );
+
+  const handlePlanMapClick = useCallback(
+    async (clickLon: number, clickLat: number) => {
+      if (isRoutingLegRef.current) return;
+      const mode = planningModeRef.current;
+
+      const work = (async () => {
+        setIsRoutingLeg(true);
+        try {
+          const snapped = await routePlannerEngine.snapToNearestHighway(clickLon, clickLat, mode);
+          if (!snapped) {
+            showToast(
+              `לא נמצא ${
+                mode === '4x4' ? 'כביש או דרך עפר' : 'שביל או דרך'
+              } קרובה (עד ${PLANNING_MODE_META[mode].maxSnapRadiusMeters} מ׳)`
+            );
+            return;
+          }
+
+          const ele = await ElevationService.getElevationAt(snapped.lon, snapped.lat, 11);
+          const prevWaypoints = planWaypointsRef.current;
+
+          if (prevWaypoints.length === 0) {
+            const firstWp: PlannedWaypoint = {
+              lon: snapped.lon,
+              lat: snapped.lat,
+              ele,
+              roadLabel: snapped.roadLabel,
+            };
+            setDisconnectedCandidate(null);
+            setPlanWaypoints([firstWp]);
+            setPlanPreviewPoint(snapped);
+            return;
+          }
+
+          const prevWp = prevWaypoints[prevWaypoints.length - 1];
+          const res = await routePlannerEngine.routeBetweenSnappedPoints(prevWp, snapped, mode);
+          if (!res.found) {
+            setDisconnectedCandidate(snapped);
+            if (isMobileRef.current) {
+              setMobileSheetExpanded(true);
+            }
+            if (res.reason === 'tile-budget-exceeded') {
+              showToast('המרחק בין הנקודות גדול מדי לצעד אחד — הוסף נקודת ביניים או חבר בקו ישר');
+            } else {
+              showToast('לא נמצא חיבור ברשת הדרכים — ניתן לבחור "חבר בקו ישר"');
+            }
+            return;
+          }
+
+          const newLeg: PlannedLeg = {
+            coordinates: res.coordinates,
+            distanceKm: res.distanceKm,
+            legType: 'network',
+            roadLabels: res.roadLabels,
+          };
+          const newWp: PlannedWaypoint = {
+            lon: snapped.lon,
+            lat: snapped.lat,
+            ele,
+            roadLabel: snapped.roadLabel,
+            legType: 'network',
+          };
+          const nextWps = [...prevWaypoints, newWp];
+          const nextLegs = [...planLegsRef.current, newLeg];
+          setDisconnectedCandidate(null);
+          setPlanWaypoints(nextWps);
+          setPlanLegs(nextLegs);
+          void recomputePlanElevationStats(nextLegs, nextWps);
+        } finally {
+          setIsRoutingLeg(false);
+        }
+      })();
+
+      activeRoutePromiseRef.current = work;
+      try {
+        await work;
+      } finally {
+        if (activeRoutePromiseRef.current === work) {
+          activeRoutePromiseRef.current = null;
+        }
+      }
+    },
+    [recomputePlanElevationStats, showToast]
+  );
+
+  const handleConfirmStraightLine = useCallback(async () => {
+    const cand = disconnectedCandidateRef.current;
+    const prevWps = planWaypointsRef.current;
+    if (!cand || prevWps.length === 0) return;
+    const prevWp = prevWps[prevWps.length - 1];
+    const distKm = Number(
+      turf
+        .distance(turf.point([prevWp.lon, prevWp.lat]), turf.point([cand.lon, cand.lat]), {
+          units: 'kilometers',
+        })
+        .toFixed(3)
+    );
+    const ele = await ElevationService.getElevationAt(cand.lon, cand.lat, 11);
+    const newLeg: PlannedLeg = {
+      coordinates: [
+        [prevWp.lon, prevWp.lat],
+        [cand.lon, cand.lat],
+      ],
+      distanceKm: distKm,
+      legType: 'straight',
+      roadLabels: [cand.roadLabel],
+    };
+    const newWp: PlannedWaypoint = {
+      lon: cand.lon,
+      lat: cand.lat,
+      ele,
+      roadLabel: cand.roadLabel,
+      legType: 'straight',
+    };
+    const nextWps = [...prevWps, newWp];
+    const nextLegs = [...planLegsRef.current, newLeg];
+    setDisconnectedCandidate(null);
+    setPlanWaypoints(nextWps);
+    setPlanLegs(nextLegs);
+    void recomputePlanElevationStats(nextLegs, nextWps);
+  }, [recomputePlanElevationStats]);
+
+  const handleCancelDisconnected = useCallback(() => {
+    setDisconnectedCandidate(null);
+  }, []);
+
+  const handleUndoLastPlanPoint = useCallback(() => {
+    if (disconnectedCandidateRef.current) {
+      setDisconnectedCandidate(null);
+      return;
+    }
+    const prevWps = planWaypointsRef.current;
+    if (prevWps.length === 0) return;
+    const nextWps = prevWps.slice(0, -1);
+    const nextLegs = nextWps.length <= 1 ? [] : planLegsRef.current.slice(0, -1);
+    setPlanWaypoints(nextWps);
+    setPlanLegs(nextLegs);
+    void recomputePlanElevationStats(nextLegs, nextWps);
+  }, [recomputePlanElevationStats]);
+
+  const handleClearPlan = useCallback(() => {
+    snapSeqRef.current += 1;
+    disconnectedCandidateRef.current = null;
+    planWaypointsRef.current = [];
+    planLegsRef.current = [];
+    setDisconnectedCandidate(null);
+    setPlanWaypoints([]);
+    setPlanLegs([]);
+    setPlanPreviewPoint(null);
+    setPlanCursorCoord(null);
+    setPlanElevStats({ ascent: 0, descent: 0 });
+    if (mapRef.current && mapRef.current.getStyle()) {
+      syncOverlaySourcesToMap(
+        mapRef.current,
+        poisRef.current,
+        visibilityRef.current,
+        activeRouteRef.current,
+        routesRef.current,
+        recordedCoordsRef.current,
+        themeRef.current,
+        {
+          ...planOverlayStateRef.current,
+          waypoints: [],
+          legs: [],
+          previewPoint: null,
+          cursorCoord: null,
+          disconnectedCandidate: null,
+        }
+      );
+    }
+  }, [syncOverlaySourcesToMap]);
+
+  const handleChangePlanningMode = useCallback(
+    (nextMode: PlanningMode) => {
+      setPlanningMode(nextMode);
+      setDisconnectedCandidate(null);
+      if (planCursorCoord) {
+        void routePlannerEngine
+          .snapToNearestHighway(planCursorCoord[0], planCursorCoord[1], nextMode)
+          .then((snap) => setPlanPreviewPoint(snap));
+      }
+      showToast(`מצב תכנון: ${PLANNING_MODE_META[nextMode].labelHe}`);
+    },
+    [planCursorCoord, showToast]
+  );
+
+  const handleFinishPlanningRoute = useCallback(async () => {
+    if (activeRoutePromiseRef.current) {
+      await activeRoutePromiseRef.current;
+    }
+    const wps = planWaypointsRef.current;
+    const legs = planLegsRef.current;
+    const mode = planningModeRef.current;
+
+    if (wps.length < 2 || legs.length === 0) {
+      showToast('נדרשות לפחות 2 נקודות ציר כדי לשמור מסלול');
+      return;
+    }
+
+    setIsSavingPlan(true);
+    try {
+      const modeMeta = PLANNING_MODE_META[mode];
+      const defaultName = `מסלול ${modeMeta.shortLabelHe} ${new Date().toLocaleTimeString('he-IL', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`;
+      const finalName = planRouteName.trim() || defaultName;
+      const segments = legs
+        .map((l) => l.coordinates)
+        .filter((coords) => coords.length >= 2);
+
+      const savedLocal = await RouteManager.createAndSavePlannedRoute({
+        name: finalName,
+        mode,
+        segments,
+        waypoints: wps,
+        ownerUid: currentUser?.uid ?? null,
+        ownerEmail: currentUser?.email ?? null,
+      });
+
+      let finalRecord = savedLocal;
+      setRoutes((prev) => [...prev, savedLocal]);
+      setActiveRoute(savedLocal);
+
+      if (currentUser && isOnline && AuthService.isAvailable()) {
+        const cloudRes = await PlannedTracksCloudService.savePlannedRouteToFirebase(
+          savedLocal,
+          currentUser
+        );
+        if (deletedRouteIdsRef.current.has(savedLocal.id)) {
+          await RouteManager.deleteRoute(savedLocal.id);
+          void PlannedTracksCloudService.deleteRemotePlannedRoute(cloudRes.route, currentUser);
+          return;
+        }
+        finalRecord = cloudRes.route;
+        setRoutes((prev) => prev.map((r) => (r.id === finalRecord.id ? finalRecord : r)));
+        setActiveRoute((cur) => (cur?.id === finalRecord.id ? finalRecord : cur));
+
+        if (cloudRes.synced) {
+          showToast(`המסלול "${finalRecord.name}" נשמר כ-GPX במכשיר וב-planing_tracks!`);
+        } else {
+          showToast(`נשמר מקומית כ-GPX (סנכרון ענן נדחה: ${cloudRes.error || 'שגיאה'})`);
+        }
+      } else if (!AuthService.isAvailable()) {
+        showToast(`המסלול "${finalRecord.name}" נשמר מקומית כ-GPX`);
+      } else if (!currentUser) {
+        showToast('המסלול נשמר מקומית כ-GPX — התחבר עם Gmail לגיבוי ב-planing_tracks');
+      } else {
+        showToast('אופליין: המסלול נשמר כ-GPX במכשיר ויסונכרן עם החזרה לרשת');
+      }
+
+      setDisconnectedCandidate(null);
+      setPlanWaypoints([]);
+      setPlanLegs([]);
+      setPlanPreviewPoint(null);
+      setPlanCursorCoord(null);
+      setPlanRouteName('');
+      setPlanElevStats({ ascent: 0, descent: 0 });
+
+      if (isMobileRef.current) {
+        setMobilePlanningOverlay(null);
+        setMobileDisplayMode('planning');
+        setMobileTab('routes');
+        setMobileSheetExpanded(true);
+      } else {
+        setDesktopDrawer('routes');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'שגיאה בשמירת המסלול');
+    } finally {
+      setIsSavingPlan(false);
+    }
+  }, [planRouteName, currentUser, isOnline, showToast]);
+
+  handlePlanMapClickRef.current = handlePlanMapClick;
+  handleFinishPlanningRef.current = handleFinishPlanningRoute;
+
+  const handleSignInGoogle = useCallback(async () => {
+    setIsAuthBusy(true);
+    try {
+      const user = await AuthService.signInWithGmail();
+      setCurrentUser(user);
+      showToast(`מחובר ל-Google: ${user.email || user.displayName}`);
+    } catch (err: any) {
+      showToast(err?.message || 'שגיאה בהתחברות ל-Google');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  }, [showToast]);
+
+  const handleSignOutGoogle = useCallback(async () => {
+    setIsAuthBusy(true);
+    try {
+      await AuthService.signOut();
+      setCurrentUser(null);
+      showToast('התנתקת מחשבון Google');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  }, [showToast]);
+
+  const handleSyncPendingNow = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const count = await PlannedTracksCloudService.syncPendingRoutesForUser(currentUser);
+      const all = await db.routes.toArray();
+      setRoutes(all);
+      showToast(count > 0 ? `סונכרנו ${count} מסלולים ל-planing_tracks` : 'הכל כבר מסונכרן');
+    } catch (err: any) {
+      showToast(err?.message || 'שגיאת סנכרון');
+    }
+  }, [currentUser, showToast]);
+
+  const planTotalDistanceKm = useMemo(
+    () => Number(planLegs.reduce((sum, leg) => sum + leg.distanceKm, 0).toFixed(2)),
+    [planLegs]
+  );
+
+  const pendingCloudSyncCount = useMemo(
+    () =>
+      routes.filter(
+        (r) =>
+          r.sourceFormat === 'planned' &&
+          (r.cloudSyncStatus === 'pending' || r.cloudSyncStatus === 'error')
+      ).length,
+    [routes]
+  );
 
   const handleStartOrResumeRecording = () => {
     if (!isRecordingTrack) {
@@ -1298,6 +2238,7 @@ export const App: React.FC = () => {
   };
 
   const handleDiscardRecordedTrack = () => {
+    lastRecordedEleRef.current = null;
     setIsRecordingTrack(false);
     setIsRecordingPaused(false);
     setRecordedCoords([]);
@@ -1525,6 +2466,7 @@ export const App: React.FC = () => {
                       onStartNavigation={handleStartRouteNavigation}
                       onStopNavigation={handleStopRouteNavigation}
                       onOpenImporter={() => setIsStorageOpen(true)}
+                      onOpenRoutePlanner={() => setDesktopDrawer('plan-route')}
                       onDeleteRoute={handleDeleteRoute}
                       onClose={() => setDesktopDrawer(null)}
                       onHoverPoint={handleHoverElevationChart}
@@ -1533,6 +2475,37 @@ export const App: React.FC = () => {
                       }
                       onFlyToRoute={handleFlyToRoute}
                       onFitAllRoutes={() => fitBoundsToRoutes(routes)}
+                    />
+                  )}
+
+                  {desktopDrawer === 'plan-route' && (
+                    <RoutePlannerPanel
+                      theme={theme}
+                      mode={planningMode}
+                      routeName={planRouteName}
+                      waypoints={planWaypoints}
+                      legs={planLegs}
+                      totalDistanceKm={planTotalDistanceKm}
+                      ascentMeters={planElevStats.ascent}
+                      descentMeters={planElevStats.descent}
+                      isRoutingLeg={isRoutingLeg}
+                      isSaving={isSavingPlan}
+                      disconnectedCandidate={disconnectedCandidate}
+                      currentUser={currentUser}
+                      firebaseAvailable={AuthService.isAvailable()}
+                      isAuthBusy={isAuthBusy}
+                      pendingCloudSyncCount={pendingCloudSyncCount}
+                      onChangeMode={handleChangePlanningMode}
+                      onChangeRouteName={setPlanRouteName}
+                      onConfirmStraightLine={handleConfirmStraightLine}
+                      onCancelDisconnected={handleCancelDisconnected}
+                      onUndoLastPoint={handleUndoLastPlanPoint}
+                      onClearPlan={handleClearPlan}
+                      onFinishAndSave={handleFinishPlanningRoute}
+                      onSignInGoogle={handleSignInGoogle}
+                      onSignOutGoogle={handleSignOutGoogle}
+                      onSyncPendingNow={handleSyncPendingNow}
+                      onClose={() => setDesktopDrawer(null)}
                     />
                   )}
 
@@ -1639,6 +2612,22 @@ export const App: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={() =>
+                    setDesktopDrawer(desktopDrawer === 'plan-route' ? null : 'plan-route')
+                  }
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                    desktopDrawer === 'plan-route' ? 'bg-blue-600 text-white' : t.hoverRow
+                  }`}
+                >
+                  <PenTool
+                    className={`w-3.5 h-3.5 ${
+                      desktopDrawer === 'plan-route' ? 'text-white' : 'text-blue-500'
+                    }`}
+                  />
+                  <span>תכנון מסלול</span>
+                </button>
+
+                <button
                   onClick={() => setDesktopDrawer(desktopDrawer === 'record' ? null : 'record')}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
                     desktopDrawer === 'record' || isRecordingTrack
@@ -1667,6 +2656,28 @@ export const App: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Live Snap-to-Highway Indicator Banner (Desktop Planning Mode) */}
+            {desktopDrawer === 'plan-route' && (
+              <div
+                className={`absolute bottom-14 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-full border text-xs font-semibold flex items-center gap-2 pointer-events-none shadow-lg ${t.panel}`}
+              >
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: PLANNING_MODE_META[planningMode].color }}
+                />
+                {isRoutingLeg ? (
+                  <span>מחשב חיבור על רשת הדרכים...</span>
+                ) : planPreviewPoint ? (
+                  <span>
+                    נצמד ל: {planPreviewPoint.roadLabel} ({planPreviewPoint.distFromClickMeters} מ׳)
+                    • לחיצה להוספה • דאבל-קליק לסיום
+                  </span>
+                ) : (
+                  <span>לחץ על כביש או שביל להוספת נקודה • דאבל-קליק לסיום</span>
+                )}
+              </div>
+            )}
 
             {/* Bottom-Left (RTL End): Layers Preview Card + Map Controls Stack */}
             <div className="absolute bottom-4 left-4 z-20 flex items-end gap-2.5 pointer-events-auto">
@@ -2047,6 +3058,75 @@ export const App: React.FC = () => {
                   }}
                 />
               </div>
+            ) : mobilePlanningOverlay === 'plan-route' ? (
+              mobileSheetExpanded ? (
+                <div className="max-h-[56vh] overflow-y-auto">
+                  <RoutePlannerPanel
+                    theme={theme}
+                    mode={planningMode}
+                    routeName={planRouteName}
+                    waypoints={planWaypoints}
+                    legs={planLegs}
+                    totalDistanceKm={planTotalDistanceKm}
+                    ascentMeters={planElevStats.ascent}
+                    descentMeters={planElevStats.descent}
+                    isRoutingLeg={isRoutingLeg}
+                    isSaving={isSavingPlan}
+                    disconnectedCandidate={disconnectedCandidate}
+                    currentUser={currentUser}
+                    firebaseAvailable={AuthService.isAvailable()}
+                    isAuthBusy={isAuthBusy}
+                    pendingCloudSyncCount={pendingCloudSyncCount}
+                    onChangeMode={handleChangePlanningMode}
+                    onChangeRouteName={setPlanRouteName}
+                    onConfirmStraightLine={handleConfirmStraightLine}
+                    onCancelDisconnected={handleCancelDisconnected}
+                    onUndoLastPoint={handleUndoLastPlanPoint}
+                    onClearPlan={handleClearPlan}
+                    onFinishAndSave={handleFinishPlanningRoute}
+                    onSignInGoogle={handleSignInGoogle}
+                    onSignOutGoogle={handleSignOutGoogle}
+                    onSyncPendingNow={handleSyncPendingNow}
+                    onClose={() => setMobilePlanningOverlay(null)}
+                  />
+                </div>
+              ) : (
+                <div className="px-4 pb-3 flex items-center justify-between gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setMobileSheetExpanded(true)}
+                    className="flex items-center gap-2 min-w-0 font-bold"
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: PLANNING_MODE_META[planningMode].color }}
+                    />
+                    <span className="truncate">
+                      {PLANNING_MODE_META[planningMode].shortLabelHe} • {planTotalDistanceKm.toFixed(2)} km ({planWaypoints.length})
+                    </span>
+                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={planWaypoints.length === 0 || isRoutingLeg}
+                      onClick={handleUndoLastPlanPoint}
+                      className={`p-2 rounded-xl border disabled:opacity-40 ${t.pillBtn}`}
+                      title="חזור"
+                    >
+                      <Undo2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={planWaypoints.length < 2 || isRoutingLeg || isSavingPlan}
+                      onClick={handleFinishPlanningRoute}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold flex items-center gap-1"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>שמור</span>
+                    </button>
+                  </div>
+                </div>
+              )
             ) : mobileTab === 'routes' ? (
               <div className="max-h-[60vh] overflow-y-auto">
                 <ElevationProfileDrawer
@@ -2062,6 +3142,11 @@ export const App: React.FC = () => {
                   onOpenImporter={() => {
                     setMobileTab('offline');
                     setMobilePlanningOverlay(null);
+                  }}
+                  onOpenRoutePlanner={() => {
+                    setMobileDisplayMode('planning');
+                    setMobilePlanningOverlay('plan-route');
+                    setMobileSheetExpanded(true);
                   }}
                   onDeleteRoute={handleDeleteRoute}
                   onClose={() => setMobileTab('explore')}
@@ -2107,7 +3192,7 @@ export const App: React.FC = () => {
                 onPoisAndRoutesImported={handleImportedData}
               />
             ) : (
-              /* Explore Peek Sheet: Quick Nearby POIs + 1-Tap Switch to Navigating Mode */
+              /* Explore Peek Sheet: Quick Nearby POIs + 1-Tap Route Planner & Navigating Mode */
               <div className="px-4 pb-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <button
@@ -2115,18 +3200,31 @@ export const App: React.FC = () => {
                     onClick={() => setMobileSheetExpanded(!mobileSheetExpanded)}
                     className="text-xs font-bold flex items-center gap-1"
                   >
-                    <span>בקרבתך במפה ({nearbyPois.length})</span>
+                    <span>בקרבתך ({nearbyPois.length})</span>
                   </button>
-                  <button
-                    onClick={() => {
-                      setMobileDisplayMode('navigating');
-                      setMobileNavOverlay(null);
-                    }}
-                    className="px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm"
-                  >
-                    <Navigation className="w-3.5 h-3.5" />
-                    <span>מצב ניווט (מפה נקייה)</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => {
+                        setMobileDisplayMode('planning');
+                        setMobilePlanningOverlay('plan-route');
+                        setMobileSheetExpanded(true);
+                      }}
+                      className="px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
+                    >
+                      <PenTool className="w-3 h-3" />
+                      <span>תכנון</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMobileDisplayMode('navigating');
+                        setMobileNavOverlay(null);
+                      }}
+                      className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
+                    >
+                      <Navigation className="w-3 h-3" />
+                      <span>ניווט</span>
+                    </button>
+                  </div>
                 </div>
 
                 {mobileSheetExpanded &&
