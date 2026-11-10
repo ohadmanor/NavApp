@@ -46,6 +46,13 @@ import {
   wrapManagerWithSafeContourBuffers,
 } from '../pmtiles/PMTilesRegistry';
 import { RouteManager } from '../navigation/RouteManager';
+import { LiveGpsService, normalizeGpsPosition, type LiveGpsFix } from '../navigation/LiveGpsService';
+import { ScreenWakeLockService } from '../navigation/ScreenWakeLockService';
+import {
+  BUILT_IN_USER_ICONS,
+  UserLocationIconService,
+  sanitizeSvgMarkup,
+} from '../navigation/UserLocationIconService';
 import { MilitaryGridService } from '../navigation/MilitaryGridService';
 import { getSurfaceTheme, POI_CATEGORY_META } from '../../components/ui/themeTokens';
 import { formatDuration } from '../../components/navigation/TrackRecorderPanel';
@@ -1449,6 +1456,170 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       expect(parsed.totalFeatures).toBe(payload.totalFeatures);
     } finally {
       fs.closeSync(fd);
+    }
+  });
+
+  it('streams continuous GPS position fixes via LiveGpsService and cleans up watch on stop', () => {
+    expect(
+      normalizeGpsPosition({
+        timestamp: 1700000000000,
+        coords: {
+          longitude: 35.2137,
+          latitude: 31.7683,
+          accuracy: 6.5,
+          altitude: 785,
+          heading: 45,
+          speed: 1.4,
+        },
+      })
+    ).toEqual({
+      lon: 35.2137,
+      lat: 31.7683,
+      accuracy: 6.5,
+      altitude: 785,
+      heading: 45,
+      speed: 1.4,
+      timestamp: 1700000000000,
+    });
+    expect(normalizeGpsPosition({ coords: { longitude: Number.NaN, latitude: 31.7 } })).toBeNull();
+
+    const origNavigator = (globalThis as any).navigator;
+    let activeCb: ((pos: any) => void) | null = null;
+    const clearWatchSpy = vi.fn();
+    const watchPositionSpy = vi.fn((successCb: (pos: any) => void) => {
+      activeCb = successCb;
+      return 42;
+    });
+
+    try {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: {
+          geolocation: {
+            watchPosition: watchPositionSpy,
+            clearWatch: clearWatchSpy,
+          },
+        },
+      });
+
+      const received: LiveGpsFix[] = [];
+      const stop = LiveGpsService.startContinuousWatch((fix) => {
+        received.push(fix);
+      });
+
+      expect(watchPositionSpy).toHaveBeenCalledTimes(1);
+      expect(watchPositionSpy.mock.calls[0][2]).toMatchObject({
+        enableHighAccuracy: true,
+        maximumAge: 0,
+      });
+
+      activeCb?.({
+        timestamp: 1000,
+        coords: { longitude: 34.81, latitude: 30.83, heading: 90 },
+      });
+      activeCb?.({
+        timestamp: 2000,
+        coords: { longitude: 34.811, latitude: 30.831, heading: 92 },
+      });
+      activeCb?.({
+        timestamp: 3000,
+        coords: { longitude: 34.812, latitude: 30.832, heading: 95 },
+      });
+
+      expect(received).toHaveLength(3);
+      expect(received[0]).toMatchObject({ lon: 34.81, lat: 30.83, heading: 90 });
+      expect(received[2]).toMatchObject({ lon: 34.812, lat: 30.832, heading: 95 });
+
+      stop();
+      expect(clearWatchSpy).toHaveBeenCalledWith(42);
+    } finally {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: origNavigator,
+      });
+    }
+  });
+
+  it('acquires Screen Wake Lock during navigation and releases cleanly on exit', async () => {
+    const origNavigator = (globalThis as any).navigator;
+    const releaseSpy = vi.fn(async () => {});
+    const requestSpy = vi.fn(async () => ({
+      released: false,
+      release: releaseSpy,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+
+    try {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: {
+          wakeLock: {
+            request: requestSpy,
+          },
+        },
+      });
+
+      const states: boolean[] = [];
+      const stopWakeLock = ScreenWakeLockService.acquireNavigationWakeLock((active) => {
+        states.push(active);
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(requestSpy).toHaveBeenCalledWith('screen');
+      expect(states).toEqual([true]);
+
+      stopWakeLock();
+      await Promise.resolve();
+
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      expect(states).toEqual([true, false]);
+    } finally {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: origNavigator,
+      });
+    }
+  });
+
+  it('bundles web-fetched outdoor SVG icons offline, sanitizes SVG markup, and searches web icons', async () => {
+    // Verify all 15 web-fetched SVG icons exist in public/assets/user-icons/
+    const svgIcons = BUILT_IN_USER_ICONS.filter((i) => i.id !== 'gps-puck');
+    expect(svgIcons.length).toBeGreaterThanOrEqual(15);
+    for (const icon of svgIcons) {
+      const diskPath = `public${icon.svgUrl}`;
+      expect(fs.existsSync(diskPath), `Missing ${diskPath}`).toBe(true);
+      const content = fs.readFileSync(diskPath, 'utf-8');
+      expect(content).toContain('<svg');
+    }
+
+    // Verify SVG sanitizer strips scripts/event handlers while forcing crisp white badge rendering
+    const cleaned = sanitizeSvgMarkup(
+      '<svg viewBox="0 0 24 24" onclick="alert(1)"><script>evil()</script><path d="M0 0"/></svg>'
+    );
+    expect(cleaned).not.toContain('<script');
+    expect(cleaned).not.toContain('onclick');
+    expect(cleaned).toContain('color:#ffffff');
+
+    // Verify web icon search parses Iconify API response cleanly
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ icons: ['tabler:helicopter', 'mdi:kayak'] }),
+      })) as any;
+
+      const results = await UserLocationIconService.searchWebIcons('helicopter');
+      expect(results).toHaveLength(2);
+      expect(results[0]).toMatchObject({
+        id: 'web-tabler-helicopter',
+        category: 'web',
+        svgUrl: 'https://api.iconify.design/tabler/helicopter.svg?width=32&height=32',
+      });
+    } finally {
+      globalThis.fetch = origFetch;
     }
   });
 });

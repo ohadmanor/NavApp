@@ -1,0 +1,125 @@
+{
+  "generatedAt": "2026-11-10T07:52:03.225Z",
+  "icons": [
+    {
+      "id": "car-4wd",
+      "source": "tabler:car-4wd",
+      "labelHe": "ג׳יפ 4x4",
+      "category": "vehicles",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/car-4wd.svg"
+    },
+    {
+      "id": "car-suv",
+      "source": "tabler:car-suv",
+      "labelHe": "רכב שטח SUV",
+      "category": "vehicles",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/car-suv.svg"
+    },
+    {
+      "id": "truck",
+      "source": "tabler:truck",
+      "labelHe": "טנדר שטח",
+      "category": "vehicles",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/truck.svg"
+    },
+    {
+      "id": "motorbike",
+      "source": "tabler:motorbike",
+      "labelHe": "אופנוע שטח",
+      "category": "vehicles",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/motorbike.svg"
+    },
+    {
+      "id": "atv",
+      "source": "mdi:atv",
+      "labelHe": "טרקטורון / RZR",
+      "category": "vehicles",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/atv.svg"
+    },
+    {
+      "id": "bike",
+      "source": "tabler:bike",
+      "labelHe": "אופני הרים MTB",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/bike.svg"
+    },
+    {
+      "id": "walk",
+      "source": "tabler:walk",
+      "labelHe": "מטייל",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/walk.svg"
+    },
+    {
+      "id": "trekking",
+      "source": "tabler:trekking",
+      "labelHe": "תרמילאי",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/trekking.svg"
+    },
+    {
+      "id": "run",
+      "source": "tabler:run",
+      "labelHe": "ריצת שטח",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/run.svg"
+    },
+    {
+      "id": "navigation-arrow",
+      "source": "tabler:navigation",
+      "labelHe": "חץ ניווט",
+      "category": "tactical",
+      "rotateWithHeading": true,
+      "url": "/assets/user-icons/navigation-arrow.svg"
+    },
+    {
+      "id": "compass",
+      "source": "tabler:compass",
+      "labelHe": "מצפן",
+      "category": "tactical",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/compass.svg"
+    },
+    {
+      "id": "dog",
+      "source": "tabler:dog",
+      "labelHe": "כלב / גשש",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/dog.svg"
+    },
+    {
+      "id": "horse",
+      "source": "mdi:horse-variant",
+      "labelHe": "סוס",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/horse.svg"
+    },
+    {
+      "id": "drone",
+      "source": "tabler:drone",
+      "labelHe": "רחפן",
+      "category": "tactical",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/drone.svg"
+    },
+    {
+      "id": "tent",
+      "source": "tabler:tent",
+      "labelHe": "מחנה / חניון",
+      "category": "outdoor",
+      "rotateWithHeading": false,
+      "url": "/assets/user-icons/tent.svg"
+    }
+  ]
+}

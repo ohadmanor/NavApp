@@ -34,6 +34,12 @@ import {
 } from './core/style/israelOutdoorStyle';
 import { PoiManager } from './core/pois/PoiManager';
 import { RouteManager } from './core/navigation/RouteManager';
+import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsService';
+import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
+import {
+  UserLocationIconService,
+  type UserLocationIconPreference,
+} from './core/navigation/UserLocationIconService';
 import { ElevationService } from './core/navigation/ElevationService';
 import { MilitaryGridService } from './core/navigation/MilitaryGridService';
 import {
@@ -72,13 +78,17 @@ import {
   type PlannedLeg,
 } from './components/navigation/RoutePlannerPanel';
 import { LayerSwitcherSheet } from './components/map/LayerSwitcherSheet';
+import {
+  UserIconPickerSheet,
+  UserLocationIconBadge,
+} from './components/map/UserIconPickerSheet';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from './components/ui/themeTokens';
 
 type DesktopDrawerMode = 'poi' | 'routes' | 'record' | 'add-poi' | 'plan-route' | null;
 type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
-type MobileOverlayMode = 'poi' | 'layers' | 'add-poi' | 'plan-route' | null;
-type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | null;
+type MobileOverlayMode = 'poi' | 'layers' | 'add-poi' | 'plan-route' | 'user-icon' | null;
+type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'user-icon' | null;
 
 interface PlanOverlayState {
   active: boolean;
@@ -128,6 +138,15 @@ function ensureWaypointBadgeImage(
     });
   }
   return imageId;
+}
+
+function createUserMarkerElement(
+  pref: UserLocationIconPreference,
+  heading: number | null
+): HTMLDivElement {
+  const root = document.createElement('div');
+  UserLocationIconService.renderMarkerElement(root, pref, heading);
+  return root;
 }
 
 function useIsMobile(breakpoint = 768): boolean {
@@ -194,10 +213,17 @@ export const App: React.FC = () => {
   const [mobileNavOverlay, setMobileNavOverlay] = useState<MobileNavOverlay>(null);
   const [mobileSheetExpanded, setMobileSheetExpanded] = useState(true);
 
-  // Connectivity, Crosshair & Coordinates
+  // Connectivity, Crosshair & Continuous Live GPS Coordinates
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [showCenterCrosshair, setShowCenterCrosshair] = useState<boolean>(false);
-  const [userLocation, setUserLocation] = useState<{ lon: number; lat: number } | null>(null);
+  const [userLocation, setUserLocation] = useState<LiveGpsFix | null>(null);
+  const [isFollowingUser, setIsFollowingUser] = useState<boolean>(false);
+  const [gpsWatchRestartSeq, setGpsWatchRestartSeq] = useState<number>(0);
+  const [isScreenWakeLockActive, setIsScreenWakeLockActive] = useState<boolean>(false);
+  const [userIconPref, setUserIconPref] = useState<UserLocationIconPreference>(() =>
+    UserLocationIconService.getPreference()
+  );
+  const [isUserIconPickerOpen, setIsUserIconPickerOpen] = useState<boolean>(false);
   const [cursorCoords, setCursorCoords] = useState<{
     lon: number;
     lat: number;
@@ -312,6 +338,19 @@ export const App: React.FC = () => {
   mobileDisplayModeRef.current = mobileDisplayMode;
   const isMobileRef = useRef<boolean>(isMobile);
   isMobileRef.current = isMobile;
+  const isFollowingUserRef = useRef<boolean>(isFollowingUser);
+  isFollowingUserRef.current = isFollowingUser;
+  const pendingLocateFlyRef = useRef<boolean>(false);
+  const isNavigatingRouteRef = useRef<boolean>(isNavigatingRoute);
+  isNavigatingRouteRef.current = isNavigatingRoute;
+  const isRecordingTrackRef = useRef<boolean>(isRecordingTrack);
+  isRecordingTrackRef.current = isRecordingTrack;
+  const isRecordingPausedRef = useRef<boolean>(isRecordingPaused);
+  isRecordingPausedRef.current = isRecordingPaused;
+  const userLocationRef = useRef<LiveGpsFix | null>(userLocation);
+  userLocationRef.current = userLocation;
+  const userIconPrefRef = useRef<UserLocationIconPreference>(userIconPref);
+  userIconPrefRef.current = userIconPref;
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -418,31 +457,54 @@ export const App: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [isRecordingTrack, isRecordingPaused]);
 
-  // Live GPS Watch when recording or navigating an active route
+  // Continuous live GPS position stream across all map modes (Explore, Planning, Navigating, Recording)
   useEffect(() => {
-    if ((!isRecordingTrack || isRecordingPaused) && !isNavigatingRoute) return;
-    if (!navigator.geolocation) return;
-
-    const watchId = navigator.geolocation.watchPosition(
-      async (pos) => {
-        const lon = pos.coords.longitude;
-        const lat = pos.coords.latitude;
-        setUserLocation({ lon, lat });
+    const stopWatch = LiveGpsService.startContinuousWatch(
+      async (fix) => {
+        const { lon, lat, heading } = fix;
+        setUserLocation(fix);
 
         if (mapRef.current) {
           if (!userMarkerRef.current) {
-            userMarkerRef.current = new maplibregl.Marker({ color: '#0ea5e9' })
+            userMarkerRef.current = new maplibregl.Marker({
+              element: createUserMarkerElement(userIconPrefRef.current, heading),
+              anchor: 'center',
+            })
               .setLngLat([lon, lat])
               .addTo(mapRef.current);
           } else {
             userMarkerRef.current.setLngLat([lon, lat]);
+            UserLocationIconService.renderMarkerElement(
+              userMarkerRef.current.getElement(),
+              userIconPrefRef.current,
+              heading
+            );
+          }
+
+          if (pendingLocateFlyRef.current) {
+            pendingLocateFlyRef.current = false;
+            mapRef.current.flyTo({
+              center: [lon, lat],
+              zoom: Math.max(mapRef.current.getZoom(), 15),
+              speed: 1.4,
+              essential: true,
+            });
+          } else if (isFollowingUserRef.current && !mapRef.current.isMoving()) {
+            mapRef.current.easeTo({
+              center: [lon, lat],
+              duration: 450,
+              essential: true,
+            });
           }
         }
 
-        if (isNavigatingRoute && activeRoute) {
-          const check = RouteManager.checkNavigationDeviation(activeRoute, lon, lat);
-          setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
-          const feature = activeRoute.geojson.features[0] as GeoJSON.Feature<GeoJSON.LineString>;
+        const currentActiveRoute = activeRouteRef.current;
+        if (currentActiveRoute) {
+          const check = RouteManager.checkNavigationDeviation(currentActiveRoute, lon, lat);
+          if (isNavigatingRouteRef.current) {
+            setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
+          }
+          const feature = currentActiveRoute.geojson.features[0] as GeoJSON.Feature<GeoJSON.LineString>;
           if (feature?.geometry?.coordinates?.length >= 2) {
             const endCoord =
               feature.geometry.coordinates[feature.geometry.coordinates.length - 1];
@@ -453,15 +515,15 @@ export const App: React.FC = () => {
           }
         }
 
-        if (isRecordingTrack && !isRecordingPaused) {
-          const nextPt: [number, number] = [Number(lon.toFixed(5)), Number(lat.toFixed(5))];
+        if (isRecordingTrackRef.current && !isRecordingPausedRef.current) {
+          const nextPt: [number, number] = [Number(lon.toFixed(6)), Number(lat.toFixed(6))];
           setRecordedCoords((prev) => {
             if (prev.length > 0) {
               const last = prev[prev.length - 1];
               const stepMeters = turf.distance(turf.point(last), turf.point(nextPt), {
                 units: 'meters',
               });
-              if (stepMeters < 8) return prev;
+              if (stepMeters < 5) return prev;
               setRecordedDistanceKm((d) => Number((d + stepMeters / 1000).toFixed(2)));
             }
             return [...prev, nextPt];
@@ -476,14 +538,63 @@ export const App: React.FC = () => {
           }
         }
       },
-      () => {
-        // Ignore transient GPS timeout
+      (err) => {
+        if (pendingLocateFlyRef.current) {
+          pendingLocateFlyRef.current = false;
+          setIsFollowingUser(false);
+          if (err.isPermissionDenied) {
+            showToast('אין הרשאת מיקום — אשר גישה ל-GPS בהגדרות הדפדפן/המכשיר');
+          } else {
+            const demoLon = 34.8134;
+            const demoLat = 30.8281;
+            mapRef.current?.flyTo({ center: [demoLon, demoLat], zoom: 13.5, essential: true });
+            showToast('מיקום GPS לא זמין כרגע — ממרכז לאזור עין עקב');
+          }
+        }
       },
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+        minimumUpdateInterval: 1000,
+      }
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [isRecordingTrack, isRecordingPaused, isNavigatingRoute, activeRoute]);
+    return stopWatch;
+  }, [gpsWatchRestartSeq, showToast]);
+
+  // Ensure live GPS puck is mounted and updated immediately whenever map, location, or chosen icon changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady || !userLocation) return;
+    if (!userMarkerRef.current) {
+      userMarkerRef.current = new maplibregl.Marker({
+        element: createUserMarkerElement(userIconPref, userLocation.heading),
+        anchor: 'center',
+      })
+        .setLngLat([userLocation.lon, userLocation.lat])
+        .addTo(map);
+    } else {
+      userMarkerRef.current.setLngLat([userLocation.lon, userLocation.lat]);
+      UserLocationIconService.renderMarkerElement(
+        userMarkerRef.current.getElement(),
+        userIconPref,
+        userLocation.heading
+      );
+    }
+  }, [isMapReady, userLocation, userIconPref]);
+
+  // Keep screen awake (prevent sleep/dimming) whenever the user is in active navigation
+  const isNavigationActive = isNavigatingRoute || (isMobile && mobileDisplayMode === 'navigating');
+  useEffect(() => {
+    if (!isNavigationActive) {
+      setIsScreenWakeLockActive(false);
+      return;
+    }
+    return ScreenWakeLockService.acquireNavigationWakeLock((active) => {
+      setIsScreenWakeLockActive(active);
+    });
+  }, [isNavigationActive]);
 
   // Update Military Tactical UTM/ITM Grid GeoJSON on the map
   const updateTacticalGridOnMap = useCallback(
@@ -1278,6 +1389,12 @@ export const App: React.FC = () => {
       setMapBearing(map.getBearing());
     });
 
+    map.on('dragstart', () => {
+      if (isCancelled) return;
+      pendingLocateFlyRef.current = false;
+      setIsFollowingUser(false);
+    });
+
     map.on('moveend', async () => {
       if (isCancelled) return;
       const c = map.getCenter();
@@ -1806,34 +1923,28 @@ export const App: React.FC = () => {
   };
 
   const handleLocateMe = () => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lon = pos.coords.longitude;
-        const lat = pos.coords.latitude;
-        setUserLocation({ lon, lat });
-        handleFlyTo(lon, lat, 14);
-        if (mapRef.current) {
-          if (!userMarkerRef.current) {
-            userMarkerRef.current = new maplibregl.Marker({ color: '#0ea5e9' })
-              .setLngLat([lon, lat])
-              .addTo(mapRef.current);
-          } else {
-            userMarkerRef.current.setLngLat([lon, lat]);
-          }
-        }
-        if (activeRoute) {
-          const check = RouteManager.checkNavigationDeviation(activeRoute, lon, lat);
-          setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
-        }
-      },
-      () => {
-        const demoLon = 34.8134;
-        const demoLat = 30.8281;
-        handleFlyTo(demoLon, demoLat, 13.5);
-        showToast('מיקום GPS לא זמין — ממרכז לאזור עין עקב');
+    setIsFollowingUser(true);
+    const currentLoc = userLocationRef.current;
+    if (currentLoc) {
+      pendingLocateFlyRef.current = false;
+      handleFlyTo(
+        currentLoc.lon,
+        currentLoc.lat,
+        Math.max(mapRef.current?.getZoom() || 14, 15)
+      );
+      if (activeRoute) {
+        const check = RouteManager.checkNavigationDeviation(
+          activeRoute,
+          currentLoc.lon,
+          currentLoc.lat
+        );
+        setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
       }
-    );
+    } else {
+      pendingLocateFlyRef.current = true;
+      setGpsWatchRestartSeq((s) => s + 1);
+      showToast('מאתר מיקום GPS רציף...');
+    }
   };
 
   const handleToggle3D = () => {
@@ -1914,7 +2025,12 @@ export const App: React.FC = () => {
   const handleStartRouteNavigation = async (route: SavedRouteRecord) => {
     await handleSelectRoute(route);
     setIsNavigatingRoute(true);
+    setIsFollowingUser(true);
     setRemainingDistKm(route.distanceKm);
+    const currentLoc = userLocationRef.current;
+    if (currentLoc) {
+      handleFlyTo(currentLoc.lon, currentLoc.lat, 15);
+    }
     if (isMobile) {
       setMobileDisplayMode('navigating');
       setMobileNavOverlay(null);
@@ -2907,6 +3023,7 @@ export const App: React.FC = () => {
                       <span>
                         בניווט: {activeRoute.name}
                         {remainingDistKm !== null ? ` • נותר ${remainingDistKm} ק״מ` : ''}
+                        {isScreenWakeLockActive ? ' • מסך דולק' : ''}
                       </span>
                     </>
                   )}
@@ -3101,14 +3218,59 @@ export const App: React.FC = () => {
                 </div>
 
                 <button
-                  onClick={handleLocateMe}
-                  className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`}
-                  title="המיקום שלי (GPS)"
+                  onClick={() => setIsUserIconPickerOpen((v) => !v)}
+                  className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${
+                    isUserIconPickerOpen ? 'border-emerald-500 ring-2 ring-emerald-500/40' : ''
+                  } ${t.pillBtn}`}
+                  title={`שנה אייקון מיקום (${userIconPref.icon.labelHe})`}
                 >
-                  <LocateFixed className="w-4 h-4 text-sky-500" />
+                  <UserLocationIconBadge
+                    icon={userIconPref.icon}
+                    accentColor={userIconPref.accentColor}
+                    size="sm"
+                  />
+                </button>
+
+                <button
+                  onClick={handleLocateMe}
+                  className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${
+                    isFollowingUser && userLocation
+                      ? 'bg-sky-600 border-sky-400 text-white'
+                      : t.pillBtn
+                  }`}
+                  title={
+                    isFollowingUser && userLocation
+                      ? 'מעקב מיקום רציף פעיל'
+                      : userLocation
+                        ? 'מרכז ונעל מעקב מיקום רציף (GPS)'
+                        : 'מאתר מיקום GPS רציף...'
+                  }
+                >
+                  <LocateFixed
+                    className={`w-4 h-4 ${
+                      isFollowingUser && userLocation
+                        ? 'text-white'
+                        : userLocation
+                          ? 'text-sky-500'
+                          : 'text-slate-400 animate-pulse'
+                    }`}
+                  />
                 </button>
               </div>
             </div>
+
+            {/* User Position Icon Picker Floating Popover */}
+            <UserIconPickerSheet
+              isOpen={isUserIconPickerOpen}
+              theme={theme}
+              preference={userIconPref}
+              isOnline={isOnline}
+              onSelectPreference={(nextPref) => {
+                setUserIconPref(nextPref);
+                showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
+              }}
+              onClose={() => setIsUserIconPickerOpen(false)}
+            />
 
             {/* Bottom-Center Click-to-Copy Tactical HUD Pill */}
             <button
@@ -3216,7 +3378,9 @@ export const App: React.FC = () => {
                       <span className="tabular-nums">
                         {isRecordingTrack
                           ? `מקליט ${formatDuration(recordElapsedSeconds)}`
-                          : 'מצב ניווט • GPS'}
+                          : isScreenWakeLockActive
+                            ? 'מצב ניווט • מסך דולק'
+                            : 'מצב ניווט • GPS'}
                       </span>
                     </div>
 
@@ -3294,8 +3458,32 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Mobile Bottom-Left Thumb FABs (Add Pin + Locate GPS) */}
+            {/* Mobile Bottom-Left Thumb FABs (Change Icon + Add Pin + Locate GPS) */}
             <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-2 pointer-events-auto">
+              <button
+                onClick={() => {
+                  if (mobileDisplayMode === 'navigating') {
+                    setMobileNavOverlay(mobileNavOverlay === 'user-icon' ? null : 'user-icon');
+                  } else {
+                    setMobilePlanningOverlay(mobilePlanningOverlay === 'user-icon' ? null : 'user-icon');
+                  }
+                }}
+                className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
+                  (mobileDisplayMode === 'navigating'
+                    ? mobileNavOverlay === 'user-icon'
+                    : mobilePlanningOverlay === 'user-icon')
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/50'
+                    : ''
+                } ${t.pillBtn}`}
+                title={`שנה אייקון מיקום (${userIconPref.icon.labelHe})`}
+              >
+                <UserLocationIconBadge
+                  icon={userIconPref.icon}
+                  accentColor={userIconPref.accentColor}
+                  size="sm"
+                />
+              </button>
+
               <button
                 onClick={() => {
                   if (mobileDisplayMode === 'navigating') {
@@ -3314,10 +3502,22 @@ export const App: React.FC = () => {
 
               <button
                 onClick={handleLocateMe}
-                className="w-12 h-12 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl flex items-center justify-center transition-all"
-                title="מיקום שלי (GPS)"
+                className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${
+                  isFollowingUser && userLocation
+                    ? 'bg-sky-600 hover:bg-sky-500 ring-2 ring-sky-300/80 text-white'
+                    : userLocation
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                      : 'bg-slate-800/95 border border-slate-600 text-sky-400'
+                }`}
+                title={
+                  isFollowingUser && userLocation
+                    ? 'מעקב מיקום רציף פעיל'
+                    : userLocation
+                      ? 'מרכז ונעל מעקב מיקום רציף (GPS)'
+                      : 'מאתר מיקום GPS רציף...'
+                }
               >
-                <LocateFixed className="w-5 h-5" />
+                <LocateFixed className={`w-5 h-5 ${!userLocation ? 'animate-pulse' : ''}`} />
               </button>
             </div>
 
@@ -3378,6 +3578,19 @@ export const App: React.FC = () => {
                   onNotify={showToast}
                 />
               </div>
+            ) : mobilePlanningOverlay === 'user-icon' ? (
+              <UserIconPickerSheet
+                isOpen
+                embedded
+                theme={theme}
+                preference={userIconPref}
+                isOnline={isOnline}
+                onSelectPreference={(nextPref) => {
+                  setUserIconPref(nextPref);
+                  showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
+                }}
+                onClose={() => setMobilePlanningOverlay(null)}
+              />
             ) : mobilePlanningOverlay === 'layers' ? (
               <LayerSwitcherSheet
                 isOpen
@@ -3563,6 +3776,10 @@ export const App: React.FC = () => {
                       onClick={() => {
                         setMobileDisplayMode('navigating');
                         setMobileNavOverlay(null);
+                        setIsFollowingUser(true);
+                        if (userLocationRef.current) {
+                          handleFlyTo(userLocationRef.current.lon, userLocationRef.current.lat, 15);
+                        }
                       }}
                       className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
                     >
@@ -3652,7 +3869,20 @@ export const App: React.FC = () => {
       {/* MODE B: NAVIGATING BOTTOM BAR (No bottom 4-tab menu! Just slim telemetry or temporary overlay) */}
       {isMobile && mobileDisplayMode === 'navigating' && (
         <div className={`relative z-30 border-t shadow-2xl shrink-0 pb-safe ${t.panel}`}>
-          {mobileNavOverlay === 'layers' ? (
+          {mobileNavOverlay === 'user-icon' ? (
+            <UserIconPickerSheet
+              isOpen
+              embedded
+              theme={theme}
+              preference={userIconPref}
+              isOnline={isOnline}
+              onSelectPreference={(nextPref) => {
+                setUserIconPref(nextPref);
+                showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
+              }}
+              onClose={() => setMobileNavOverlay(null)}
+            />
+          ) : mobileNavOverlay === 'layers' ? (
             <LayerSwitcherSheet
               isOpen
               embedded

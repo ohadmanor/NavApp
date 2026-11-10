@@ -1,0 +1,249 @@
+import { Capacitor } from '@capacitor/core';
+import { Geolocation } from '@capacitor/geolocation';
+
+export interface LiveGpsFix {
+  lon: number;
+  lat: number;
+  accuracy: number | null;
+  altitude: number | null;
+  heading: number | null;
+  speed: number | null;
+  timestamp: number;
+}
+
+export interface LiveGpsError {
+  code?: number;
+  message: string;
+  isPermissionDenied: boolean;
+}
+
+export interface LiveGpsWatchOptions {
+  enableHighAccuracy?: boolean;
+  maximumAge?: number;
+  timeout?: number;
+  minimumUpdateInterval?: number;
+}
+
+const DEFAULT_WATCH_OPTIONS: Required<LiveGpsWatchOptions> = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 10000,
+  minimumUpdateInterval: 1000,
+};
+
+export function normalizeGpsPosition(raw: {
+  timestamp?: number;
+  coords?: {
+    longitude?: number;
+    latitude?: number;
+    accuracy?: number | null;
+    altitude?: number | null;
+    heading?: number | null;
+    speed?: number | null;
+  };
+} | null | undefined): LiveGpsFix | null {
+  if (!raw?.coords) return null;
+  const lon = Number(raw.coords.longitude);
+  const lat = Number(raw.coords.latitude);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+    return null;
+  }
+  const accuracy =
+    typeof raw.coords.accuracy === 'number' && Number.isFinite(raw.coords.accuracy)
+      ? raw.coords.accuracy
+      : null;
+  const altitude =
+    typeof raw.coords.altitude === 'number' && Number.isFinite(raw.coords.altitude)
+      ? raw.coords.altitude
+      : null;
+  const heading =
+    typeof raw.coords.heading === 'number' &&
+    Number.isFinite(raw.coords.heading) &&
+    raw.coords.heading >= 0
+      ? raw.coords.heading % 360
+      : null;
+  const speed =
+    typeof raw.coords.speed === 'number' &&
+    Number.isFinite(raw.coords.speed) &&
+    raw.coords.speed >= 0
+      ? raw.coords.speed
+      : null;
+
+  return {
+    lon,
+    lat,
+    accuracy,
+    altitude,
+    heading,
+    speed,
+    timestamp:
+      typeof raw.timestamp === 'number' && Number.isFinite(raw.timestamp)
+        ? raw.timestamp
+        : Date.now(),
+  };
+}
+
+function toLiveGpsError(err: unknown): LiveGpsError {
+  const code = typeof (err as any)?.code === 'number' ? (err as any).code : undefined;
+  const message =
+    typeof (err as any)?.message === 'string' && (err as any).message.trim()
+      ? (err as any).message
+      : 'Location unavailable';
+  const isPermissionDenied =
+    code === 1 || /denied|permission/i.test(message);
+  return { code, message, isPermissionDenied };
+}
+
+export class LiveGpsService {
+  /**
+   * Starts a continuous, high-accuracy GPS position stream across Web PWA and Capacitor Native (Android/iOS).
+   * Returns a synchronous cleanup function that stops watching immediately.
+   */
+  static startContinuousWatch(
+    onFix: (fix: LiveGpsFix) => void,
+    onError?: (err: LiveGpsError) => void,
+    options?: LiveGpsWatchOptions
+  ): () => void {
+    const resolvedOptions: Required<LiveGpsWatchOptions> = {
+      ...DEFAULT_WATCH_OPTIONS,
+      ...options,
+    };
+
+    let disposed = false;
+    let browserWatchId: number | null = null;
+    let coarseWatchId: number | null = null;
+    let nativeWatchId: string | null = null;
+    let hasPrimaryFix = false;
+
+    const startBrowserWatch = () => {
+      if (disposed) return;
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        onError?.({
+          message: 'Geolocation API is not supported on this device',
+          isPermissionDenied: false,
+        });
+        return;
+      }
+
+      // Fast initial seed fix so the position icon shows immediately indoors/on desktop
+      // while high-accuracy GPS watch is warming up.
+      if (typeof navigator.geolocation.getCurrentPosition === 'function') {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            if (disposed || hasPrimaryFix) return;
+            const fix = normalizeGpsPosition(pos);
+            if (fix) onFix(fix);
+          },
+          () => {
+            // Ignore seed failure; primary watch below handles continuous stream & errors
+          },
+          { enableHighAccuracy: false, maximumAge: 120000, timeout: 5000 }
+        );
+      }
+
+      browserWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          if (disposed) return;
+          hasPrimaryFix = true;
+          if (coarseWatchId !== null) {
+            navigator.geolocation.clearWatch(coarseWatchId);
+            coarseWatchId = null;
+          }
+          const fix = normalizeGpsPosition(pos);
+          if (fix) onFix(fix);
+        },
+        (err) => {
+          if (disposed) return;
+          const liveErr = toLiveGpsError(err);
+          // On indoor/desktop machines where high-accuracy GPS times out, start a coarse
+          // network/Wi-Fi watch as fallback so the user's icon continues updating.
+          if (!liveErr.isPermissionDenied && !hasPrimaryFix && coarseWatchId === null) {
+            coarseWatchId = navigator.geolocation.watchPosition(
+              (pos) => {
+                if (disposed || hasPrimaryFix) return;
+                const fix = normalizeGpsPosition(pos);
+                if (fix) onFix(fix);
+              },
+              () => {},
+              { enableHighAccuracy: false, maximumAge: 15000, timeout: 15000 }
+            );
+          }
+          onError?.(liveErr);
+        },
+        {
+          enableHighAccuracy: resolvedOptions.enableHighAccuracy,
+          maximumAge: resolvedOptions.maximumAge,
+          timeout: resolvedOptions.timeout,
+        }
+      );
+    };
+
+    if (Capacitor.isNativePlatform()) {
+      (async () => {
+        try {
+          const perm = await Geolocation.checkPermissions();
+          if (disposed) return;
+          if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+            const req = await Geolocation.requestPermissions();
+            if (disposed) return;
+            if (req.location !== 'granted' && req.coarseLocation !== 'granted') {
+              onError?.({
+                code: 1,
+                message: 'Location permission denied',
+                isPermissionDenied: true,
+              });
+              return;
+            }
+          }
+
+          const id = await Geolocation.watchPosition(
+            {
+              enableHighAccuracy: resolvedOptions.enableHighAccuracy,
+              maximumAge: resolvedOptions.maximumAge,
+              timeout: resolvedOptions.timeout,
+              minimumUpdateInterval: resolvedOptions.minimumUpdateInterval,
+            },
+            (pos, err) => {
+              if (disposed) return;
+              if (err) {
+                onError?.(toLiveGpsError(err));
+                return;
+              }
+              const fix = normalizeGpsPosition(pos);
+              if (fix) onFix(fix);
+            }
+          );
+
+          if (disposed) {
+            void Geolocation.clearWatch({ id });
+          } else {
+            nativeWatchId = id;
+          }
+        } catch {
+          if (!disposed) {
+            startBrowserWatch();
+          }
+        }
+      })();
+    } else {
+      startBrowserWatch();
+    }
+
+    return () => {
+      disposed = true;
+      if (browserWatchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(browserWatchId);
+        browserWatchId = null;
+      }
+      if (coarseWatchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(coarseWatchId);
+        coarseWatchId = null;
+      }
+      if (nativeWatchId !== null) {
+        const idToClear = nativeWatchId;
+        nativeWatchId = null;
+        void Geolocation.clearWatch({ id: idToClear }).catch(() => {});
+      }
+    };
+  }
+}

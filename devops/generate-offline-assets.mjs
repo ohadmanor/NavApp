@@ -310,6 +310,13 @@ if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.pois.geojson'))) {
 if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.search.idx'))) {
   optionalDataAssets.push('/data/Israel.search.idx');
 }
+const userIconsDir = path.join(ASSETS_DIR, 'user-icons');
+const userIconAssets = fs.existsSync(userIconsDir)
+  ? fs
+      .readdirSync(userIconsDir)
+      .filter((f) => f.endsWith('.svg') || f.endsWith('.json'))
+      .map((f) => `/assets/user-icons/${f}`)
+  : [];
 
 const appShellEntries = [
   '/',
@@ -324,6 +331,7 @@ const appShellEntries = [
   '/assets/sprites/sprite.png',
   '/assets/sprites/sprite@2x.json',
   '/assets/sprites/sprite@2x.png',
+  ...userIconAssets,
   ...optionalDataAssets
 ];
 
