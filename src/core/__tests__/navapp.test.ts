@@ -53,6 +53,15 @@ import {
   UserLocationIconService,
   sanitizeSvgMarkup,
 } from '../navigation/UserLocationIconService';
+import {
+  NavigationHeadingService,
+  DEFAULT_NAV_ORIENTATION,
+  computeBearingBetweenCoords,
+  computeScreenRotationDeg,
+  extractRouteTangentHeading,
+  shortestAngleDeltaDeg,
+  smoothHeadingDeg,
+} from '../navigation/NavigationHeadingService';
 import { MilitaryGridService } from '../navigation/MilitaryGridService';
 import { getSurfaceTheme, POI_CATEGORY_META } from '../../components/ui/themeTokens';
 import { formatDuration } from '../../components/navigation/TrackRecorderPanel';
@@ -1484,10 +1493,10 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     expect(normalizeGpsPosition({ coords: { longitude: Number.NaN, latitude: 31.7 } })).toBeNull();
 
     const origNavigator = (globalThis as any).navigator;
-    let activeCb: ((pos: any) => void) | null = null;
+    const activeCbs: Array<(pos: any) => void> = [];
     const clearWatchSpy = vi.fn();
-    const watchPositionSpy = vi.fn((successCb: (pos: any) => void) => {
-      activeCb = successCb;
+    const watchPositionSpy = vi.fn((successCb: (pos: any) => void, _errorCb?: any, _opts?: any) => {
+      activeCbs.push(successCb);
       return 42;
     });
 
@@ -1513,15 +1522,15 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
         maximumAge: 0,
       });
 
-      activeCb?.({
+      activeCbs[0]?.({
         timestamp: 1000,
         coords: { longitude: 34.81, latitude: 30.83, heading: 90 },
       });
-      activeCb?.({
+      activeCbs[0]?.({
         timestamp: 2000,
         coords: { longitude: 34.811, latitude: 30.831, heading: 92 },
       });
-      activeCb?.({
+      activeCbs[0]?.({
         timestamp: 3000,
         coords: { longitude: 34.812, latitude: 30.832, heading: 95 },
       });
@@ -1620,6 +1629,366 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       });
     } finally {
       globalThis.fetch = origFetch;
+    }
+
+    // Verify sanitizeSvgMarkup strips leading XML declaration & defaults monochrome icons to currentColor
+    const xmlIcon = sanitizeSvgMarkup('<?xml version="1.0"?><svg viewBox="0 0 24 24"><path d="M1 1h5"/></svg>');
+    expect(xmlIcon.startsWith('<svg')).toBe(true);
+    expect(xmlIcon).toContain('fill="currentColor"');
+    const strokeIcon = sanitizeSvgMarkup('<svg fill="none" viewBox="0 0 24 24"><path d="M1 1h5"/></svg>');
+    expect(strokeIcon).toContain('fill="none"');
+  });
+
+  it('preserves MapLibre marker positioning classes, avoids full DOM teardown on ticks, and injects SVG icons', async () => {
+    const origDocument = (globalThis as any).document;
+
+    class MockClassList {
+      private set = new Set<string>();
+      constructor(private syncToOwner: () => void) {}
+      loadFromString(str: string) {
+        this.set = new Set(str.split(/\s+/).filter(Boolean));
+      }
+      toString() {
+        return Array.from(this.set).join(' ');
+      }
+      add(...tokens: string[]) {
+        for (const t of tokens) if (t) this.set.add(t);
+        this.syncToOwner();
+      }
+      remove(...tokens: string[]) {
+        for (const t of tokens) this.set.delete(t);
+        this.syncToOwner();
+      }
+      contains(token: string) {
+        return this.set.has(token);
+      }
+    }
+
+    class MockElement {
+      private _className = '';
+      classList: MockClassList;
+      dataset: Record<string, string> = {};
+      style: Record<string, string> = {};
+      children: MockElement[] = [];
+      private attrs = new Map<string, string>();
+      private _innerHTML = '';
+
+      constructor(public tagName: string) {
+        this.classList = new MockClassList(() => {
+          this._className = this.classList.toString();
+        });
+      }
+      get className() {
+        return this._className;
+      }
+      set className(val: string) {
+        this._className = val;
+        this.classList.loadFromString(val);
+      }
+      get innerHTML() {
+        return this._innerHTML;
+      }
+      set innerHTML(val: string) {
+        this._innerHTML = val;
+        if (val === '') this.children = [];
+      }
+      appendChild(child: MockElement) {
+        this.children.push(child);
+        return child;
+      }
+      contains(target: MockElement): boolean {
+        if (target === this) return true;
+        return this.children.some((c) => c.contains(target));
+      }
+      setAttribute(k: string, v: string) {
+        this.attrs.set(k, v);
+      }
+      getAttribute(k: string) {
+        return this.attrs.get(k) ?? null;
+      }
+      querySelector(selector: string): MockElement | null {
+        const m = /^\[data-role="([^"]+)"\]$/.exec(selector);
+        if (!m) return null;
+        const role = m[1];
+        const visit = (node: MockElement): MockElement | null => {
+          for (const ch of node.children) {
+            if (ch.dataset.role === role) return ch;
+            const nested = visit(ch);
+            if (nested) return nested;
+          }
+          return null;
+        };
+        return visit(this);
+      }
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: {
+          createElement: (tag: string) => new MockElement(tag),
+        },
+      });
+
+      const root = new MockElement('div');
+      root.className = 'maplibregl-marker maplibregl-marker-anchor-center';
+
+      const iconWithInlineSvg = {
+        ...BUILT_IN_USER_ICONS[1],
+        inlineSvg: '<svg viewBox="0 0 24 24"><path d="M5 5h10"/></svg>',
+      };
+      const pref = { icon: iconWithInlineSvg, accentColor: '#10b981' };
+
+      UserLocationIconService.renderMarkerElement(root as unknown as HTMLElement, pref, 45);
+
+      expect(root.classList.contains('maplibregl-marker')).toBe(true);
+      expect(root.classList.contains('maplibregl-marker-anchor-center')).toBe(true);
+      expect(root.classList.contains('relative')).toBe(false);
+      expect(root.style.position).toBe('absolute');
+      expect(root.style.top).toBe('0');
+      expect(root.style.left).toBe('0');
+      expect(root.style.zIndex).toBe('20');
+      expect(root.style.width).toBe('76px');
+      expect(root.style.height).toBe('76px');
+
+      const innerContainer = root.children[0];
+      expect(innerContainer.classList.contains('relative')).toBe(true);
+
+      const headingWrap = (root as unknown as HTMLElement).querySelector('[data-role="heading"]') as any;
+      expect(headingWrap).not.toBeNull();
+      expect(headingWrap.style.display).toBe('flex');
+      expect(headingWrap.style.transform).toBe('rotate(45deg)');
+
+      const badge = (root as unknown as HTMLElement).querySelector('[data-role="badge"]') as any;
+      expect(badge).not.toBeNull();
+      expect(badge.children[0].innerHTML).toContain('color:#ffffff');
+      // car-4wd has rotateWithHeading: true so badge turns along heading
+      expect(badge.style.transform).toBe('rotate(45deg)');
+
+      // Second 1s GPS tick in Heading-Up (mapBearing === heading) points beam/badge straight up (0deg) without recreating DOM subtree
+      UserLocationIconService.renderMarkerElement(root as unknown as HTMLElement, pref, 135, 135, true);
+      expect(root.children[0]).toBe(innerContainer);
+      expect(headingWrap.style.transform).toBe('rotate(0deg)');
+      expect(badge.style.transform).toBe('rotate(0deg)');
+      expect(root.classList.contains('maplibregl-marker')).toBe(true);
+
+      // North-Up (mapBearing 0deg, heading 135deg) turns cone and rotating icon to 135deg
+      UserLocationIconService.updateMarkerDirection(root as unknown as HTMLElement, pref, 135, 0, true);
+      expect(headingWrap.style.transform).toBe('rotate(135deg)');
+      expect(badge.style.transform).toBe('rotate(135deg)');
+
+      // Default gps-puck shows directional chevron inside badge during navigation and dot when stationary without heading
+      const puckRoot = new MockElement('div');
+      const puckPref = { icon: BUILT_IN_USER_ICONS[0], accentColor: '#0ea5e9' };
+      UserLocationIconService.renderMarkerElement(puckRoot as unknown as HTMLElement, puckPref, 90, 0, true);
+      expect(puckRoot.style.width).toBe('72px');
+      const puckCoreDot = (puckRoot as unknown as HTMLElement).querySelector('[data-role="puck-core-dot"]') as any;
+      const puckNavArrow = (puckRoot as unknown as HTMLElement).querySelector('[data-role="puck-nav-arrow"]') as any;
+      const puckBadge = (puckRoot as unknown as HTMLElement).querySelector('[data-role="badge"]') as any;
+      expect(puckCoreDot.style.display).toBe('none');
+      expect(puckNavArrow.style.display).toBe('flex');
+      expect(puckBadge.style.transform).toBe('rotate(90deg)');
+
+      // Side-view icon (car-suv, rotateWithHeading: false) turns directional beam while badge remains upright
+      const suvRoot = new MockElement('div');
+      const suvIcon = BUILT_IN_USER_ICONS.find((i) => i.id === 'car-suv')!;
+      const suvPref = {
+        icon: { ...suvIcon, inlineSvg: '<svg viewBox="0 0 24 24"><path d="M2 2h8"/></svg>' },
+        accentColor: '#f59e0b',
+      };
+      UserLocationIconService.renderMarkerElement(suvRoot as unknown as HTMLElement, suvPref, 120, 0, true);
+      const suvHeading = (suvRoot as unknown as HTMLElement).querySelector('[data-role="heading"]') as any;
+      const suvBadge = (suvRoot as unknown as HTMLElement).querySelector('[data-role="badge"]') as any;
+      expect(suvHeading.style.transform).toBe('rotate(120deg)');
+      expect(suvBadge.style.transform).toBe('');
+    } finally {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: origDocument,
+      });
+    }
+  });
+
+  it('seeds fast initial GPS location and falls back to coarse watch indoors before primary fix arrives', () => {
+    const origNavigator = (globalThis as any).navigator;
+    const seedSuccessCbs: Array<(pos: any) => void> = [];
+    const watchCallbacks: Array<{ success: (pos: any) => void; error?: (err: any) => void }> = [];
+    const clearWatchSpy = vi.fn();
+
+    try {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: {
+          geolocation: {
+            getCurrentPosition: vi.fn((successCb: (pos: any) => void) => {
+              seedSuccessCbs.push(successCb);
+            }),
+            watchPosition: vi.fn((successCb: (pos: any) => void, errorCb?: (err: any) => void) => {
+              watchCallbacks.push({ success: successCb, error: errorCb });
+              return watchCallbacks.length * 10;
+            }),
+            clearWatch: clearWatchSpy,
+          },
+        },
+      });
+
+      const fixes: LiveGpsFix[] = [];
+      const errors: any[] = [];
+      const stop = LiveGpsService.startContinuousWatch(
+        (fix) => fixes.push(fix),
+        (err) => errors.push(err)
+      );
+
+      // Immediate coarse seed resolves while primary GPS warms up
+      seedSuccessCbs[0]?.({ timestamp: 100, coords: { longitude: 34.78, latitude: 32.08 } });
+      expect(fixes).toHaveLength(1);
+      expect(fixes[0]).toMatchObject({ lon: 34.78, lat: 32.08 });
+
+      // Primary high-accuracy timeout spawns coarse watch fallback without false error
+      watchCallbacks[0].error?.({ code: 3, message: 'Timeout' });
+      expect(errors).toHaveLength(0);
+      expect(watchCallbacks).toHaveLength(2);
+
+      // Coarse fallback keeps updating position
+      watchCallbacks[1].success({ timestamp: 200, coords: { longitude: 34.79, latitude: 32.09 } });
+      expect(fixes).toHaveLength(2);
+
+      // Primary high-accuracy fix takes over and clears coarse fallback watch (id 20)
+      watchCallbacks[0].success({ timestamp: 300, coords: { longitude: 34.8, latitude: 32.1 } });
+      expect(fixes).toHaveLength(3);
+      expect(clearWatchSpy).toHaveBeenCalledWith(20);
+
+      // Late seed is ignored once primary fix arrived
+      seedSuccessCbs[0]?.({ timestamp: 400, coords: { longitude: 34.0, latitude: 31.0 } });
+      expect(fixes).toHaveLength(3);
+
+      stop();
+      expect(clearWatchSpy).toHaveBeenCalledWith(10);
+    } finally {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: origNavigator,
+      });
+    }
+  });
+
+  it('defaults navigation orientation to heading-up, switches cleanly to north-up, and resolves live heading + screen arrow rotation', () => {
+    const origWindow = (globalThis as any).window;
+    const store = new Map<string, string>();
+    try {
+      (globalThis as any).window = {
+        localStorage: {
+          getItem: (k: string) => store.get(k) ?? null,
+          setItem: (k: string, v: string) => store.set(k, v),
+        },
+      };
+
+      expect(DEFAULT_NAV_ORIENTATION).toBe('heading-up');
+      expect(NavigationHeadingService.getOrientationPreference()).toBe('heading-up');
+
+      NavigationHeadingService.setOrientationPreference('north-up');
+      expect(NavigationHeadingService.getOrientationPreference()).toBe('north-up');
+      NavigationHeadingService.setOrientationPreference('heading-up');
+      expect(NavigationHeadingService.getOrientationPreference()).toBe('heading-up');
+
+      // Shortest wrap-around delta & smoothing across 355 <-> 5 deg North seam
+      expect(shortestAngleDeltaDeg(355, 5)).toBe(10);
+      expect(shortestAngleDeltaDeg(5, 355)).toBe(-10);
+      expect(smoothHeadingDeg(355, 5, 0.5)).toBe(0);
+      expect(smoothHeadingDeg(10, 350, 0.5)).toBe(0);
+
+      // Screen rotation: heading-up (mapBearing == worldHeading => 0deg straight ahead), north-up (mapBearing == 0 => worldHeading)
+      expect(computeScreenRotationDeg(90, 90)).toBe(0);
+      expect(computeScreenRotationDeg(90, 0)).toBe(90);
+      expect(computeScreenRotationDeg(350, 30)).toBe(320);
+
+      // Course bearing: ignores < 3m jitter and returns cardinal azimuths
+      expect(computeBearingBetweenCoords(34.8, 30.8, 34.80001, 30.80001, 3)).toBeNull();
+      const northDeg = computeBearingBetweenCoords(34.8, 30.8, 34.8, 30.802, 3);
+      const eastDeg = computeBearingBetweenCoords(34.8, 30.8, 34.802, 30.8, 3);
+      const southDeg = computeBearingBetweenCoords(34.8, 30.802, 34.8, 30.8, 3);
+      expect(northDeg).toBeCloseTo(0, 1);
+      expect(eastDeg!).toBeGreaterThan(89);
+      expect(eastDeg!).toBeLessThan(91);
+      expect(southDeg).toBeCloseTo(180, 1);
+
+      // Sensor fusion hierarchy: GPS while moving -> Compass while stationary -> sticky last heading -> route tangent
+      const now = 1_000_000;
+      expect(
+        NavigationHeadingService.resolveActiveHeading({
+          gpsFixHeading: 120,
+          gpsSpeedMps: 3.5,
+          computedCourseHeading: 118,
+          compassHeading: 240,
+          lastValidHeading: 300,
+          routeFallbackHeading: 10,
+          nowMs: now,
+          gpsUpdatedAtMs: now - 500,
+          compassUpdatedAtMs: now - 200,
+        })
+      ).toBe(120);
+
+      expect(
+        NavigationHeadingService.resolveActiveHeading({
+          gpsFixHeading: 120,
+          gpsSpeedMps: 0.1,
+          computedCourseHeading: null,
+          compassHeading: 245,
+          lastValidHeading: 120,
+          routeFallbackHeading: 10,
+          nowMs: now,
+          gpsUpdatedAtMs: now - 500,
+          compassUpdatedAtMs: now - 200,
+        })
+      ).toBe(245);
+
+      const sampleRoute: SavedRouteRecord = {
+        id: 'route-heading-test',
+        name: 'East Trail',
+        distanceKm: 1.5,
+        ascentMeters: 20,
+        descentMeters: 10,
+        minEle: 300,
+        maxEle: 320,
+        visible: true,
+        sourceFormat: 'planned',
+        color: '#2563eb',
+        createdAt: new Date(now).toISOString(),
+        elevationProfile: [],
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: [
+                  [34.8, 30.8],
+                  [34.81, 30.8],
+                ],
+              },
+            },
+          ],
+        },
+      };
+      const tangent = extractRouteTangentHeading(sampleRoute, 34.8, 30.8);
+      expect(tangent).not.toBeNull();
+      expect(tangent!).toBeCloseTo(90, 0);
+
+      expect(
+        NavigationHeadingService.resolveActiveHeading({
+          gpsFixHeading: null,
+          gpsSpeedMps: null,
+          computedCourseHeading: null,
+          compassHeading: null,
+          lastValidHeading: null,
+          routeFallbackHeading: tangent,
+          nowMs: now,
+        })
+      ).toBeCloseTo(90, 0);
+    } finally {
+      (globalThis as any).window = origWindow;
     }
   });
 });

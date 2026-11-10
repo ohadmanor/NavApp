@@ -37,6 +37,14 @@ import { RouteManager } from './core/navigation/RouteManager';
 import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsService';
 import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
 import {
+  NavigationHeadingService,
+  computeBearingBetweenCoords,
+  extractRouteTangentHeading,
+  shortestAngleDeltaDeg,
+  smoothHeadingDeg,
+  type MapNavigationOrientation,
+} from './core/navigation/NavigationHeadingService';
+import {
   UserLocationIconService,
   type UserLocationIconPreference,
 } from './core/navigation/UserLocationIconService';
@@ -142,10 +150,12 @@ function ensureWaypointBadgeImage(
 
 function createUserMarkerElement(
   pref: UserLocationIconPreference,
-  heading: number | null
+  heading: number | null,
+  mapBearing = 0,
+  isNavigationActive = false
 ): HTMLDivElement {
   const root = document.createElement('div');
-  UserLocationIconService.renderMarkerElement(root, pref, heading);
+  UserLocationIconService.renderMarkerElement(root, pref, heading, mapBearing, isNavigationActive);
   return root;
 }
 
@@ -220,6 +230,11 @@ export const App: React.FC = () => {
   const [isFollowingUser, setIsFollowingUser] = useState<boolean>(false);
   const [gpsWatchRestartSeq, setGpsWatchRestartSeq] = useState<number>(0);
   const [isScreenWakeLockActive, setIsScreenWakeLockActive] = useState<boolean>(false);
+  const [isFreeNavigation, setIsFreeNavigation] = useState<boolean>(false);
+  const [navOrientation, setNavOrientation] = useState<MapNavigationOrientation>(() =>
+    NavigationHeadingService.getOrientationPreference()
+  );
+  const [liveHeading, setLiveHeading] = useState<number | null>(null);
   const [userIconPref, setUserIconPref] = useState<UserLocationIconPreference>(() =>
     UserLocationIconService.getPreference()
   );
@@ -351,6 +366,42 @@ export const App: React.FC = () => {
   userLocationRef.current = userLocation;
   const userIconPrefRef = useRef<UserLocationIconPreference>(userIconPref);
   userIconPrefRef.current = userIconPref;
+  const navOrientationRef = useRef<MapNavigationOrientation>(navOrientation);
+  navOrientationRef.current = navOrientation;
+  const liveHeadingRef = useRef<number | null>(liveHeading);
+  liveHeadingRef.current = liveHeading;
+  const isNavigationActive =
+    isNavigatingRoute || isFreeNavigation || (isMobile && mobileDisplayMode === 'navigating');
+  const isNavigationActiveRef = useRef<boolean>(isNavigationActive);
+  isNavigationActiveRef.current = isNavigationActive;
+  const gpsHeadingMetaRef = useRef<{
+    fixHeading: number | null;
+    speedMps: number | null;
+    courseHeading: number | null;
+    updatedAt: number;
+    courseUpdatedAt: number;
+    anchorLon?: number;
+    anchorLat?: number;
+  }>({
+    fixHeading: null,
+    speedMps: null,
+    courseHeading: null,
+    updatedAt: 0,
+    courseUpdatedAt: 0,
+  });
+  const compassMetaRef = useRef<{ heading: number | null; updatedAt: number }>({
+    heading: null,
+    updatedAt: 0,
+  });
+  const lastHeadingStateUpdateRef = useRef<{ ts: number; heading: number | null }>({
+    ts: 0,
+    heading: null,
+  });
+  const lastCameraBearingRef = useRef<{ ts: number; bearing: number }>({
+    ts: 0,
+    bearing: 0,
+  });
+  const wasNavigationActiveRef = useRef<boolean>(false);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -457,17 +508,109 @@ export const App: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [isRecordingTrack, isRecordingPaused]);
 
+  const recomputeAndSyncHeading = useCallback((): number | null => {
+    const nowMs = Date.now();
+    const gpsMeta = gpsHeadingMetaRef.current;
+    const compassMeta = compassMetaRef.current;
+    const currentLoc = userLocationRef.current;
+    const routeFallback =
+      isNavigationActiveRef.current && activeRouteRef.current
+        ? extractRouteTangentHeading(activeRouteRef.current, currentLoc?.lon, currentLoc?.lat)
+        : null;
+    const isStationarySpeed =
+      gpsMeta.speedMps !== null && gpsMeta.speedMps < 0.6;
+    const freshCourseHeading =
+      gpsMeta.courseHeading !== null &&
+      !isStationarySpeed &&
+      nowMs - gpsMeta.courseUpdatedAt <= 8000
+        ? gpsMeta.courseHeading
+        : null;
+
+    const rawResolved = NavigationHeadingService.resolveActiveHeading({
+      gpsFixHeading: gpsMeta.fixHeading,
+      gpsSpeedMps: gpsMeta.speedMps,
+      computedCourseHeading: freshCourseHeading,
+      compassHeading: compassMeta.heading,
+      lastValidHeading: liveHeadingRef.current,
+      routeFallbackHeading: routeFallback,
+      nowMs,
+      gpsUpdatedAtMs: gpsMeta.updatedAt || undefined,
+      compassUpdatedAtMs: compassMeta.updatedAt || undefined,
+    });
+
+    const resolved =
+      rawResolved !== null
+        ? smoothHeadingDeg(liveHeadingRef.current, rawResolved, 0.38)
+        : null;
+    liveHeadingRef.current = resolved;
+
+    const prevSaved = lastHeadingStateUpdateRef.current;
+    if (
+      resolved !== prevSaved.heading &&
+      (resolved === null ||
+        prevSaved.heading === null ||
+        (nowMs - prevSaved.ts >= 180 &&
+          Math.abs(shortestAngleDeltaDeg(prevSaved.heading, resolved)) >= 3))
+    ) {
+      lastHeadingStateUpdateRef.current = { ts: nowMs, heading: resolved };
+      setLiveHeading(resolved);
+    }
+
+    if (userMarkerRef.current && mapRef.current) {
+      UserLocationIconService.updateMarkerDirection(
+        userMarkerRef.current.getElement(),
+        userIconPrefRef.current,
+        resolved,
+        mapRef.current.getBearing(),
+        isNavigationActiveRef.current
+      );
+    }
+    return resolved;
+  }, []);
+
   // Continuous live GPS position stream across all map modes (Explore, Planning, Navigating, Recording)
   useEffect(() => {
     const stopWatch = LiveGpsService.startContinuousWatch(
       async (fix) => {
-        const { lon, lat, heading } = fix;
+        const { lon, lat, heading, speed, accuracy } = fix;
+        const nowMs = Date.now();
+        const gpsMeta = gpsHeadingMetaRef.current;
+        const accurateEnough = accuracy === null || accuracy <= 40;
+        const computedCourse =
+          accurateEnough &&
+          typeof gpsMeta.anchorLon === 'number' &&
+          typeof gpsMeta.anchorLat === 'number'
+            ? computeBearingBetweenCoords(gpsMeta.anchorLon, gpsMeta.anchorLat, lon, lat, 3)
+            : null;
+        gpsHeadingMetaRef.current = {
+          fixHeading: heading,
+          speedMps: speed,
+          courseHeading: computedCourse ?? gpsMeta.courseHeading,
+          updatedAt: nowMs,
+          courseUpdatedAt: computedCourse !== null ? nowMs : gpsMeta.courseUpdatedAt,
+          anchorLon:
+            !accurateEnough || gpsMeta.anchorLon === undefined || computedCourse !== null
+              ? lon
+              : gpsMeta.anchorLon,
+          anchorLat:
+            !accurateEnough || gpsMeta.anchorLat === undefined || computedCourse !== null
+              ? lat
+              : gpsMeta.anchorLat,
+        };
+
         setUserLocation(fix);
+        const resolvedHeading = recomputeAndSyncHeading();
 
         if (mapRef.current) {
+          const curMapBearing = mapRef.current.getBearing();
           if (!userMarkerRef.current) {
             userMarkerRef.current = new maplibregl.Marker({
-              element: createUserMarkerElement(userIconPrefRef.current, heading),
+              element: createUserMarkerElement(
+                userIconPrefRef.current,
+                resolvedHeading,
+                curMapBearing,
+                isNavigationActiveRef.current
+              ),
               anchor: 'center',
             })
               .setLngLat([lon, lat])
@@ -477,21 +620,37 @@ export const App: React.FC = () => {
             UserLocationIconService.renderMarkerElement(
               userMarkerRef.current.getElement(),
               userIconPrefRef.current,
-              heading
+              resolvedHeading,
+              curMapBearing,
+              isNavigationActiveRef.current
             );
           }
 
+          const navTargetBearing = isNavigationActiveRef.current
+            ? navOrientationRef.current === 'heading-up'
+              ? resolvedHeading ?? curMapBearing
+              : 0
+            : undefined;
+
           if (pendingLocateFlyRef.current) {
             pendingLocateFlyRef.current = false;
+            if (navTargetBearing !== undefined) {
+              lastCameraBearingRef.current = { ts: performance.now(), bearing: navTargetBearing };
+            }
             mapRef.current.flyTo({
               center: [lon, lat],
-              zoom: Math.max(mapRef.current.getZoom(), 15),
+              zoom: Math.max(mapRef.current.getZoom(), isNavigationActiveRef.current ? 15.5 : 15),
+              ...(navTargetBearing !== undefined ? { bearing: navTargetBearing } : {}),
               speed: 1.4,
               essential: true,
             });
           } else if (isFollowingUserRef.current && !mapRef.current.isMoving()) {
+            if (navTargetBearing !== undefined) {
+              lastCameraBearingRef.current = { ts: performance.now(), bearing: navTargetBearing };
+            }
             mapRef.current.easeTo({
               center: [lon, lat],
+              ...(navTargetBearing !== undefined ? { bearing: navTargetBearing } : {}),
               duration: 450,
               essential: true,
             });
@@ -561,15 +720,53 @@ export const App: React.FC = () => {
     );
 
     return stopWatch;
-  }, [gpsWatchRestartSeq, showToast]);
+  }, [gpsWatchRestartSeq, recomputeAndSyncHeading, showToast]);
 
-  // Ensure live GPS puck is mounted and updated immediately whenever map, location, or chosen icon changes
+  // Continuous device compass stream so user icon & Heading-Up map turn smoothly even while stationary
+  useEffect(() => {
+    return NavigationHeadingService.subscribeCompassHeading((compassDeg) => {
+      compassMetaRef.current = { heading: compassDeg, updatedAt: Date.now() };
+      const resolved = recomputeAndSyncHeading();
+      if (
+        resolved !== null &&
+        isNavigationActiveRef.current &&
+        navOrientationRef.current === 'heading-up' &&
+        isFollowingUserRef.current &&
+        mapRef.current &&
+        !mapRef.current.isMoving()
+      ) {
+        const now = performance.now();
+        if (
+          now - lastCameraBearingRef.current.ts >= 180 &&
+          Math.abs(shortestAngleDeltaDeg(lastCameraBearingRef.current.bearing, resolved)) >= 3
+        ) {
+          lastCameraBearingRef.current = { ts: now, bearing: resolved };
+          const curLoc = userLocationRef.current;
+          mapRef.current.easeTo({
+            ...(curLoc ? { center: [curLoc.lon, curLoc.lat] } : {}),
+            bearing: resolved,
+            duration: 220,
+            essential: true,
+          });
+        }
+      }
+    });
+  }, [recomputeAndSyncHeading]);
+
+  // Ensure live GPS puck is mounted and updated immediately whenever map, location, nav state, or icon changes
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady || !userLocation) return;
+    const effectiveHeading = liveHeadingRef.current ?? userLocation.heading;
+    const curBearing = map.getBearing();
     if (!userMarkerRef.current) {
       userMarkerRef.current = new maplibregl.Marker({
-        element: createUserMarkerElement(userIconPref, userLocation.heading),
+        element: createUserMarkerElement(
+          userIconPref,
+          effectiveHeading,
+          curBearing,
+          isNavigationActive
+        ),
         anchor: 'center',
       })
         .setLngLat([userLocation.lon, userLocation.lat])
@@ -579,13 +776,14 @@ export const App: React.FC = () => {
       UserLocationIconService.renderMarkerElement(
         userMarkerRef.current.getElement(),
         userIconPref,
-        userLocation.heading
+        effectiveHeading,
+        curBearing,
+        isNavigationActive
       );
     }
-  }, [isMapReady, userLocation, userIconPref]);
+  }, [isMapReady, userLocation, userIconPref, liveHeading, isNavigationActive]);
 
   // Keep screen awake (prevent sleep/dimming) whenever the user is in active navigation
-  const isNavigationActive = isNavigatingRoute || (isMobile && mobileDisplayMode === 'navigating');
   useEffect(() => {
     if (!isNavigationActive) {
       setIsScreenWakeLockActive(false);
@@ -595,6 +793,38 @@ export const App: React.FC = () => {
       setIsScreenWakeLockActive(active);
     });
   }, [isNavigationActive]);
+
+  // Automatically align camera orientation when entering or exiting navigation mode (Heading-Up default vs North-Up)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady) return;
+    const wasActive = wasNavigationActiveRef.current;
+    wasNavigationActiveRef.current = isNavigationActive;
+
+    const resolvedHeading = recomputeAndSyncHeading();
+    if (isNavigationActive) {
+      if (!wasActive) {
+        setIsFollowingUser(true);
+      }
+      if (isFollowingUserRef.current || !wasActive) {
+        const targetBearing =
+          navOrientation === 'heading-up'
+            ? resolvedHeading ?? map.getBearing()
+            : 0;
+        lastCameraBearingRef.current = { ts: performance.now(), bearing: targetBearing };
+        const curLoc = userLocationRef.current;
+        map.easeTo({
+          ...(curLoc ? { center: [curLoc.lon, curLoc.lat], zoom: Math.max(map.getZoom(), 15.5) } : {}),
+          bearing: targetBearing,
+          duration: 450,
+          essential: true,
+        });
+      }
+    } else if (wasActive) {
+      lastCameraBearingRef.current = { ts: performance.now(), bearing: 0 };
+      map.easeTo({ bearing: 0, duration: 450, essential: true });
+    }
+  }, [isNavigationActive, navOrientation, isMapReady, recomputeAndSyncHeading]);
 
   // Update Military Tactical UTM/ITM Grid GeoJSON on the map
   const updateTacticalGridOnMap = useCallback(
@@ -1386,7 +1616,25 @@ export const App: React.FC = () => {
 
     map.on('rotate', () => {
       if (isCancelled) return;
-      setMapBearing(map.getBearing());
+      const currentBearing = map.getBearing();
+      setMapBearing(currentBearing);
+      if (userMarkerRef.current) {
+        UserLocationIconService.updateMarkerDirection(
+          userMarkerRef.current.getElement(),
+          userIconPrefRef.current,
+          liveHeadingRef.current,
+          currentBearing,
+          isNavigationActiveRef.current
+        );
+      }
+    });
+
+    map.on('rotatestart', (ev) => {
+      if (isCancelled) return;
+      if (ev?.originalEvent) {
+        pendingLocateFlyRef.current = false;
+        setIsFollowingUser(false);
+      }
     });
 
     map.on('dragstart', () => {
@@ -1927,11 +2175,18 @@ export const App: React.FC = () => {
     const currentLoc = userLocationRef.current;
     if (currentLoc) {
       pendingLocateFlyRef.current = false;
-      handleFlyTo(
-        currentLoc.lon,
-        currentLoc.lat,
-        Math.max(mapRef.current?.getZoom() || 14, 15)
-      );
+      const map = mapRef.current;
+      const targetBearing = isNavigationActiveRef.current
+        ? navOrientationRef.current === 'heading-up'
+          ? liveHeadingRef.current ?? map?.getBearing() ?? 0
+          : 0
+        : undefined;
+      map?.flyTo({
+        center: [currentLoc.lon, currentLoc.lat],
+        zoom: Math.max(map.getZoom() || 14, isNavigationActiveRef.current ? 15.5 : 15),
+        ...(targetBearing !== undefined ? { bearing: targetBearing } : {}),
+        essential: true,
+      });
       if (activeRoute) {
         const check = RouteManager.checkNavigationDeviation(
           activeRoute,
@@ -1947,6 +2202,73 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleChangeNavOrientation = (nextMode: MapNavigationOrientation) => {
+    NavigationHeadingService.setOrientationPreference(nextMode);
+    setNavOrientation(nextMode);
+    setIsFollowingUser(true);
+    void NavigationHeadingService.requestCompassPermissionIfNeeded();
+    const resolvedHeading = recomputeAndSyncHeading();
+    const targetBearing = nextMode === 'heading-up' ? resolvedHeading ?? 0 : 0;
+    lastCameraBearingRef.current = { ts: performance.now(), bearing: targetBearing };
+    const map = mapRef.current;
+    const currentLoc = userLocationRef.current;
+    map?.easeTo({
+      ...(currentLoc ? { center: [currentLoc.lon, currentLoc.lat] } : {}),
+      bearing: targetBearing,
+      duration: 420,
+      essential: true,
+    });
+    if (userMarkerRef.current) {
+      UserLocationIconService.updateMarkerDirection(
+        userMarkerRef.current.getElement(),
+        userIconPrefRef.current,
+        resolvedHeading,
+        targetBearing,
+        isNavigationActiveRef.current
+      );
+    }
+    showToast(
+      nextMode === 'heading-up'
+        ? 'כיוון מפה: מסתובבת לכיוון הנסיעה'
+        : 'כיוון מפה: צפון למעלה'
+    );
+  };
+
+  const handleToggleDesktopFreeNavigation = () => {
+    if (isNavigationActive) {
+      handleStopRouteNavigation();
+      return;
+    }
+    void NavigationHeadingService.requestCompassPermissionIfNeeded();
+    setIsFreeNavigation(true);
+    setIsFollowingUser(true);
+    showToast(
+      navOrientationRef.current === 'heading-up'
+        ? 'מצב ניווט הופעל • מפה מסתובבת לכיוון התנועה'
+        : 'מצב ניווט הופעל • צפון למעלה'
+    );
+  };
+
+  const handleUserIconPreferenceChange = (nextPref: UserLocationIconPreference) => {
+    setUserIconPref(nextPref);
+    const currentLoc = userLocationRef.current;
+    const map = mapRef.current;
+    if (currentLoc && map) {
+      try {
+        const bounds = map.getBounds();
+        if (!bounds || !bounds.contains([currentLoc.lon, currentLoc.lat])) {
+          setIsFollowingUser(true);
+          handleFlyTo(currentLoc.lon, currentLoc.lat, Math.max(map.getZoom() || 14, 15));
+        }
+      } catch {
+        // Ignore bounds check if map projection isn't ready yet
+      }
+      showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
+    } else {
+      showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe} (ממתין ל-GPS להצגה במפה)`);
+    }
+  };
+
   const handleToggle3D = () => {
     const next3d = !visibility.terrain3d;
     setVisibility((prev) => ({ ...prev, terrain3d: next3d }));
@@ -1954,6 +2276,12 @@ export const App: React.FC = () => {
   };
 
   const handleResetNorth = () => {
+    if (isNavigationActiveRef.current) {
+      const nextMode: MapNavigationOrientation =
+        navOrientationRef.current === 'heading-up' ? 'north-up' : 'heading-up';
+      handleChangeNavOrientation(nextMode);
+      return;
+    }
     mapRef.current?.easeTo({ bearing: 0, pitch: visibility.terrain3d ? 60 : 0, duration: 500 });
   };
 
@@ -1998,11 +2326,14 @@ export const App: React.FC = () => {
   };
 
   const handleNavigateToPoi = (poi: PoiRecord) => {
+    void NavigationHeadingService.requestCompassPermissionIfNeeded();
     handleFlyTo(poi.lon, poi.lat, 14.5);
     showToast(`מכוון אל ${poi.nameHe} (${poi.ele ?? '---'}m)`);
     if (isMobile) {
       setMobileDisplayMode('navigating');
       setMobileNavOverlay('poi-mini');
+    } else {
+      setIsFreeNavigation(true);
     }
   };
 
@@ -2023,13 +2354,23 @@ export const App: React.FC = () => {
   };
 
   const handleStartRouteNavigation = async (route: SavedRouteRecord) => {
+    void NavigationHeadingService.requestCompassPermissionIfNeeded();
     await handleSelectRoute(route);
     setIsNavigatingRoute(true);
+    setIsFreeNavigation(false);
     setIsFollowingUser(true);
     setRemainingDistKm(route.distanceKm);
+    const resolvedHeading = recomputeAndSyncHeading();
+    const targetBearing =
+      navOrientationRef.current === 'heading-up' ? resolvedHeading ?? 0 : 0;
     const currentLoc = userLocationRef.current;
     if (currentLoc) {
-      handleFlyTo(currentLoc.lon, currentLoc.lat, 15);
+      mapRef.current?.flyTo({
+        center: [currentLoc.lon, currentLoc.lat],
+        zoom: 15.5,
+        bearing: targetBearing,
+        essential: true,
+      });
     }
     if (isMobile) {
       setMobileDisplayMode('navigating');
@@ -2040,6 +2381,7 @@ export const App: React.FC = () => {
 
   const handleStopRouteNavigation = () => {
     setIsNavigatingRoute(false);
+    setIsFreeNavigation(false);
     setOffRouteWarning(null);
     setRemainingDistKm(null);
     if (isMobile) {
@@ -2047,7 +2389,7 @@ export const App: React.FC = () => {
       setMobileTab('explore');
       setMobileNavOverlay(null);
     }
-    showToast('הניווט במסלול הופסק');
+    showToast('הניווט הופסק');
   };
 
   const handleDeleteRoute = async (routeId: string) => {
@@ -2820,6 +3162,43 @@ export const App: React.FC = () => {
     );
   };
 
+  const renderNavOrientationToggle = (compact = false) => {
+    const headingActive = navOrientation === 'heading-up';
+    return (
+      <div
+        role="group"
+        aria-label="כיוון מפה בניווט"
+        className={`rounded-full border p-0.5 flex items-center gap-0.5 shadow-xl ${t.panel}`}
+      >
+        <button
+          type="button"
+          onClick={() => handleChangeNavOrientation('heading-up')}
+          aria-pressed={headingActive}
+          title="המפה מסתובבת לכיוון הנסיעה/ההליכה (ברירת מחדל)"
+          className={`${compact ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'} rounded-full font-bold flex items-center gap-1.5 transition-all whitespace-nowrap ${
+            headingActive ? 'bg-sky-600 text-white shadow-sm' : t.hoverRow
+          }`}
+        >
+          <Navigation className="w-3.5 h-3.5 shrink-0" />
+          <span>{compact ? 'כיוון תנועה' : 'עם כיוון התנועה'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleChangeNavOrientation('north-up')}
+          aria-pressed={!headingActive}
+          title="שמור צפון תמיד למעלה והחץ מסתובב על המפה"
+          className={`${compact ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'} rounded-full font-bold flex items-center gap-1.5 transition-all whitespace-nowrap ${
+            !headingActive ? 'bg-rose-600 text-white shadow-sm' : t.hoverRow
+          }`}
+        >
+          <Compass className="w-3.5 h-3.5 shrink-0" />
+          <span>צפון למעלה</span>
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div
       dir="rtl"
@@ -3002,9 +3381,9 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            {/* Top-Left (RTL End): Active Nav Alert + Offline Readiness + Quick Action Pills */}
+            {/* Top-Left (RTL End): Active Nav Alert + Orientation Switch + Offline Readiness + Quick Action Pills */}
             <div className="absolute top-3 left-3 z-30 flex flex-wrap items-center gap-2 pointer-events-auto">
-              {isNavigatingRoute && activeRoute && (
+              {isNavigatingRoute && activeRoute ? (
                 <div
                   className={`px-3.5 py-2 rounded-full border shadow-xl text-xs font-bold flex items-center gap-2 ${
                     offRouteWarning !== null
@@ -3034,7 +3413,23 @@ export const App: React.FC = () => {
                     סיים
                   </button>
                 </div>
-              )}
+              ) : isFreeNavigation ? (
+                <div className="px-3.5 py-2 rounded-full border shadow-xl text-xs font-bold flex items-center gap-2 bg-emerald-600 border-emerald-400 text-white">
+                  <Navigation className="w-4 h-4" />
+                  <span>
+                    מצב ניווט פעיל
+                    {isScreenWakeLockActive ? ' • מסך דולק' : ''}
+                  </span>
+                  <button
+                    onClick={handleStopRouteNavigation}
+                    className="px-2 py-0.5 rounded-full bg-white/20 hover:bg-white/30 text-xs"
+                  >
+                    סיים
+                  </button>
+                </div>
+              ) : null}
+
+              {isNavigationActive && renderNavOrientationToggle(false)}
 
               {/* Compact Offline Status Pill */}
               <button
@@ -3059,6 +3454,19 @@ export const App: React.FC = () => {
 
               {/* Quick Mode Pills */}
               <div className={`flex items-center gap-1 rounded-full p-1 border ${t.panel}`}>
+                <button
+                  onClick={handleToggleDesktopFreeNavigation}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                    isNavigationActive ? 'bg-emerald-600 text-white' : t.hoverRow
+                  }`}
+                  title={isNavigationActive ? 'צא ממצב ניווט' : 'התחל מצב ניווט חי (כיוון מפה + שמירת מסך דולק)'}
+                >
+                  <Navigation
+                    className={`w-3.5 h-3.5 ${isNavigationActive ? 'text-white' : 'text-emerald-500'}`}
+                  />
+                  <span>ניווט</span>
+                </button>
+
                 <button
                   onClick={() => setDesktopDrawer(desktopDrawer === 'routes' ? null : 'routes')}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
@@ -3181,7 +3589,13 @@ export const App: React.FC = () => {
                 <button
                   onClick={handleResetNorth}
                   className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`}
-                  title="אפס כיוון לצפון"
+                  title={
+                    isNavigationActive
+                      ? navOrientation === 'heading-up'
+                        ? 'עבור לצפון למעלה'
+                        : 'עבור לכיוון התנועה'
+                      : 'אפס כיוון לצפון'
+                  }
                 >
                   <Compass
                     className="w-4 h-4 text-rose-500 transition-transform"
@@ -3265,10 +3679,9 @@ export const App: React.FC = () => {
               theme={theme}
               preference={userIconPref}
               isOnline={isOnline}
-              onSelectPreference={(nextPref) => {
-                setUserIconPref(nextPref);
-                showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
-              }}
+              hasGpsFix={Boolean(userLocation)}
+              onLocateOnMap={handleLocateMe}
+              onSelectPreference={handleUserIconPreferenceChange}
               onClose={() => setIsUserIconPickerOpen(false)}
             />
 
@@ -3322,87 +3735,103 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* MODE B: NAVIGATING — No Search, No Chips! Slim Top Navigation/Status Pill + Planning Toggle */}
+            {/* MODE B: NAVIGATING — No Search, No Chips! Slim Top Navigation/Status Pill + Orientation Toggle + Planning Toggle */}
             {mobileDisplayMode === 'navigating' && (
-              <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-auto">
-                {isNavigatingRoute && activeRoute ? (
-                  <div
-                    className={`p-2.5 rounded-2xl shadow-2xl flex items-center justify-between gap-2 text-xs font-bold backdrop-blur-md ${
-                      offRouteWarning !== null
-                        ? 'bg-red-600/95 text-white animate-pulse'
-                        : 'bg-emerald-600/95 text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {offRouteWarning !== null ? (
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                      ) : (
-                        <Navigation className="w-4 h-4 shrink-0" />
-                      )}
-                      <div className="min-w-0">
-                        <div className="truncate">
-                          {offRouteWarning !== null
-                            ? `סטייה מציר • ${offRouteWarning} מטרים`
-                            : activeRoute.name}
-                        </div>
-                        <div className="font-normal opacity-90 truncate">
-                          {offRouteWarning !== null
-                            ? 'חזור לכיוון הציר המתוכנן'
-                            : `נותרו ${remainingDistKm ?? activeRoute.distanceKm} ק״מ • במעקב GPS`}
+              <>
+                <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-auto">
+                  {isNavigatingRoute && activeRoute ? (
+                    <div
+                      className={`p-2.5 rounded-2xl shadow-2xl flex items-center justify-between gap-2 text-xs font-bold backdrop-blur-md ${
+                        offRouteWarning !== null
+                          ? 'bg-red-600/95 text-white animate-pulse'
+                          : 'bg-emerald-600/95 text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {offRouteWarning !== null ? (
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                        ) : (
+                          <Navigation className="w-4 h-4 shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="truncate">
+                            {offRouteWarning !== null
+                              ? `סטייה מציר • ${offRouteWarning} מטרים`
+                              : activeRoute.name}
+                          </div>
+                          <div className="font-normal opacity-90 truncate">
+                            {offRouteWarning !== null
+                              ? 'חזור לכיוון הציר המתוכנן'
+                              : `נותרו ${remainingDistKm ?? activeRoute.distanceKm} ק״מ • במעקב GPS`}
+                          </div>
                         </div>
                       </div>
+                      <button
+                        onClick={() => {
+                          setIsFreeNavigation(false);
+                          setMobileDisplayMode('planning');
+                          setMobileTab('routes');
+                          setMobileNavOverlay(null);
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-950/35 text-white text-xs font-bold shrink-0"
+                      >
+                        תכנון
+                      </button>
                     </div>
-                    <button
-                      onClick={() => {
-                        setMobileDisplayMode('planning');
-                        setMobileTab('routes');
-                        setMobileNavOverlay(null);
-                      }}
-                      className="px-2.5 py-1.5 rounded-xl bg-slate-950/35 text-white text-xs font-bold shrink-0"
-                    >
-                      תכנון
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-2">
-                    <div
-                      className={`px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-2 ${t.panel}`}
-                    >
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full ${
-                          isRecordingTrack && !isRecordingPaused
-                            ? 'bg-rose-500 animate-pulse'
-                            : 'bg-emerald-500'
-                        }`}
-                      />
-                      <span className="tabular-nums">
-                        {isRecordingTrack
-                          ? `מקליט ${formatDuration(recordElapsedSeconds)}`
-                          : isScreenWakeLockActive
-                            ? 'מצב ניווט • מסך דולק'
-                            : 'מצב ניווט • GPS'}
-                      </span>
-                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <div
+                        className={`px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-2 ${t.panel}`}
+                      >
+                        <span
+                          className={`w-2.5 h-2.5 rounded-full ${
+                            isRecordingTrack && !isRecordingPaused
+                              ? 'bg-rose-500 animate-pulse'
+                              : 'bg-emerald-500'
+                          }`}
+                        />
+                        <span className="tabular-nums">
+                          {isRecordingTrack
+                            ? `מקליט ${formatDuration(recordElapsedSeconds)}`
+                            : isScreenWakeLockActive
+                              ? 'מצב ניווט • מסך דולק'
+                              : 'מצב ניווט • GPS'}
+                        </span>
+                      </div>
 
-                    <button
-                      onClick={() => {
-                        setMobileDisplayMode('planning');
-                        setMobileNavOverlay(null);
-                      }}
-                      className={`px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-1.5 ${t.panel}`}
-                    >
-                      <MapIcon className="w-3.5 h-3.5 text-emerald-500" />
-                      <span>תכנון וחיפוש</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+                      <button
+                        onClick={() => {
+                          setIsFreeNavigation(false);
+                          setMobileDisplayMode('planning');
+                          setMobileNavOverlay(null);
+                        }}
+                        className={`px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-1.5 ${t.panel}`}
+                      >
+                        <MapIcon className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>תכנון וחיפוש</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  className={`absolute right-3 z-20 pt-safe pointer-events-auto ${
+                    isNavigatingRoute && activeRoute ? 'top-[5.25rem]' : 'top-[4.25rem]'
+                  }`}
+                >
+                  {renderNavOrientationToggle(true)}
+                </div>
+              </>
             )}
 
             {/* Mobile Left-Edge Floating Controls (Layers, 3D, Compass, Crosshair) */}
             <div
               className={`absolute left-3 z-20 flex flex-col gap-2 pointer-events-auto pt-safe ${
-                mobileDisplayMode === 'navigating' ? 'top-20' : 'top-[4.5rem]'
+                mobileDisplayMode === 'navigating'
+                  ? isNavigatingRoute && activeRoute
+                    ? 'top-[5.25rem]'
+                    : 'top-[4.25rem]'
+                  : 'top-[4.5rem]'
               }`}
             >
               <button
@@ -3434,11 +3863,17 @@ export const App: React.FC = () => {
                 3D
               </button>
 
-              {Math.abs(mapBearing) > 2 && (
+              {(isNavigationActive || Math.abs(mapBearing) > 2) && (
                 <button
                   onClick={handleResetNorth}
                   className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`}
-                  title="צפון"
+                  title={
+                    isNavigationActive
+                      ? navOrientation === 'heading-up'
+                        ? 'עבור לצפון למעלה'
+                        : 'עבור לכיוון התנועה'
+                      : 'צפון'
+                  }
                 >
                   <Compass
                     className="w-4 h-4 text-rose-500"
@@ -3585,10 +4020,9 @@ export const App: React.FC = () => {
                 theme={theme}
                 preference={userIconPref}
                 isOnline={isOnline}
-                onSelectPreference={(nextPref) => {
-                  setUserIconPref(nextPref);
-                  showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
-                }}
+                hasGpsFix={Boolean(userLocation)}
+                onLocateOnMap={handleLocateMe}
+                onSelectPreference={handleUserIconPreferenceChange}
                 onClose={() => setMobilePlanningOverlay(null)}
               />
             ) : mobilePlanningOverlay === 'layers' ? (
@@ -3774,12 +4208,10 @@ export const App: React.FC = () => {
                     </button>
                     <button
                       onClick={() => {
+                        void NavigationHeadingService.requestCompassPermissionIfNeeded();
                         setMobileDisplayMode('navigating');
                         setMobileNavOverlay(null);
                         setIsFollowingUser(true);
-                        if (userLocationRef.current) {
-                          handleFlyTo(userLocationRef.current.lon, userLocationRef.current.lat, 15);
-                        }
                       }}
                       className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
                     >
@@ -3876,10 +4308,9 @@ export const App: React.FC = () => {
               theme={theme}
               preference={userIconPref}
               isOnline={isOnline}
-              onSelectPreference={(nextPref) => {
-                setUserIconPref(nextPref);
-                showToast(`אייקון המיקום עודכן ל: ${nextPref.icon.labelHe}`);
-              }}
+              hasGpsFix={Boolean(userLocation)}
+              onLocateOnMap={handleLocateMe}
+              onSelectPreference={handleUserIconPreferenceChange}
               onClose={() => setMobileNavOverlay(null)}
             />
           ) : mobileNavOverlay === 'layers' ? (
@@ -3990,6 +4421,7 @@ export const App: React.FC = () => {
                     if (isNavigatingRoute) {
                       handleStopRouteNavigation();
                     } else {
+                      setIsFreeNavigation(false);
                       setMobileDisplayMode('planning');
                     }
                   }}

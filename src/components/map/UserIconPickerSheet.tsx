@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Search, Globe, Check, Loader2 } from 'lucide-react';
+import { X, Search, Globe, Check, Loader2, LocateFixed } from 'lucide-react';
 import {
   BUILT_IN_USER_ICONS,
   USER_ICON_ACCENT_COLORS,
@@ -15,8 +15,10 @@ interface UserIconPickerSheetProps {
   theme: MapTheme;
   preference: UserLocationIconPreference;
   isOnline: boolean;
+  hasGpsFix?: boolean;
   embedded?: boolean;
   onSelectPreference: (next: UserLocationIconPreference) => void;
+  onLocateOnMap?: () => void;
   onClose: () => void;
 }
 
@@ -95,8 +97,10 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
   theme,
   preference,
   isOnline,
+  hasGpsFix = true,
   embedded = false,
   onSelectPreference,
+  onLocateOnMap,
   onClose,
 }) => {
   const t = getSurfaceTheme(theme);
@@ -190,15 +194,49 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className={`p-1.5 rounded-lg border ${t.pillBtn}`}
-          title="סגור"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {onLocateOnMap && (
+            <button
+              type="button"
+              onClick={onLocateOnMap}
+              className={`px-2 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 ${
+                hasGpsFix
+                  ? t.pillBtn
+                  : 'bg-sky-600 border-sky-400 text-white hover:bg-sky-500'
+              }`}
+              title="הצג ומרכז את האייקון שלי במפה"
+            >
+              <LocateFixed className="w-3.5 h-3.5" />
+              <span>{hasGpsFix ? 'הצג במפה' : 'אתר GPS'}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1.5 rounded-lg border ${t.pillBtn}`}
+            title="סגור"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
+
+      {!hasGpsFix && (
+        <div className={`px-2.5 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 ${t.subCard}`}>
+          <span className={t.muted}>
+            ממתין לאות GPS — האייקון יוצג במפה מיד עם קליטת המיקום
+          </span>
+          {onLocateOnMap && (
+            <button
+              type="button"
+              onClick={onLocateOnMap}
+              className="px-2 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold shrink-0"
+            >
+              אתר מיקום
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Accent Color Picker */}
       <div className="flex items-center justify-between gap-2">

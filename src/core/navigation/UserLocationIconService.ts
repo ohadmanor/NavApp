@@ -1,3 +1,8 @@
+import {
+  computeScreenRotationDeg,
+  normalizeHeadingDeg,
+} from './NavigationHeadingService';
+
 export type UserIconCategory = 'default' | 'vehicles' | 'outdoor' | 'tactical' | 'web';
 
 export interface UserLocationIconOption {
@@ -28,14 +33,14 @@ export const BUILT_IN_USER_ICONS: UserLocationIconOption[] = [
     id: 'gps-puck',
     labelHe: 'נקודת GPS',
     category: 'default',
-    rotateWithHeading: false,
+    rotateWithHeading: true,
   },
   {
     id: 'car-4wd',
     labelHe: 'ג׳יפ 4x4',
     category: 'vehicles',
     svgUrl: '/assets/user-icons/car-4wd.svg',
-    rotateWithHeading: false,
+    rotateWithHeading: true,
   },
   {
     id: 'car-suv',
@@ -145,8 +150,12 @@ const listeners = new Set<(pref: UserLocationIconPreference) => void>();
 
 export function sanitizeSvgMarkup(rawSvg: string): string {
   if (!rawSvg || typeof rawSvg !== 'string') return '';
-  const trimmed = rawSvg.trim();
-  if (!trimmed.startsWith('<svg') || !trimmed.includes('</svg>')) return '';
+  let trimmed = rawSvg.trim();
+  const svgStart = trimmed.search(/<svg\b/i);
+  if (svgStart < 0 || !/<\/svg>/i.test(trimmed)) return '';
+  if (svgStart > 0) {
+    trimmed = trimmed.slice(svgStart);
+  }
   // Strip any script/foreignObject tags and inline event handlers
   return trimmed
     .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -157,7 +166,8 @@ export function sanitizeSvgMarkup(rawSvg: string): string {
       const cleanedAttrs = attrs
         .replace(/\b(width|height|class|style)\s*=\s*(['"]).*?\2/gi, '')
         .trim();
-      return `<svg ${cleanedAttrs} width="20" height="20" style="display:block;color:#ffffff">`;
+      const fillAttr = /\bfill\s*=/i.test(cleanedAttrs) ? '' : ' fill="currentColor"';
+      return `<svg ${cleanedAttrs}${fillAttr} width="20" height="20" style="display:block;color:#ffffff">`;
     });
 }
 
@@ -323,17 +333,20 @@ export class UserLocationIconService {
 
   /**
    * Renders or updates a MapLibre user position marker DOM container with the chosen icon,
-   * accent color, pulsing accuracy halo, and optional heading cone.
+   * accent color, pulsing accuracy halo, and Google Maps-style directional beam & arrow.
    */
   static renderMarkerElement(
     root: HTMLElement,
     pref: UserLocationIconPreference,
-    heading: number | null
+    heading: number | null,
+    mapBearing = 0,
+    isNavigationActive = false
   ): void {
     const color = pref.accentColor || '#0ea5e9';
     const isDefaultDot = pref.icon.id === 'gps-puck';
-    const sizePx = isDefaultDot ? 36 : 46;
-    const renderKey = `${pref.icon.id}|${color}|${Boolean(pref.icon.inlineSvg)}`;
+    const sizePx = isDefaultDot ? 72 : 76;
+    const renderKey = `${pref.icon.id}|${color}|${pref.icon.svgUrl || ''}|${Boolean(pref.icon.inlineSvg)}`;
+    const safeColorToken = color.replace(/[^a-zA-Z0-9]/g, '') || '0ea5e9';
 
     // CRITICAL: Preserve MapLibre's `.maplibregl-marker` class & `position: absolute; top: 0; left: 0`
     // Never overwrite root.className or add Tailwind's `.relative` on the outer marker element.
@@ -354,45 +367,58 @@ export class UserLocationIconService {
       inner.className = 'relative flex items-center justify-center w-full h-full';
       root.appendChild(inner);
 
-      // Outer pulsing accuracy halo
+      // Outer pulsing accuracy halo (centered over coordinates)
       const halo = document.createElement('span');
-      halo.className = 'absolute inset-0 rounded-full animate-ping';
-      halo.style.backgroundColor = `${color}33`;
-      halo.style.border = `1px solid ${color}99`;
+      halo.className = 'absolute w-11 h-11 rounded-full animate-ping';
+      halo.style.backgroundColor = `${color}2b`;
+      halo.style.border = `1px solid ${color}80`;
       halo.style.animationDuration = '2.4s';
       inner.appendChild(halo);
 
-      // Static soft ring
+      // Static soft accuracy ring
       const ring = document.createElement('span');
-      ring.className = 'absolute inset-1 rounded-full';
-      ring.style.backgroundColor = `${color}29`;
-      ring.style.border = `1px solid ${color}80`;
+      ring.className = 'absolute w-9 h-9 rounded-full';
+      ring.style.backgroundColor = `${color}24`;
+      ring.style.border = `1px solid ${color}73`;
       inner.appendChild(ring);
 
-      // Heading arrow cone
+      // Google Maps-style directional flashlight FOV beam & forward arrow tip
       const headingWrap = document.createElement('span');
       headingWrap.dataset.role = 'heading';
-      headingWrap.className =
-        'absolute inset-0 flex items-start justify-center transition-transform duration-300 hidden';
-      const arrow = document.createElement('span');
-      arrow.className =
-        'w-0 h-0 -mt-1.5 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-b-[8px] drop-shadow';
-      arrow.style.borderBottomColor = color;
-      headingWrap.appendChild(arrow);
+      headingWrap.className = 'absolute inset-0 flex items-center justify-center';
+      headingWrap.style.display = 'none';
+      headingWrap.innerHTML = `<svg viewBox="-36 -36 72 72" width="${sizePx}" height="${sizePx}" style="display:block;overflow:visible;pointer-events:none"><defs><linearGradient id="navapp-fov-${safeColorToken}" x1="0" y1="0" x2="0" y2="-35" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="${color}" stop-opacity="0.62"/><stop offset="65%" stop-color="${color}" stop-opacity="0.22"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="M 0,0 L -21,-32 A 36,36 0 0,1 21,-32 Z" fill="url(#navapp-fov-${safeColorToken})"/><path d="M 0,-29 L -5.8,-19.2 L 0,-21.6 L 5.8,-19.2 Z" fill="${color}" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
       inner.appendChild(headingWrap);
 
       if (isDefaultDot) {
-        const dot = document.createElement('span');
-        dot.className = 'relative w-4 h-4 rounded-full border-[2.5px] border-white';
-        dot.style.backgroundColor = color;
-        dot.style.boxShadow = `0 0 12px ${color}`;
-        inner.appendChild(dot);
+        const badge = document.createElement('span');
+        badge.dataset.role = 'badge';
+        badge.className =
+          'relative w-6 h-6 rounded-full border-[2.5px] border-white flex items-center justify-center shadow-lg';
+        badge.style.backgroundColor = color;
+        badge.style.boxShadow = `0 0 12px ${color}`;
+
+        // Stationary dot vs directional navigation chevron (like Google Maps)
+        const coreDot = document.createElement('span');
+        coreDot.dataset.role = 'puck-core-dot';
+        coreDot.className = 'w-2.5 h-2.5 rounded-full bg-white';
+        badge.appendChild(coreDot);
+
+        const navArrow = document.createElement('span');
+        navArrow.dataset.role = 'puck-nav-arrow';
+        navArrow.className = 'items-center justify-center w-4 h-4';
+        navArrow.style.display = 'none';
+        navArrow.innerHTML =
+          '<svg viewBox="0 0 24 24" width="15" height="15" style="display:block"><path fill="#ffffff" d="M12 3L19.5 19.5L12 15.8L4.5 19.5Z"/></svg>';
+        badge.appendChild(navArrow);
+
+        inner.appendChild(badge);
       } else {
         // Custom Icon Circular Badge
         const badge = document.createElement('span');
         badge.dataset.role = 'badge';
         badge.className =
-          'relative w-8 h-8 rounded-full border-[2.5px] border-white flex items-center justify-center shadow-lg transition-transform duration-300';
+          'relative w-8 h-8 rounded-full border-[2.5px] border-white flex items-center justify-center shadow-lg';
         badge.style.backgroundColor = color;
         badge.style.boxShadow = `0 2px 12px ${color}b3`;
 
@@ -407,8 +433,9 @@ export class UserLocationIconService {
         if (immediateSvg) {
           iconSlot.innerHTML = immediateSvg;
         } else {
+          iconSlot.innerHTML = '<span class="w-2.5 h-2.5 rounded-full bg-white/90"></span>';
           void this.loadIconSvgMarkup(pref.icon).then((loaded) => {
-            if (loaded && iconSlot.isConnected) {
+            if (loaded && root.dataset.iconRenderKey === renderKey && root.contains(iconSlot)) {
               iconSlot.innerHTML = loaded;
             }
           });
@@ -416,27 +443,66 @@ export class UserLocationIconService {
       }
     }
 
+    this.updateMarkerDirection(root, pref, heading, mapBearing, isNavigationActive);
+  }
+
+  /**
+   * Updates only CSS rotation transforms for the directional cone and inner chevron/icon
+   * in O(1) without rebuilding DOM nodes, keeping marker screen orientation synced at 60fps
+   * across North-Up and Heading-Up camera rotations.
+   */
+  static updateMarkerDirection(
+    root: HTMLElement,
+    pref: UserLocationIconPreference,
+    heading: number | null,
+    mapBearing = 0,
+    isNavigationActive = false
+  ): void {
+    const hasSensorHeading = typeof heading === 'number' && Number.isFinite(heading);
+    const effectiveWorldHeading = hasSensorHeading
+      ? normalizeHeadingDeg(heading)
+      : isNavigationActive
+        ? 0
+        : null;
+    const screenDeg =
+      effectiveWorldHeading !== null
+        ? computeScreenRotationDeg(effectiveWorldHeading, Number.isFinite(mapBearing) ? mapBearing : 0)
+        : null;
+
     const headingWrap = root.querySelector<HTMLElement>('[data-role="heading"]');
     if (headingWrap) {
-      if (typeof heading === 'number' && Number.isFinite(heading)) {
+      if (screenDeg !== null) {
         headingWrap.classList.remove('hidden');
-        headingWrap.style.transform = `rotate(${heading}deg)`;
+        headingWrap.style.display = 'flex';
+        headingWrap.style.transform = `rotate(${screenDeg}deg)`;
       } else {
         headingWrap.classList.add('hidden');
+        headingWrap.style.display = 'none';
+        headingWrap.style.transform = '';
+      }
+    }
+
+    const coreDot = root.querySelector<HTMLElement>('[data-role="puck-core-dot"]');
+    const puckArrow = root.querySelector<HTMLElement>('[data-role="puck-nav-arrow"]');
+    if (coreDot && puckArrow) {
+      if (screenDeg !== null) {
+        coreDot.classList.add('hidden');
+        coreDot.style.display = 'none';
+        puckArrow.classList.remove('hidden');
+        puckArrow.style.display = 'flex';
+      } else {
+        coreDot.classList.remove('hidden');
+        coreDot.style.display = 'block';
+        puckArrow.classList.add('hidden');
+        puckArrow.style.display = 'none';
       }
     }
 
     const badge = root.querySelector<HTMLElement>('[data-role="badge"]');
     if (badge) {
-      if (
-        pref.icon.rotateWithHeading &&
-        typeof heading === 'number' &&
-        Number.isFinite(heading)
-      ) {
-        badge.style.transform = `rotate(${heading}deg)`;
-      } else {
-        badge.style.transform = '';
-      }
+      const shouldRotateBadge =
+        (pref.icon.id === 'gps-puck' || Boolean(pref.icon.rotateWithHeading)) && screenDeg !== null;
+      badge.style.transform = shouldRotateBadge ? `rotate(${screenDeg}deg)` : '';
     }
   }
 }

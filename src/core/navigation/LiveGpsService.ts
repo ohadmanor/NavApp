@@ -113,6 +113,7 @@ export class LiveGpsService {
     let browserWatchId: number | null = null;
     let coarseWatchId: number | null = null;
     let nativeWatchId: string | null = null;
+    let nativeCoarseWatchId: string | null = null;
     let hasPrimaryFix = false;
 
     const startBrowserWatch = () => {
@@ -164,9 +165,14 @@ export class LiveGpsService {
                 const fix = normalizeGpsPosition(pos);
                 if (fix) onFix(fix);
               },
-              () => {},
+              (coarseErr) => {
+                if (!disposed && !hasPrimaryFix) {
+                  onError?.(toLiveGpsError(coarseErr));
+                }
+              },
               { enableHighAccuracy: false, maximumAge: 15000, timeout: 15000 }
             );
+            return;
           }
           onError?.(liveErr);
         },
@@ -196,6 +202,19 @@ export class LiveGpsService {
             }
           }
 
+          // Fast native coarse/cached seed so position icon renders immediately indoors
+          void Geolocation.getCurrentPosition({
+            enableHighAccuracy: false,
+            maximumAge: 120000,
+            timeout: 5000,
+          })
+            .then((pos) => {
+              if (disposed || hasPrimaryFix) return;
+              const fix = normalizeGpsPosition(pos);
+              if (fix) onFix(fix);
+            })
+            .catch(() => {});
+
           const id = await Geolocation.watchPosition(
             {
               enableHighAccuracy: resolvedOptions.enableHighAccuracy,
@@ -206,8 +225,45 @@ export class LiveGpsService {
             (pos, err) => {
               if (disposed) return;
               if (err) {
-                onError?.(toLiveGpsError(err));
+                const liveErr = toLiveGpsError(err);
+                if (!liveErr.isPermissionDenied && !hasPrimaryFix && nativeCoarseWatchId === null) {
+                  void Geolocation.watchPosition(
+                    {
+                      enableHighAccuracy: false,
+                      maximumAge: 15000,
+                      timeout: 15000,
+                      minimumUpdateInterval: resolvedOptions.minimumUpdateInterval,
+                    },
+                    (coarsePos, coarseErr) => {
+                      if (disposed || hasPrimaryFix) return;
+                      if (coarseErr) {
+                        onError?.(toLiveGpsError(coarseErr));
+                        return;
+                      }
+                      const fix = normalizeGpsPosition(coarsePos);
+                      if (fix) onFix(fix);
+                    }
+                  )
+                    .then((cid) => {
+                      if (disposed || hasPrimaryFix) {
+                        void Geolocation.clearWatch({ id: cid }).catch(() => {});
+                      } else {
+                        nativeCoarseWatchId = cid;
+                      }
+                    })
+                    .catch(() => {
+                      if (!disposed) onError?.(liveErr);
+                    });
+                  return;
+                }
+                onError?.(liveErr);
                 return;
+              }
+              hasPrimaryFix = true;
+              if (nativeCoarseWatchId !== null) {
+                const cidToClear = nativeCoarseWatchId;
+                nativeCoarseWatchId = null;
+                void Geolocation.clearWatch({ id: cidToClear }).catch(() => {});
               }
               const fix = normalizeGpsPosition(pos);
               if (fix) onFix(fix);
@@ -243,6 +299,11 @@ export class LiveGpsService {
         const idToClear = nativeWatchId;
         nativeWatchId = null;
         void Geolocation.clearWatch({ id: idToClear }).catch(() => {});
+      }
+      if (nativeCoarseWatchId !== null) {
+        const cidToClear = nativeCoarseWatchId;
+        nativeCoarseWatchId = null;
+        void Geolocation.clearWatch({ id: cidToClear }).catch(() => {});
       }
     };
   }
