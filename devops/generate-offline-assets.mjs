@@ -307,6 +307,9 @@ const optionalDataAssets = [];
 if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.pois.geojson'))) {
   optionalDataAssets.push('/data/Israel.pois.geojson');
 }
+if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.offroad.pois.geojson'))) {
+  optionalDataAssets.push('/data/Israel.offroad.pois.geojson');
+}
 if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.search.idx'))) {
   optionalDataAssets.push('/data/Israel.search.idx');
 }
@@ -335,7 +338,7 @@ const appShellEntries = [
   ...optionalDataAssets
 ];
 
-const swCode = `const CACHE_NAME = 'navapp-offline-v6';
+const swCode = `const CACHE_NAME = 'navapp-offline-v8';
 const APP_SHELL = ${JSON.stringify(appShellEntries, null, 2)};
 
 self.addEventListener('install', (event) => {
@@ -358,6 +361,27 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   // Never intercept byte-range requests to large .pmtiles files
   if (url.pathname.endsWith('.pmtiles') || event.request.headers.get('range')) {
+    return;
+  }
+  // Network-first for updatable lightweight data files (POIs & search index) so updates propagate without losing offline fallback
+  if (
+    event.request.method === 'GET' &&
+    url.origin === self.location.origin &&
+    (url.pathname === '/data/Israel.pois.geojson' ||
+      url.pathname === '/data/Israel.offroad.pois.geojson' ||
+      url.pathname === '/data/Israel.search.idx')
+  ) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
     return;
   }
   event.respondWith(

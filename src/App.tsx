@@ -29,10 +29,12 @@ import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTiles
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
+  buildOffroadPoiLayerFilter,
+  isOffroadCommunityActive,
   DEFAULT_LAYER_VISIBILITY,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
-import { PoiManager } from './core/pois/PoiManager';
+import { PoiManager, getPoiSortPriority } from './core/pois/PoiManager';
 import { RouteManager } from './core/navigation/RouteManager';
 import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsService';
 import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
@@ -345,6 +347,8 @@ export const App: React.FC = () => {
   const lastPlanSnapTsRef = useRef<number>(0);
   const snapSeqRef = useRef<number>(0);
   const activeRoutePromiseRef = useRef<Promise<void> | null>(null);
+  const lastPoiSyncRef = useRef<{ pois: PoiRecord[]; visKey: string } | null>(null);
+  const lastOffroadPoiSyncRef = useRef<{ sig: string } | null>(null);
   const deletedRouteIdsRef = useRef<Set<string>>(new Set());
   const handlePlanMapClickRef = useRef<(lon: number, lat: number) => Promise<void>>(async () => {});
   const handleFinishPlanningRef = useRef<() => Promise<void>>(async () => {});
@@ -1137,63 +1141,297 @@ export const App: React.FC = () => {
           }
         }
 
-        const poiGeoJson = PoiManager.toGeoJSON(currentPois, currentVis);
+        if (!map.hasImage('offroad-blocked')) {
+          const size = 24;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.beginPath();
+            ctx.arc(size / 2, size / 2, 8.5, 0, Math.PI * 2);
+            ctx.fillStyle = '#b91c1c';
+            ctx.fill();
+            ctx.lineWidth = 2.2;
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(size / 2 - 4.5, size / 2);
+            ctx.lineTo(size / 2 + 4.5, size / 2);
+            ctx.lineWidth = 2.4;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+
+            const imgData = ctx.getImageData(0, 0, size, size);
+            map.addImage('offroad-blocked', {
+              width: size,
+              height: size,
+              data: new Uint8Array(imgData.data.buffer),
+            });
+          }
+        }
+
+        if (!map.hasImage('offroad-danger')) {
+          const size = 24;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.beginPath();
+            ctx.arc(size / 2, size / 2, 8.5, 0, Math.PI * 2);
+            ctx.fillStyle = '#d97706';
+            ctx.fill();
+            ctx.lineWidth = 2.2;
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(size / 2, size / 2 - 4);
+            ctx.lineTo(size / 2, size / 2 + 1);
+            ctx.lineWidth = 2.2;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(size / 2, size / 2 + 4, 1.25, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fill();
+
+            const imgData = ctx.getImageData(0, 0, size, size);
+            map.addImage('offroad-danger', {
+              width: size,
+              height: size,
+              data: new Uint8Array(imgData.data.buffer),
+            });
+          }
+        }
+
+        const primaryPois = currentPois.filter((p) => !p.id.startsWith('or-') || Boolean(p.userNotes));
+        const offroadOverlayPois = currentPois.filter((p) => p.id.startsWith('or-') && !p.userNotes);
+
+        const poiIconExpression: any = [
+          'match',
+          ['get', 'category'],
+          'water',
+          [
+            'match',
+            ['coalesce', ['get', 'subcategory'], ''],
+            'waterhole',
+            'water_hole',
+            'waterfall',
+            'waterfall',
+            'cistern',
+            'cistern',
+            'water_well',
+            'water_well',
+            'drinking_water',
+            'tap',
+            'spring',
+          ],
+          'campsite',
+          [
+            'match',
+            ['coalesce', ['get', 'subcategory'], ''],
+            'picnic_site',
+            'picnic',
+            'shelter',
+            'alpinehut',
+            'wilderness_hut',
+            'alpinehut',
+            'camping',
+          ],
+          'peak',
+          'dot',
+          'heritage',
+          [
+            'match',
+            ['coalesce', ['get', 'subcategory'], ''],
+            'cave',
+            'cave',
+            'ruins',
+            'ruins',
+            'archaeological_site',
+            'jar',
+            'fort',
+            'jar',
+            'castle',
+            'jar',
+            'memorial',
+            'monument',
+            'nature_site',
+            'flower',
+            'offroad_poi',
+            'info',
+            'viewpoint',
+          ],
+          'offroad',
+          [
+            'match',
+            ['coalesce', ['get', 'subcategory'], ''],
+            'gate',
+            'gate_closed',
+            'barrier',
+            'gate_closed',
+            'blocked_road',
+            'offroad-blocked',
+            'danger',
+            'offroad-danger',
+            'floods',
+            'offroad-danger',
+            'wifi_sos',
+            'antenna',
+            'ratag_info',
+            'sign',
+            'clunker',
+            'construction',
+            'offroad-pass',
+          ],
+          'user',
+          'star',
+          'viewpoint',
+        ];
+
+        const poiIconSizeExpression: any = [
+          'match',
+          ['get', 'category'],
+          'water',
+          [
+            'match',
+            ['coalesce', ['get', 'subcategory'], ''],
+            'waterfall',
+            0.52,
+            'drinking_water',
+            0.52,
+            'waterhole',
+            0.62,
+            'cistern',
+            0.58,
+            'water_well',
+            0.58,
+            0.85,
+          ],
+          'peak',
+          0.5,
+          'offroad',
+          [
+            'match',
+            ['coalesce', ['get', 'subcategory'], ''],
+            'gate',
+            0.55,
+            'barrier',
+            0.55,
+            'wifi_sos',
+            0.55,
+            'ratag_info',
+            0.55,
+            'clunker',
+            0.55,
+            0.85,
+          ],
+          'user',
+          0.58,
+          0.55,
+        ];
+
+        const poiTextColorExpression: any = [
+          'match',
+          ['get', 'category'],
+          'water',
+          currentTheme === 'topo-dark' ? '#38bdf8' : '#125595',
+          'offroad',
+          currentTheme === 'topo-dark' ? '#f87171' : '#991b1b',
+          'campsite',
+          currentTheme === 'topo-dark' ? '#34d399' : '#166534',
+          'peak',
+          currentTheme === 'topo-dark' ? '#e2e8f0' : '#404040',
+          'user',
+          currentTheme === 'topo-dark' ? '#2dd4bf' : '#0f766e',
+          currentTheme === 'topo-dark' ? '#fbbf24' : '#404040',
+        ];
+
+        // 1. Off-Road.io Community Overlay Layer (placed immediately below israel-pois-labels so Curated + OSM landmarks win collisions while Off-Road renders on top of OSM)
+        const offroadSig = `${offroadOverlayPois.length}|${offroadOverlayPois[0]?.id || ''}|${offroadOverlayPois[offroadOverlayPois.length - 1]?.id || ''}`;
+        const existingOffroadSrc = map.getSource('israel-offroad-pois-src') as maplibregl.GeoJSONSource;
+        if (existingOffroadSrc) {
+          if (!lastOffroadPoiSyncRef.current || lastOffroadPoiSyncRef.current.sig !== offroadSig) {
+            existingOffroadSrc.setData(PoiManager.toCompactMapGeoJSON(offroadOverlayPois));
+            lastOffroadPoiSyncRef.current = { sig: offroadSig };
+          }
+          if (map.getLayer('israel-offroad-pois-labels')) {
+            map.setFilter('israel-offroad-pois-labels', buildOffroadPoiLayerFilter(currentVis));
+          }
+        } else {
+          const offroadGeoJson = PoiManager.toCompactMapGeoJSON(offroadOverlayPois);
+          lastOffroadPoiSyncRef.current = { sig: offroadSig };
+          map.addSource('israel-offroad-pois-src', { type: 'geojson', data: offroadGeoJson });
+          map.addLayer(
+            {
+              id: 'israel-offroad-pois-labels',
+              type: 'symbol',
+              source: 'israel-offroad-pois-src',
+              minzoom: 15,
+              filter: buildOffroadPoiLayerFilter(currentVis),
+              layout: {
+                visibility: isOffroadCommunityActive(currentVis) ? 'visible' : 'none',
+                'symbol-sort-key': ['coalesce', ['get', 'priority'], 500],
+                'icon-image': poiIconExpression,
+                'icon-size': poiIconSizeExpression,
+                'icon-anchor': 'center',
+                'icon-allow-overlap': false,
+                'icon-ignore-placement': false,
+                'icon-padding': 6,
+                'text-field': ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
+                'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
+                'text-size': 13.5,
+                'text-offset': [0, 0.75],
+                'text-anchor': 'top',
+                'text-max-width': 9,
+                'text-allow-overlap': false,
+                'text-ignore-placement': false,
+                'text-optional': true,
+                'text-padding': 3,
+              },
+              paint: {
+                'text-color': poiTextColorExpression,
+                'text-halo-color': currentTheme === 'topo-dark' ? '#0b1015' : 'white',
+                'text-halo-width': 3,
+                'text-halo-blur': 1.5,
+              },
+            },
+            map.getLayer('israel-pois-labels') ? 'israel-pois-labels' : undefined
+          );
+        }
+
+        // 2. Primary Curated + OSM + User POIs Layer
+        const poiVisKey = `${currentVis.pois}|${currentVis.poiWater}|${currentVis.poiHeritage}|${currentVis.poiCampsites}|${currentVis.poiOffroad}|${currentVis.poiPeaks}|${currentVis.poiUser ?? true}`;
         const existingPoiSrc = map.getSource('israel-pois-src') as maplibregl.GeoJSONSource;
         if (existingPoiSrc) {
-          existingPoiSrc.setData(poiGeoJson);
+          if (
+            !lastPoiSyncRef.current ||
+            lastPoiSyncRef.current.pois !== currentPois ||
+            lastPoiSyncRef.current.visKey !== poiVisKey
+          ) {
+            existingPoiSrc.setData(PoiManager.toGeoJSON(primaryPois, currentVis));
+            lastPoiSyncRef.current = { pois: currentPois, visKey: poiVisKey };
+          }
         } else {
+          const poiGeoJson = PoiManager.toGeoJSON(primaryPois, currentVis);
+          lastPoiSyncRef.current = { pois: currentPois, visKey: poiVisKey };
           map.addSource('israel-pois-src', { type: 'geojson', data: poiGeoJson });
           map.addLayer({
             id: 'israel-pois-labels',
             type: 'symbol',
             source: 'israel-pois-src',
-            minzoom: 9,
+            minzoom: 15,
             layout: {
               visibility: currentVis.pois ? 'visible' : 'none',
-              'icon-image': [
-                'match',
-                ['get', 'category'],
-                'water',
-                [
-                  'match',
-                  ['coalesce', ['get', 'subcategory'], ''],
-                  'cistern',
-                  'cistern',
-                  'spring',
-                ],
-                'campsite',
-                'camping',
-                'peak',
-                'dot',
-                'heritage',
-                [
-                  'match',
-                  ['coalesce', ['get', 'subcategory'], ''],
-                  'cave',
-                  'cave',
-                  'ruins',
-                  'ruins',
-                  'archaeological_site',
-                  'jar',
-                  'viewpoint',
-                ],
-                'offroad',
-                'offroad-pass',
-                'user',
-                'star',
-                'viewpoint',
-              ],
-              'icon-size': [
-                'match',
-                ['get', 'category'],
-                'water',
-                0.75,
-                'peak',
-                0.45,
-                'offroad',
-                0.85,
-                0.55,
-              ],
+              'symbol-sort-key': ['coalesce', ['get', 'priority'], 500],
+              'icon-image': poiIconExpression,
+              'icon-size': poiIconSizeExpression,
               'icon-anchor': 'center',
               'icon-allow-overlap': false,
               'icon-ignore-placement': false,
@@ -1210,21 +1448,7 @@ export const App: React.FC = () => {
               'text-padding': 3,
             },
             paint: {
-              'text-color': [
-                'match',
-                ['get', 'category'],
-                'water',
-                currentTheme === 'topo-dark' ? '#38bdf8' : '#125595',
-                'offroad',
-                currentTheme === 'topo-dark' ? '#f87171' : '#991b1b',
-                'campsite',
-                currentTheme === 'topo-dark' ? '#34d399' : '#166534',
-                'peak',
-                currentTheme === 'topo-dark' ? '#e2e8f0' : '#404040',
-                'user',
-                currentTheme === 'topo-dark' ? '#2dd4bf' : '#0f766e',
-                currentTheme === 'topo-dark' ? '#fbbf24' : '#404040',
-              ],
+              'text-color': poiTextColorExpression,
               'text-halo-color': currentTheme === 'topo-dark' ? '#0b1015' : 'white',
               'text-halo-width': 3,
               'text-halo-blur': 1.5,
@@ -1695,23 +1919,37 @@ export const App: React.FC = () => {
       const feature = e.features?.[0];
       if (!feature || !feature.properties) return;
       const p = feature.properties as any;
-      const clickedPoi: PoiRecord = {
-        id: p.id,
+      const featureId = String(p.id || feature.id || '');
+      const fullRecord = featureId
+        ? poisRef.current.find((item) => item.id === featureId)
+        : undefined;
+      const geomCoords =
+        feature.geometry && feature.geometry.type === 'Point'
+          ? (feature.geometry as GeoJSON.Point).coordinates
+          : undefined;
+      const clickedPoi: PoiRecord = fullRecord ?? {
+        id: featureId,
         name: p.nameHe || p.name,
         nameHe: p.nameHe || p.name,
-        nameEn: p.nameEn || p.name,
+        nameEn: p.nameEn || p.nameHe || p.name,
         category: p.category,
         subcategory: p.subcategory,
-        lon: Number(p.lon),
-        lat: Number(p.lat),
+        lon: Number(p.lon ?? geomCoords?.[0] ?? e.lngLat.lng),
+        lat: Number(p.lat ?? geomCoords?.[1] ?? e.lngLat.lat),
         ele: p.ele ? Number(p.ele) : null,
         waterStatus: p.waterStatus || null,
         difficulty4x4: p.difficulty4x4 || null,
         descHe: p.descHe || '',
         descEn: p.descEn || '',
-        source: p.source || 'IsraelHiking / OSM',
+        source:
+          p.source ||
+          (featureId.startsWith('or-') ? 'Off-Road.io (קהילת השטח)' : 'IsraelHiking / OSM'),
         wikipedia: p.wikipedia || null,
+        externalUrl: p.externalUrl || null,
+        likes: typeof p.likes === 'number' ? p.likes : undefined,
+        updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
         userNotes: p.userNotes || '',
+        priority: typeof p.priority === 'number' ? p.priority : undefined,
       };
       setSelectedPoi(clickedPoi);
       if (isMobileRef.current) {
@@ -1725,6 +1963,17 @@ export const App: React.FC = () => {
       } else {
         setDesktopDrawer('poi');
       }
+    };
+
+    const handleOffroadPoiFeatureClick = (e: maplibregl.MapLayerMouseEvent) => {
+      if (isCancelled || isPlanningRouteRef.current) return;
+      if (
+        map.getLayer('israel-pois-labels') &&
+        map.queryRenderedFeatures(e.point, { layers: ['israel-pois-labels'] }).length > 0
+      ) {
+        return;
+      }
+      handlePoiFeatureClick(e);
     };
 
     const handleMapPlanClick = (e: maplibregl.MapMouseEvent) => {
@@ -1763,6 +2012,7 @@ export const App: React.FC = () => {
     };
 
     map.on('click', 'israel-pois-labels', handlePoiFeatureClick);
+    map.on('click', 'israel-offroad-pois-labels', handleOffroadPoiFeatureClick);
     map.on('click', handleMapPlanClick);
     map.on('dblclick', handleMapPlanDblClick);
     map.on('mouseenter', 'israel-pois-labels', () => {
@@ -1771,6 +2021,14 @@ export const App: React.FC = () => {
       }
     });
     map.on('mouseleave', 'israel-pois-labels', () => {
+      map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
+    });
+    map.on('mouseenter', 'israel-offroad-pois-labels', () => {
+      if (!isPlanningRouteRef.current) {
+        map.getCanvas().style.cursor = 'pointer';
+      }
+    });
+    map.on('mouseleave', 'israel-offroad-pois-labels', () => {
       map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
     });
 
@@ -1807,6 +2065,8 @@ export const App: React.FC = () => {
       isCancelled = true;
       isStyleLoadedRef.current = false;
       mountedStyleKeyRef.current = '';
+      lastPoiSyncRef.current = null;
+      lastOffroadPoiSyncRef.current = null;
       if (clickTimerRef.current) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
@@ -1852,6 +2112,8 @@ export const App: React.FC = () => {
     }
     mountedStyleKeyRef.current = nextStyleKey;
     isStyleLoadedRef.current = false;
+    lastPoiSyncRef.current = null;
+    lastOffroadPoiSyncRef.current = null;
 
     const newStyle = buildIsraelOutdoorStyle({
       osmProtocolUrl: effectiveOsmUrl,
@@ -2020,13 +2282,41 @@ export const App: React.FC = () => {
   const referenceCoord = userLocation ?? { lon: cursorCoords.lon, lat: cursorCoords.lat };
 
   const nearbyPois = useMemo(() => {
+    if (pois.length === 0) return [];
+    const cosLat = Math.cos((referenceCoord.lat * Math.PI) / 180);
+    const maxCandidates = 40;
+    const candidates: Array<{ poi: PoiRecord; approxDistSq: number }> = [];
+    let worstDistSq = Infinity;
+
+    for (let i = 0; i < pois.length; i++) {
+      const p = pois[i];
+      const dLon = (p.lon - referenceCoord.lon) * cosLat;
+      const dLat = p.lat - referenceCoord.lat;
+      const distSq = dLon * dLon + dLat * dLat;
+      if (candidates.length < maxCandidates) {
+        candidates.push({ poi: p, approxDistSq: distSq });
+        if (candidates.length === maxCandidates) {
+          candidates.sort((a, b) => a.approxDistSq - b.approxDistSq);
+          worstDistSq = candidates[maxCandidates - 1].approxDistSq;
+        }
+      } else if (distSq < worstDistSq) {
+        candidates[maxCandidates - 1] = { poi: p, approxDistSq: distSq };
+        candidates.sort((a, b) => a.approxDistSq - b.approxDistSq);
+        worstDistSq = candidates[maxCandidates - 1].approxDistSq;
+      }
+    }
+
     const refPt = turf.point([referenceCoord.lon, referenceCoord.lat]);
-    return pois
-      .map((p) => ({
-        poi: p,
-        distKm: turf.distance(refPt, turf.point([p.lon, p.lat]), { units: 'kilometers' }),
+    return candidates
+      .map(({ poi }) => ({
+        poi,
+        distKm: turf.distance(refPt, turf.point([poi.lon, poi.lat]), { units: 'kilometers' }),
       }))
-      .sort((a, b) => a.distKm - b.distKm)
+      .sort((a, b) =>
+        Math.abs(a.distKm - b.distKm) < 0.02
+          ? getPoiSortPriority(a.poi) - getPoiSortPriority(b.poi)
+          : a.distKm - b.distKm
+      )
       .slice(0, 10);
   }, [pois, referenceCoord.lon, referenceCoord.lat]);
 
@@ -2131,7 +2421,7 @@ export const App: React.FC = () => {
           setSelectedPoi(latestPoi);
           mapRef.current?.flyTo({
             center: [latestPoi.lon, latestPoi.lat],
-            zoom: 14,
+            zoom: 15.2,
             essential: true,
           });
         }
@@ -2285,7 +2575,7 @@ export const App: React.FC = () => {
     mapRef.current?.easeTo({ bearing: 0, pitch: visibility.terrain3d ? 60 : 0, duration: 500 });
   };
 
-  const handleSelectPoi = (item: PoiRecord, zoom = 14) => {
+  const handleSelectPoi = (item: PoiRecord, zoom = 15.2) => {
     setSelectedPoi(item);
     handleFlyTo(item.lon, item.lat, zoom);
     setSearchQuery('');
@@ -2322,12 +2612,12 @@ export const App: React.FC = () => {
 
     const existingMatch = poisRef.current.find((p) => p.id === item.id);
     const poiRec = existingMatch || item.toPoiRecord();
-    handleSelectPoi(poiRec, item.recommendedZoom || 14.5);
+    handleSelectPoi(poiRec, item.recommendedZoom || 15.2);
   };
 
   const handleNavigateToPoi = (poi: PoiRecord) => {
     void NavigationHeadingService.requestCompassPermissionIfNeeded();
-    handleFlyTo(poi.lon, poi.lat, 14.5);
+    handleFlyTo(poi.lon, poi.lat, 15.2);
     showToast(`מכוון אל ${poi.nameHe} (${poi.ele ?? '---'}m)`);
     if (isMobile) {
       setMobileDisplayMode('navigating');
@@ -3291,7 +3581,7 @@ export const App: React.FC = () => {
                         setSelectedPoi(null);
                         setDesktopDrawer(null);
                       }}
-                      onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 14.2)}
+                      onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                       onNavigateToPoi={handleNavigateToPoi}
                       onPoiUpdated={(updated) => {
                         setSelectedPoi(updated);
@@ -4020,7 +4310,7 @@ export const App: React.FC = () => {
                     setSelectedPoi(null);
                     setMobilePlanningOverlay(null);
                   }}
-                  onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 14.2)}
+                  onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                   onNavigateToPoi={handleNavigateToPoi}
                   onPoiUpdated={(updated) => {
                     setSelectedPoi(updated);
@@ -4372,7 +4662,7 @@ export const App: React.FC = () => {
                 setMobilePlanningOverlay('poi');
                 setMobileSheetExpanded(true);
               }}
-              onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 14.2)}
+              onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
               onPoiUpdated={(updated) => {
                 setSelectedPoi(updated);
                 setPois((prev) =>

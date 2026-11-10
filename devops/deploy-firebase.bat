@@ -24,9 +24,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/4] Copying offline vector POIs & search index into dist\data\...
+echo [3/4] Copying offline vector POIs ^& search index into dist\data\...
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
+if exist "data\Israel.offroad.pois.geojson" copy /Y "data\Israel.offroad.pois.geojson" "dist\data\Israel.offroad.pois.geojson" >nul
 if exist "data\Israel.search.idx" copy /Y "data\Israel.search.idx" "dist\data\Israel.search.idx" >nul
 echo       [OK] Ready to deploy web app code.
 

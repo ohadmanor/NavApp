@@ -305,6 +305,7 @@ export class PMTilesSearchService {
   private listeners = new Set<(status: SearchIndexStatus) => void>();
   private loadPromise: Promise<void> | null = null;
   private activeExtractAbort: AbortController | null = null;
+  private normalizedPoiCache = new WeakMap<PoiRecord, { nHe: string; nEn: string; nDesc: string }>();
 
   getStatus(): SearchIndexStatus {
     return { ...this.status };
@@ -571,9 +572,16 @@ export class PMTilesSearchService {
     if (filter !== 'routes' && curatedPois.length > 0) {
       for (const poi of curatedPois) {
         if (!matchesPoiFilter(poi, filter)) continue;
-        const nHe = normalizeSearchText(poi.nameHe || poi.name);
-        const nEn = normalizeSearchText(poi.nameEn);
-        const nDesc = normalizeSearchText(poi.descHe || poi.descEn || poi.subcategory);
+        let cachedNorm = this.normalizedPoiCache.get(poi);
+        if (!cachedNorm) {
+          cachedNorm = {
+            nHe: normalizeSearchText(poi.nameHe || poi.name),
+            nEn: normalizeSearchText(poi.nameEn),
+            nDesc: normalizeSearchText(poi.descHe || poi.descEn || poi.subcategory),
+          };
+          this.normalizedPoiCache.set(poi, cachedNorm);
+        }
+        const { nHe, nEn, nDesc } = cachedNorm;
 
         let score = Math.max(
           scoreSingleFieldMatch(nHe, normQuery),
@@ -594,8 +602,14 @@ export class PMTilesSearchService {
           : null;
         const distBoost = distKm !== null ? Math.round(110 * Math.exp(-distKm / 60)) : 0;
         const userBoost = poi.category === 'user' || poi.userNotes ? 260 : 0;
+        const tierBoost =
+          poi.id.startsWith('il-poi-') || poi.category === 'user'
+            ? 760
+            : poi.id.startsWith('or-')
+              ? 510
+              : 580;
         // Curated outdoor highlights & user field reports carry Tier-0 outdoor salience
-        const totalScore = score + 760 + userBoost + distBoost;
+        const totalScore = score + tierBoost + userBoost + distBoost;
 
         const subcatEmoji =
           poi.category === 'water'
@@ -632,7 +646,7 @@ export class PMTilesSearchService {
           lat: poi.lat,
           ele: poi.ele,
           distanceKm: distKm,
-          recommendedZoom: poi.category === 'peak' ? 14.5 : 14.8,
+          recommendedZoom: poi.category === 'peak' ? 15.1 : 15.3,
           score: totalScore,
           sourceLabel: poi.source || 'IsraelHiking / OSM',
           poiRecord: poi,

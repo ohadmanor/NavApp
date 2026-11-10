@@ -67,6 +67,9 @@ if exist "deploy_data\data\Israel.osm.pmtiles" (
 if exist "data\Israel.pois.geojson" (
     copy /Y "data\Israel.pois.geojson" "deploy_data\data\Israel.pois.geojson" >nul
 )
+if exist "data\Israel.offroad.pois.geojson" (
+    copy /Y "data\Israel.offroad.pois.geojson" "deploy_data\data\Israel.offroad.pois.geojson" >nul
+)
 if exist "data\Israel.search.idx" (
     copy /Y "data\Israel.search.idx" "deploy_data\data\Israel.search.idx" >nul
 )

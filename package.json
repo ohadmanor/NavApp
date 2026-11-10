@@ -10,6 +10,7 @@
     "preview": "vite preview --port 4173 --host",
     "test": "vitest run",
     "fetch-pois": "node devops/fetch-israel-pois.mjs",
+    "convert-offroad-pois": "node devops/convert-offroad-pois.mjs",
     "build-search-index": "node devops/build-pmtiles-search-index.mjs",
     "generate-assets": "node devops/generate-offline-assets.mjs",
     "cap:sync": "npx cap sync",

@@ -34,6 +34,9 @@ export interface PoiRecord {
   descEn: string;
   source: string;
   wikipedia: string | null;
+  externalUrl?: string | null;
+  likes?: number;
+  priority?: number;
   userNotes?: string;
   updatedAt?: string;
 }

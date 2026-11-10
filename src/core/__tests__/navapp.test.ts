@@ -18,10 +18,12 @@ import {
   SearchIndexBuilder,
   serializeSearchIndexPayload,
 } from '../search/pmtilesSearchCore.js';
-import type { PoiRecord, SavedRouteRecord } from '../db/NavDatabase';
+import { db, type PoiRecord, type SavedRouteRecord } from '../db/NavDatabase';
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
+  buildOffroadPoiLayerFilter,
+  isOffroadCommunityActive,
   DEFAULT_LAYER_VISIBILITY,
   countActivePoiCategories,
   isMasterPoiActive,
@@ -29,7 +31,7 @@ import {
   togglePoiCategoryVisibility,
   enableAllPoiVisibility,
 } from '../style/israelOutdoorStyle';
-import { PoiManager } from '../pois/PoiManager';
+import { PoiManager, getPoiSortPriority } from '../pois/PoiManager';
 import {
   convertLineToVisualOrder,
   processBidirectionalText,
@@ -894,11 +896,12 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(userGeoJson.features[0].id).toBe('6');
 
     const noUser = { ...DEFAULT_LAYER_VISIBILITY, poiUser: false };
+    // Ordered deterministically by priority: offroad ('2') -> water ('1') -> campsite ('4') -> heritage ('3') -> peak ('5')
     expect(PoiManager.toGeoJSON(samplePois, noUser).features.map((f) => f.id)).toEqual([
-      '1',
       '2',
-      '3',
+      '1',
       '4',
+      '3',
       '5',
     ]);
 
@@ -2109,4 +2112,560 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       (globalThis as any).window = origWindow;
     }
   });
+
+  it('classifies outdoor OSM POIs accurately, excludes urban streets/transit, and enforces Israel + Golan + Judea & Samaria boundary', async () => {
+    // @ts-expect-error Node MJS devops script lacks .d.ts declaration
+    const harvester: any = await import('../../../devops/fetch-israel-pois.mjs');
+    const { classifyOsmElement, computePoiPriority, createIsraelBoundaryChecker } = harvester;
+
+    // Urban residential street starting with "מעלה " MUST be rejected; 4x4 track accepted
+    expect(
+      classifyOsmElement({
+        type: 'way',
+        id: 1001,
+        tags: { highway: 'residential', name: 'מעלה השלום' },
+      })
+    ).toBeNull();
+    expect(
+      classifyOsmElement({
+        type: 'way',
+        id: 1002,
+        tags: { highway: 'track', name: 'מעלה זיק', tracktype: 'grade5' },
+      })
+    ).toMatchObject({ category: 'offroad', subcategory: '4x4_pass', nameHe: 'מעלה זיק' });
+
+    // Public transit shelters, urban speed camera hazards, and unnamed ruins must be rejected
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1003,
+        tags: { amenity: 'shelter', shelter_type: 'public_transport', name: 'תחנת אוטובוס' },
+      })
+    ).toBeNull();
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1004,
+        tags: { hazard: 'speed_camera', name: 'מצלמה' },
+      })
+    ).toBeNull();
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1005,
+        tags: { historic: 'ruins' },
+      })
+    ).toBeNull();
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1008,
+        tags: { ford: 'yes' },
+      })
+    ).toBeNull();
+    expect(
+      classifyOsmElement({
+        type: 'way',
+        id: 1009,
+        tags: { ford: 'yes', highway: 'secondary', name: 'שדרות שמואל מאיר' },
+      })
+    ).toBeNull();
+    expect(
+      classifyOsmElement({
+        type: 'way',
+        id: 1010,
+        tags: { historic: 'archaeological_site', barrier: 'wall', name: 'תל אפק' },
+      })
+    ).toMatchObject({ category: 'heritage', subcategory: 'archaeological_site', nameHe: 'תל אפק' });
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1011,
+        tags: { amenity: 'shelter', name: 'מקלט ציבורי 4' },
+      })
+    ).toBeNull();
+
+    // Springs, desert cisterns, and named ruins classify cleanly
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1006,
+        tags: { natural: 'waterhole', name: 'גב חצרה', 'name:en': 'Gev Hatzera' },
+      })
+    ).toMatchObject({ category: 'water', subcategory: 'waterhole', nameHe: 'גב חצרה' });
+    expect(
+      classifyOsmElement({
+        type: 'node',
+        id: 1007,
+        tags: { man_made: 'cistern' },
+      })
+    ).toMatchObject({ category: 'water', subcategory: 'cistern', nameHe: 'בור מים', hasExplicitName: false });
+
+    // Priority ordering strictly ranks curated < offroad < water < campsite < heritage < peak
+    const pCurated = computePoiPriority({ isCurated: true, curatedIndex: 0, category: 'water', subcategory: 'spring' });
+    const pOffroad = computePoiPriority({ category: 'offroad', subcategory: '4x4_pass', nameHe: 'מעלה עוזי' });
+    const pWater = computePoiPriority({ category: 'water', subcategory: 'spring', nameHe: 'עין אורחות' });
+    const pCamp = computePoiPriority({ category: 'campsite', subcategory: 'camp_site', nameHe: 'חניון בורוט' });
+    const pHeritage = computePoiPriority({ category: 'heritage', subcategory: 'ruins', nameHe: 'חורבת מדרס' });
+    const pHighPeak = computePoiPriority({ category: 'peak', subcategory: 'peak', ele: 1200, wikipedia: 'he:הר מירון', nameHe: 'הר מירון' });
+    const pLowPeak = computePoiPriority({ category: 'peak', subcategory: 'peak', ele: 150, nameHe: 'גבעת יונה' });
+    expect(pCurated).toBeLessThan(pOffroad);
+    expect(pOffroad).toBeLessThan(pWater);
+    expect(pWater).toBeLessThan(pCamp);
+    expect(pCamp).toBeLessThan(pHeritage);
+    expect(pHeritage).toBeLessThan(pHighPeak);
+    expect(pHighPeak).toBeLessThan(pLowPeak);
+
+    // Real PMTiles admin_area boundary enforcement
+    const boundary = await createIsraelBoundaryChecker('data/Israel.osm.pmtiles');
+    try {
+      expect(boundary.usesPolygonBoundary).toBe(true);
+      expect(await boundary.isInside(35.1045, 33.0858)).toBe(true); // Rosh HaNikra IL
+      expect(await boundary.isInside(35.7865, 33.3075)).toBe(true); // Hermon Mitzpe Shlagim
+      expect(await boundary.isInside(35.3492, 31.8384)).toBe(true); // Ein Qelt J&S
+      expect(await boundary.isInside(34.9225, 29.5085)).toBe(true); // Eilat Coral Beach
+
+      expect(await boundary.isInside(35.4444, 30.3285)).toBe(false); // Petra JO
+      expect(await boundary.isInside(35.0063, 29.5321)).toBe(false); // Aqaba JO
+      expect(await boundary.isInside(34.4667, 31.5017)).toBe(false); // Gaza City
+      expect(await boundary.isInside(34.89, 29.49)).toBe(false); // Taba Sinai EG
+      expect(await boundary.isInside(35.8255, 33.1256)).toBe(false); // Quneitra SY
+      expect(await boundary.isInside(35.1964, 33.2705)).toBe(false); // Tyre LB
+      expect(await boundary.isInside(34.3, 32.1)).toBe(false); // Open Mediterranean Sea
+    } finally {
+      boundary.close();
+    }
+  });
+
+  it('orders POIs by priority, emits sorted GeoJSON with zoom >= 15 search targets, and prunes stale OSM POIs while keeping user data', async () => {
+    const makePoi = (overrides: Partial<PoiRecord>): PoiRecord => ({
+      id: 'osm-n1',
+      name: 'POI',
+      nameHe: 'נקודה',
+      nameEn: 'POI',
+      category: 'heritage',
+      subcategory: 'ruins',
+      lon: 34.8,
+      lat: 30.8,
+      ele: 300,
+      waterStatus: null,
+      difficulty4x4: null,
+      descHe: '',
+      descEn: '',
+      source: 'OSM',
+      wikipedia: null,
+      ...overrides,
+    });
+
+    const userPoi = makePoi({ id: 'user-poi-1', category: 'user', nameHe: 'נקודת משתמש' });
+    const importedPoi = makePoi({ id: 'import-gpx-1', category: 'water', nameHe: 'נקודה מיובאת' });
+    const notedPoi = makePoi({ id: 'osm-n99', category: 'peak', userNotes: 'שביל תלול', nameHe: 'גבעה' });
+    const curatedPoi = makePoi({ id: 'il-poi-ein-aqev', category: 'water', priority: 100, nameHe: 'עין עקב' });
+    const offroadPoi = makePoi({ id: 'osm-n10', category: 'offroad', priority: 190, nameHe: 'מעלה נח' });
+    const peakPoi = makePoi({ id: 'osm-n20', category: 'peak', priority: 580, nameHe: 'הר חלק' });
+
+    const geo = PoiManager.toGeoJSON(
+      [peakPoi, curatedPoi, userPoi, notedPoi, importedPoi, offroadPoi],
+      DEFAULT_LAYER_VISIBILITY
+    );
+    const ids = geo.features.map((f) => f.properties?.id);
+    // user/noted both share priority 10, followed by imported (20), curated (100), offroad (190), peak (580)
+    expect(ids.slice(2)).toEqual(['import-gpx-1', 'il-poi-ein-aqev', 'osm-n10', 'osm-n20']);
+    for (const f of geo.features) {
+      expect(typeof f.properties?.priority).toBe('number');
+    }
+    expect(getPoiSortPriority(offroadPoi)).toBeLessThan(getPoiSortPriority(peakPoi));
+
+    // Verify search index integration recommends zoom >= 15 for POIs
+    const searchSvc = new PMTilesSearchService();
+    const searchHits = searchSvc.search('מעלה נח', {
+      pois: [offroadPoi],
+      routes: [],
+      referenceCoord: { lon: 34.8, lat: 30.8 },
+    });
+    const poiHit = searchHits.find((r) => r.id === 'osm-n10');
+    expect(poiHit).toBeDefined();
+    expect(poiHit!.recommendedZoom).toBeGreaterThanOrEqual(15);
+
+    // Verify PoiManager.initializePois prunes stale osm-* POIs while preserving userNotes, user-poi-*, and import-*
+    const origFetch = globalThis.fetch;
+    const origWindow = (globalThis as any).window;
+    const stored: PoiRecord[] = [
+      makePoi({ id: 'osm-stale-1', nameHe: 'עץ שנמחק' }),
+      makePoi({ id: 'osm-noted-1', nameHe: 'עין עם הערה', userNotes: 'מים זורמים בחורף' }),
+      userPoi,
+      importedPoi,
+      makePoi({ id: 'il-poi-ein-aqev', nameHe: 'עין עקב תחתון', userNotes: 'בריכה מדהימה' }),
+    ];
+
+    const toArraySpy = vi
+      .spyOn(db.pois, 'toArray')
+      .mockImplementation((async () => stored.map((r) => ({ ...r }))) as any);
+    const bulkDeleteSpy = vi.spyOn(db.pois, 'bulkDelete').mockImplementation((async (
+      keys: string[]
+    ) => {
+      const delSet = new Set(keys);
+      for (let i = stored.length - 1; i >= 0; i--) {
+        if (delSet.has(stored[i].id)) stored.splice(i, 1);
+      }
+    }) as any);
+    const bulkPutSpy = vi.spyOn(db.pois, 'bulkPut').mockImplementation((async (
+      items: readonly PoiRecord[]
+    ) => {
+      for (const item of items) {
+        const idx = stored.findIndex((s) => s.id === item.id);
+        if (idx >= 0) stored[idx] = { ...item };
+        else stored.push({ ...item });
+      }
+    }) as any);
+    const txSpy = vi.spyOn(db, 'transaction').mockImplementation((async (...args: any[]) => {
+      const fn = args[args.length - 1];
+      return await fn();
+    }) as any);
+
+    try {
+      (globalThis as any).window = { location: { origin: 'http://localhost:5173', hostname: 'localhost' } };
+      globalThis.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              id: 'il-poi-ein-aqev',
+              geometry: { type: 'Point', coordinates: [34.8134, 30.8281] },
+              properties: {
+                id: 'il-poi-ein-aqev',
+                nameHe: 'עין עקב תחתון',
+                nameEn: 'Ein Aqev',
+                category: 'water',
+                subcategory: 'spring',
+                priority: 100,
+              },
+            },
+          ],
+        }),
+      })) as any;
+
+      const result = await PoiManager.initializePois();
+      expect(bulkDeleteSpy).toHaveBeenCalledWith(['osm-stale-1']);
+      expect(result.some((p) => p.id === 'osm-stale-1')).toBe(false);
+      expect(result.some((p) => p.id === 'osm-noted-1')).toBe(true);
+      expect(result.some((p) => p.id === 'user-poi-1')).toBe(true);
+      expect(result.some((p) => p.id === 'import-gpx-1')).toBe(true);
+      expect(result.find((p) => p.id === 'il-poi-ein-aqev')?.userNotes).toBe('בריכה מדהימה');
+    } finally {
+      globalThis.fetch = origFetch;
+      (globalThis as any).window = origWindow;
+      toArraySpy.mockRestore();
+      bulkDeleteSpy.mockRestore();
+      bulkPutSpy.mockRestore();
+      txSpy.mockRestore();
+    }
+  });
+
+  it('bundles synced, priority-sorted, boundary-pure Israel.pois.geojson across data/ and public/data/', async () => {
+    const rawData = fs.readFileSync('data/Israel.pois.geojson', 'utf-8');
+    const rawPublic = fs.readFileSync('public/data/Israel.pois.geojson', 'utf-8');
+    expect(rawData).toBe(rawPublic);
+
+    const parsed = JSON.parse(rawData);
+    expect(parsed.metadata?.minRenderZoom).toBe(15);
+    expect(Array.isArray(parsed.features)).toBe(true);
+    expect(parsed.features.length).toBeGreaterThan(2000);
+
+    const categories = new Set<string>();
+    const ids = new Set<string>();
+    let prevPriority = -Infinity;
+    for (const f of parsed.features) {
+      expect(f.geometry?.type).toBe('Point');
+      const [lon, lat] = f.geometry.coordinates;
+      expect(Number.isFinite(lon)).toBe(true);
+      expect(Number.isFinite(lat)).toBe(true);
+      const p = f.properties || {};
+      categories.add(p.category);
+      ids.add(p.id);
+      expect(typeof p.priority).toBe('number');
+      expect(p.priority).toBeGreaterThanOrEqual(prevPriority);
+      prevPriority = p.priority;
+    }
+
+    for (const expectedCat of ['water', 'offroad', 'campsite', 'heritage', 'peak']) {
+      expect(categories.has(expectedCat)).toBe(true);
+    }
+    expect(ids.has('il-poi-ein-aqev')).toBe(true);
+    expect(ids.has('il-poi-ein-kelt')).toBe(true);
+    expect(ids.has('il-poi-maale-zik')).toBe(true);
+
+    // Verify all bundled POI coordinates strictly satisfy Israel + Golan + Judea & Samaria boundary
+    // @ts-expect-error Node MJS devops script lacks .d.ts declaration
+    const harvester: any = await import('../../../devops/fetch-israel-pois.mjs');
+    const boundary = await harvester.createIsraelBoundaryChecker('data/Israel.osm.pmtiles');
+    try {
+      const outsideIds: string[] = [];
+      for (const f of parsed.features) {
+        const id = String(f.properties?.id || f.id);
+        if (id.startsWith('il-poi-')) continue;
+        const [lon, lat] = f.geometry.coordinates;
+        if (!(await boundary.isInside(lon, lat))) {
+          outsideIds.push(`${id}@${lon},${lat}`);
+        }
+      }
+      expect(outsideIds).toEqual([]);
+    } finally {
+      boundary.close();
+    }
+  });
+
+  it('converts Off-Road POIs, extracts Wikipedia ?curid= links, filters noise/non-Hebrew blankers, and loads overlay without bloating IndexedDB', async () => {
+    // @ts-expect-error Node MJS devops script lacks .d.ts declaration
+    const converter: any = await import('../../../devops/convert-offroad-pois.mjs');
+    const { classifyOffroadItem, sanitizeExternalUrl } = converter;
+
+    // 1. URL sanitization & Wikipedia curid + slug extraction
+    expect(sanitizeExternalUrl('https://he.wikipedia.org/?curid=309722')).toEqual({
+      url: 'https://he.wikipedia.org/?curid=309722',
+      wikipedia: 'he:?curid=309722',
+    });
+    expect(sanitizeExternalUrl('https://he.m.wikipedia.org/wiki/%D7%A2%D7%99%D7%9F_%D7%A2%D7%A7%D7%91')).toEqual({
+      url: 'https://he.m.wikipedia.org/wiki/%D7%A2%D7%99%D7%9F_%D7%A2%D7%A7%D7%91',
+      wikipedia: 'he:עין עקב',
+    });
+    expect(sanitizeExternalUrl('https://www.inature.info/wiki/nahal_zin')).toEqual({
+      url: 'https://www.inature.info/wiki/nahal_zin',
+      wikipedia: null,
+    });
+    expect(sanitizeExternalUrl('http://ליד חירבת ריבו')).toEqual({ url: null, wikipedia: null });
+    expect(sanitizeExternalUrl('NULL')).toEqual({ url: null, wikipedia: null });
+
+    // 2. Quality/Noise filtering + classification
+    expect(classifyOffroadItem({ id: '1', title: 'test', mapItemType: 'POI' })).toBeNull();
+    expect(classifyOffroadItem({ id: '2', title: 'A008', mapItemType: 'DirectionCustom' })).toBeNull();
+    expect(classifyOffroadItem({ id: '3', title: 'عفولي', mapItemType: 'POI' })).toBeNull();
+    expect(
+      classifyOffroadItem({ id: '4', title: 'נקודה מחוקה', mapItemType: 'POI', requestToDelet: 2, likes: 0 })
+    ).toBeNull();
+
+    // Preserves anchor 6518653317545984 even with requestToDelet: 2 because it has likes: 1 & desc
+    const anchor = classifyOffroadItem({
+      id: '6518653317545984',
+      title: 'מדרגה גבוהה רצוי עם הכוונה בירידה',
+      description: 'בינוני +',
+      mapItemType: 'Upward',
+      likes: 1,
+      unlikes: 0,
+      requestToDelet: 2,
+      updated: '2026-01-03T10:00:00Z',
+    });
+    expect(anchor).toMatchObject({
+      id: 'or-6518653317545984',
+      category: 'offroad',
+      subcategory: 'upward',
+      difficulty4x4: 'בינוני +',
+    });
+
+    // Keyword refinement for generic POI
+    expect(classifyOffroadItem({ id: '5', title: 'פריחת אירוסים מדהימה', mapItemType: 'POI' })).toMatchObject({
+      category: 'heritage',
+      subcategory: 'nature_site',
+    });
+    expect(classifyOffroadItem({ id: '6', title: 'גשר הרכבת העתיק', mapItemType: 'POI' })).toMatchObject({
+      category: 'heritage',
+      subcategory: 'archaeological_site',
+    });
+
+    // 3. Layer visibility helpers for israel-offroad-pois-labels
+    expect(isOffroadCommunityActive(DEFAULT_LAYER_VISIBILITY)).toBe(true);
+    expect(
+      isOffroadCommunityActive({ ...DEFAULT_LAYER_VISIBILITY, poiCommunityOffroad: false })
+    ).toBe(false);
+    expect(buildOffroadPoiLayerFilter({ ...DEFAULT_LAYER_VISIBILITY, poiPeaks: false })).toEqual([
+      'in',
+      ['get', 'category'],
+      ['literal', ['water', 'offroad', 'heritage', 'campsite', 'user']],
+    ]);
+
+    const filterUpdates: Array<{ id: string; filter: any }> = [];
+    const layoutUpdates: Array<{ id: string; prop: string; val: any }> = [];
+    applyLayerVisibilityToMap(
+      {
+        getStyle: () => ({ layers: [] }),
+        getLayer: (id: string) => (id === 'israel-offroad-pois-labels' ? { id } : undefined),
+        getSource: () => undefined,
+        getTerrain: () => null,
+        setLayoutProperty: (id: string, prop: string, val: any) =>
+          layoutUpdates.push({ id, prop, val }),
+        setFilter: (id: string, filter: any) => filterUpdates.push({ id, filter }),
+      },
+      { ...DEFAULT_LAYER_VISIBILITY, poiCommunityOffroad: false }
+    );
+    expect(layoutUpdates).toEqual([
+      { id: 'israel-offroad-pois-labels', prop: 'visibility', val: 'none' },
+    ]);
+    expect(filterUpdates).toHaveLength(1);
+
+    // 4. Dual-file PoiManager initialization keeps Off-Road out of db.pois bulkPut while supporting user notes
+    const origFetch = globalThis.fetch;
+    const origWindow = (globalThis as any).window;
+    const stored: PoiRecord[] = [];
+    const toArraySpy = vi
+      .spyOn(db.pois, 'toArray')
+      .mockImplementation((async () => stored.map((r) => ({ ...r }))) as any);
+    const bulkDeleteSpy = vi.spyOn(db.pois, 'bulkDelete').mockImplementation((async () => {}) as any);
+    const bulkPutSpy = vi.spyOn(db.pois, 'bulkPut').mockImplementation((async (
+      items: readonly PoiRecord[]
+    ) => {
+      stored.push(...items.map((r) => ({ ...r })));
+    }) as any);
+    const updateSpy = vi.spyOn(db.pois, 'update').mockImplementation((async () => 0) as any);
+    const putSpy = vi.spyOn(db.pois, 'put').mockImplementation((async (item: PoiRecord) => {
+      stored.push({ ...item });
+      return item.id;
+    }) as any);
+    const txSpy = vi.spyOn(db, 'transaction').mockImplementation((async (...args: any[]) => {
+      const fn = args[args.length - 1];
+      return await fn();
+    }) as any);
+
+    try {
+      (globalThis as any).window = { location: { origin: 'http://localhost:5173', hostname: 'localhost' } };
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('Israel.offroad.pois.geojson')) {
+          return {
+            ok: true,
+            json: async () => ({
+              type: 'FeatureCollection',
+              metadata: { source: 'Off-Road.io Community Export' },
+              features: [
+                {
+                  type: 'Feature',
+                  id: 'or-6518653317545984',
+                  geometry: { type: 'Point', coordinates: [35.241116, 30.934793] },
+                  properties: {
+                    nameHe: 'מדרגה גבוהה רצוי עם הכוונה בירידה',
+                    category: 'offroad',
+                    subcategory: 'upward',
+                    difficulty4x4: 'בינוני +',
+                    priority: 207,
+                  },
+                },
+              ],
+            }),
+          } as any;
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            type: 'FeatureCollection',
+            features: [
+              {
+                type: 'Feature',
+                id: 'il-poi-ein-aqev',
+                geometry: { type: 'Point', coordinates: [34.8134, 30.8281] },
+                properties: {
+                  id: 'il-poi-ein-aqev',
+                  nameHe: 'עין עקב',
+                  category: 'water',
+                  subcategory: 'spring',
+                  priority: 100,
+                },
+              },
+            ],
+          }),
+        } as any;
+      }) as any;
+
+      const loaded = await PoiManager.initializePois();
+      expect(loaded.map((p) => p.id)).toEqual(['il-poi-ein-aqev', 'or-6518653317545984']);
+      // IndexedDB only receives Curated/OSM, NOT or-* bulk puts
+      expect(stored.some((p) => p.id.startsWith('or-'))).toBe(false);
+
+      const orRec = loaded.find((p) => p.id === 'or-6518653317545984')!;
+      const compact = PoiManager.toCompactMapGeoJSON([orRec]);
+      expect(Object.keys(compact.features[0].properties || {}).sort()).toEqual([
+        'category',
+        'id',
+        'nameHe',
+        'priority',
+        'subcategory',
+      ]);
+
+      await PoiManager.saveUserNote('or-6518653317545984', 'עביר עם נעילה אחורית', orRec);
+      const afterNote = await PoiManager.getAllPois();
+      expect(afterNote.find((p) => p.id === 'or-6518653317545984')?.userNotes).toBe(
+        'עביר עם נעילה אחורית'
+      );
+    } finally {
+      PoiManager.clearOffroadCacheForTesting();
+      globalThis.fetch = origFetch;
+      (globalThis as any).window = origWindow;
+      toArraySpy.mockRestore();
+      bulkDeleteSpy.mockRestore();
+      bulkPutSpy.mockRestore();
+      updateSpy.mockRestore();
+      putSpy.mockRestore();
+      txSpy.mockRestore();
+    }
+  });
+
+  it(
+    'bundles synced, priority-sorted, boundary-pure Israel.offroad.pois.geojson across data/ and public/data/',
+    async () => {
+      const rawData = fs.readFileSync('data/Israel.offroad.pois.geojson', 'utf-8');
+      const rawPublic = fs.readFileSync('public/data/Israel.offroad.pois.geojson', 'utf-8');
+      expect(rawData).toBe(rawPublic);
+
+      const parsed = JSON.parse(rawData);
+      expect(parsed.metadata?.minRenderZoom).toBe(15);
+      expect(Array.isArray(parsed.features)).toBe(true);
+      expect(parsed.features.length).toBeGreaterThan(50000);
+
+      const categories = new Set<string>();
+      let foundAnchor: any = null;
+      let prevPriority = -Infinity;
+      for (const f of parsed.features) {
+        expect(f.geometry?.type).toBe('Point');
+        const [lon, lat] = f.geometry.coordinates;
+        expect(Number.isFinite(lon)).toBe(true);
+        expect(Number.isFinite(lat)).toBe(true);
+        expect(String(f.id).startsWith('or-')).toBe(true);
+        const p = f.properties || {};
+        categories.add(p.category);
+        expect(typeof p.priority).toBe('number');
+        expect(p.priority).toBeGreaterThanOrEqual(prevPriority);
+        prevPriority = p.priority;
+        expect(/[\u0590-\u05FFA-Za-z]/.test(String(p.nameHe || ''))).toBe(true);
+        if (f.id === 'or-6518653317545984') foundAnchor = f;
+      }
+
+      for (const expectedCat of ['water', 'offroad', 'campsite', 'heritage', 'peak']) {
+        expect(categories.has(expectedCat)).toBe(true);
+      }
+      expect(foundAnchor).not.toBeNull();
+      expect(foundAnchor.properties).toMatchObject({
+        category: 'offroad',
+        subcategory: 'upward',
+        difficulty4x4: 'בינוני +',
+      });
+
+      // Verify all bundled Off-Road POI coordinates strictly satisfy Israel + Golan + Judea & Samaria boundary
+      // @ts-expect-error Node MJS devops script lacks .d.ts declaration
+      const harvester: any = await import('../../../devops/fetch-israel-pois.mjs');
+      const boundary = await harvester.createIsraelBoundaryChecker('data/Israel.osm.pmtiles');
+      try {
+        const outsideIds: string[] = [];
+        for (const f of parsed.features) {
+          const [lon, lat] = f.geometry.coordinates;
+          if (!(await boundary.isInside(lon, lat))) {
+            outsideIds.push(`${f.id}@${lon},${lat}`);
+          }
+        }
+        expect(outsideIds).toEqual([]);
+      } finally {
+        boundary.close();
+      }
+    },
+    30000
+  );
 });

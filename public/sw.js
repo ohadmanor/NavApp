@@ -1,4 +1,4 @@
-const CACHE_NAME = 'navapp-offline-v6';
+const CACHE_NAME = 'navapp-offline-v8';
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -29,6 +29,7 @@ const APP_SHELL = [
   "/assets/user-icons/truck.svg",
   "/assets/user-icons/walk.svg",
   "/data/Israel.pois.geojson",
+  "/data/Israel.offroad.pois.geojson",
   "/data/Israel.search.idx"
 ];
 
@@ -52,6 +53,27 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   // Never intercept byte-range requests to large .pmtiles files
   if (url.pathname.endsWith('.pmtiles') || event.request.headers.get('range')) {
+    return;
+  }
+  // Network-first for updatable lightweight data files (POIs & search index) so updates propagate without losing offline fallback
+  if (
+    event.request.method === 'GET' &&
+    url.origin === self.location.origin &&
+    (url.pathname === '/data/Israel.pois.geojson' ||
+      url.pathname === '/data/Israel.offroad.pois.geojson' ||
+      url.pathname === '/data/Israel.search.idx')
+  ) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
     return;
   }
   event.respondWith(

@@ -235,6 +235,36 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
                   );
                 })}
               </div>
+
+              <div className={`pt-2 border-t ${t.divider}`}>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={(visibility.poiCommunityOffroad ?? true) && isMasterPoiOn}
+                  onClick={() => {
+                    const nextOverlay = !(visibility.poiCommunityOffroad ?? true);
+                    onChangeVisibility({
+                      ...visibility,
+                      poiCommunityOffroad: nextOverlay,
+                      ...(nextOverlay && !isMasterPoiOn ? { pois: true } : {}),
+                    });
+                  }}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl border text-xs transition-colors ${t.subCard} ${
+                    !isMasterPoiOn ? 'opacity-65' : ''
+                  }`}
+                >
+                  <span className="font-semibold text-right">🧭 שכבת קהילת Off-Road.io (מעל OSM)</span>
+                  <span
+                    className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center shrink-0 ${
+                      (visibility.poiCommunityOffroad ?? true) && isMasterPoiOn
+                        ? 'bg-emerald-600 justify-start'
+                        : 'bg-slate-400/40 justify-end'
+                    }`}
+                  >
+                    <span className="w-4 h-4 rounded-full bg-white shadow" />
+                  </span>
+                </button>
+              </div>
             </div>
           )}
         </div>

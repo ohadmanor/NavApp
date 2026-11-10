@@ -32,6 +32,30 @@ interface PoiInspectorSheetProps {
   onOpenFullPlanning?: () => void;
 }
 
+function buildWikipediaHref(raw: string): string {
+  const match = /^([a-z]{2,3}):(.*)$/i.exec(raw.trim());
+  const lang = match ? match[1].toLowerCase() : 'he';
+  const target = (match ? match[2] : raw).trim();
+  if (target.startsWith('?curid=') || /^curid=\d+$/i.test(target)) {
+    const query = target.startsWith('?') ? target : `?${target}`;
+    return `https://${lang}.wikipedia.org/${query}`;
+  }
+  return `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(target)}`;
+}
+
+function getSafeExternalHref(raw?: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.toString();
+    }
+  } catch {
+    // ignore malformed URL
+  }
+  return null;
+}
+
 export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   poi,
   theme,
@@ -254,19 +278,43 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             </div>
           )}
 
-          {poi.wikipedia && (
-            <a
-              href={`https://he.wikipedia.org/wiki/${encodeURIComponent(
-                poi.wikipedia.replace(/^he:/, '')
-              )}`}
-              target="_blank"
-              rel="noreferrer"
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold text-sky-500 ${t.pillBtn}`}
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>קרא עוד בויקיפדיה</span>
-            </a>
-          )}
+          {(poi.likes && poi.likes > 0) || poi.updatedAt ? (
+            <div className={`flex flex-wrap items-center gap-2 text-[11px] ${t.muted}`}>
+              {poi.likes && poi.likes > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-500 font-semibold">
+                  👍 {poi.likes} המלצות קהילה
+                </span>
+              )}
+              {poi.updatedAt && (
+                <span>עודכן: {poi.updatedAt.slice(0, 10)}</span>
+              )}
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            {poi.wikipedia && (
+              <a
+                href={buildWikipediaHref(poi.wikipedia)}
+                target="_blank"
+                rel="noreferrer"
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold text-sky-500 ${t.pillBtn}`}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>קרא עוד בויקיפדיה</span>
+              </a>
+            )}
+            {getSafeExternalHref(poi.externalUrl) && (
+              <a
+                href={getSafeExternalHref(poi.externalUrl)!}
+                target="_blank"
+                rel="noreferrer"
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold text-emerald-500 ${t.pillBtn}`}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>קישור למקור המידע</span>
+              </a>
+            )}
+          </div>
 
           {/* Offline Field Notes */}
           <div className={`pt-2.5 border-t space-y-1.5 ${t.divider}`}>

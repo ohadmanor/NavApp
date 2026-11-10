@@ -21,6 +21,7 @@ export interface OutdoorLayerVisibility {
   poiOffroad: boolean;
   poiPeaks: boolean;
   poiUser: boolean;
+  poiCommunityOffroad?: boolean;
 }
 
 export type PoiLayerKey =
@@ -58,6 +59,7 @@ export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   poiOffroad: true,
   poiPeaks: true,
   poiUser: true,
+  poiCommunityOffroad: true,
 };
 
 export function countActivePoiCategories(visibility: OutdoorLayerVisibility): number {
@@ -66,6 +68,21 @@ export function countActivePoiCategories(visibility: OutdoorLayerVisibility): nu
 
 export function isMasterPoiActive(visibility: OutdoorLayerVisibility): boolean {
   return visibility.pois && countActivePoiCategories(visibility) > 0;
+}
+
+export function isOffroadCommunityActive(visibility: OutdoorLayerVisibility): boolean {
+  return isMasterPoiActive(visibility) && (visibility.poiCommunityOffroad ?? true);
+}
+
+export function buildOffroadPoiLayerFilter(visibility: OutdoorLayerVisibility): any {
+  const activeCategories: string[] = [];
+  if (visibility.poiWater) activeCategories.push('water');
+  if (visibility.poiOffroad) activeCategories.push('offroad');
+  if (visibility.poiHeritage) activeCategories.push('heritage');
+  if (visibility.poiCampsites) activeCategories.push('campsite');
+  if (visibility.poiPeaks) activeCategories.push('peak');
+  if (visibility.poiUser ?? true) activeCategories.push('user');
+  return ['in', ['get', 'category'], ['literal', activeCategories]];
 }
 
 export function enableAllPoiVisibility(
@@ -80,6 +97,7 @@ export function enableAllPoiVisibility(
     poiCampsites: true,
     poiPeaks: true,
     poiUser: true,
+    poiCommunityOffroad: true,
   };
 }
 
@@ -1129,6 +1147,17 @@ export function applyLayerVisibilityToMap(
         'visibility',
         visibility.tacticalGrid ? 'visible' : 'none'
       );
+    }
+  }
+
+  if (map.getLayer('israel-offroad-pois-labels')) {
+    map.setLayoutProperty(
+      'israel-offroad-pois-labels',
+      'visibility',
+      isOffroadCommunityActive(visibility) ? 'visible' : 'none'
+    );
+    if (typeof map.setFilter === 'function') {
+      map.setFilter('israel-offroad-pois-labels', buildOffroadPoiLayerFilter(visibility));
     }
   }
 

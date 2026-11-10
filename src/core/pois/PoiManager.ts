@@ -2,64 +2,191 @@ import { db, type PoiRecord, type PoiCategory } from '../db/NavDatabase';
 import { bundledDataUrl } from '../dataUrls';
 
 /**
+ * Computes default deterministic display & collision sort priority for POIs.
+ * Lower numbers win symbol placement at zoom >= 15 and sort higher on ties.
+ */
+export function getPoiSortPriority(poi: Pick<PoiRecord, 'id' | 'category' | 'subcategory' | 'ele' | 'wikipedia' | 'userNotes' | 'priority'>): number {
+  if (poi.category === 'user' || poi.id.startsWith('user-poi-') || poi.userNotes) {
+    return 10;
+  }
+  if (poi.id.startsWith('import-')) {
+    return 20;
+  }
+  if (typeof poi.priority === 'number' && Number.isFinite(poi.priority)) {
+    return poi.priority;
+  }
+  if (poi.id.startsWith('il-poi-')) {
+    return 100;
+  }
+  const baseByCategory: Record<PoiCategory, number> = {
+    user: 10,
+    offroad: 210,
+    water: 310,
+    campsite: 410,
+    heritage: 510,
+    peak: 620,
+  };
+  let score = baseByCategory[poi.category] ?? 550;
+  if (poi.category === 'peak' && typeof poi.ele === 'number') {
+    score -= Math.min(80, Math.max(0, Math.round(poi.ele / 30)));
+  }
+  if (poi.wikipedia) score -= 25;
+  return score;
+}
+
+/**
+ * Computes compact minimal properties needed by MapLibre symbol rendering & collision.
+ */
+function hydrateGeojsonFeature(
+  f: any,
+  index: number,
+  existingNotes: Map<string, string>,
+  defaults: { defaultSource: string; basePriority: number }
+): PoiRecord {
+  const props = f.properties || {};
+  const coords = f.geometry?.coordinates || [35.0615, 31.402];
+  const id = String(props.id || f.id || `poi-${coords[0]}-${coords[1]}`);
+  const nameHe = props.nameHe || props.name || props.nameEn || 'נקודת עניין';
+  const nameEn = props.nameEn || props.name || props.nameHe || 'Point of Interest';
+  return {
+    id,
+    name: nameHe,
+    nameHe,
+    nameEn,
+    category: (props.category as PoiCategory) || 'heritage',
+    subcategory: props.subcategory || 'poi',
+    lon: Number(coords[0]),
+    lat: Number(coords[1]),
+    ele: typeof props.ele === 'number' ? props.ele : null,
+    waterStatus: props.waterStatus || null,
+    difficulty4x4: props.difficulty4x4 || null,
+    descHe: props.descHe || '',
+    descEn: props.descEn || '',
+    source: props.source || defaults.defaultSource,
+    wikipedia: props.wikipedia || null,
+    externalUrl: props.externalUrl || null,
+    likes: typeof props.likes === 'number' ? props.likes : undefined,
+    updatedAt: typeof props.updatedAt === 'string' ? props.updatedAt : undefined,
+    priority:
+      typeof props.priority === 'number' && Number.isFinite(props.priority)
+        ? props.priority
+        : defaults.basePriority + index,
+    userNotes: existingNotes.get(id) || props.userNotes || '',
+  };
+}
+
+/**
  * Manages the Israeli Outdoor Points of Interest (Springs, Caves, Ruins, Campsites, 4x4 Passes, Peaks)
- * harvested from OpenStreetMap / IsraelHiking / Off-Road / Amud Anan into data/Israel.pois.geojson
- * and persisted in local IndexedDB (Dexie.js) for 100% offline operation.
+ * harvested from OpenStreetMap / IsraelHiking / Off-Road into:
+ *   - data/Israel.pois.geojson (persisted in local IndexedDB)
+ *   - data/Israel.offroad.pois.geojson (high-volume community overlay cached in memory; userNotes persisted to IndexedDB)
  */
 export class PoiManager {
+  private static offroadPoisCache: PoiRecord[] = [];
+
+  private static mergeWithOffroadCache(dbPois: PoiRecord[]): PoiRecord[] {
+    if (PoiManager.offroadPoisCache.length === 0) {
+      dbPois.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b));
+      return dbPois;
+    }
+    const dbById = new Map<string, PoiRecord>();
+    for (const p of dbPois) {
+      dbById.set(p.id, p);
+    }
+    const merged: PoiRecord[] = [...dbPois];
+    for (const orPoi of PoiManager.offroadPoisCache) {
+      if (!dbById.has(orPoi.id)) {
+        merged.push(orPoi);
+      }
+    }
+    merged.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b));
+    return merged;
+  }
+
   static async initializePois(): Promise<PoiRecord[]> {
     try {
-      const response = await fetch(bundledDataUrl('Israel.pois.geojson'));
-      if (response.ok) {
-        const geojson = await response.json();
+      const [osmRes, offroadRes] = await Promise.all([
+        fetch(bundledDataUrl('Israel.pois.geojson')),
+        fetch(bundledDataUrl('Israel.offroad.pois.geojson')).catch(() => null),
+      ]);
+
+      const existingPois = await db.pois.toArray();
+      const existingNotes = new Map<string, string>();
+      for (const p of existingPois) {
+        if (p.userNotes) existingNotes.set(p.id, p.userNotes);
+      }
+
+      const osmNextIds = new Set<string>();
+      if (osmRes && osmRes.ok) {
+        const geojson = await osmRes.json();
         if (Array.isArray(geojson.features) && geojson.features.length > 0) {
-          const existingNotes = new Map<string, string>();
-          const existingPois = await db.pois.toArray();
-          for (const p of existingPois) {
-            if (p.userNotes) existingNotes.set(p.id, p.userNotes);
-          }
+          const records: PoiRecord[] = geojson.features.map((f: any, index: number) =>
+            hydrateGeojsonFeature(f, index, existingNotes, {
+              defaultSource: 'IsraelHiking / OSM',
+              basePriority: 100,
+            })
+          );
 
-          const records: PoiRecord[] = geojson.features.map((f: any) => {
-            const props = f.properties || {};
-            const coords = f.geometry?.coordinates || [35.0615, 31.402];
-            const id = String(props.id || f.id || `poi-${coords[0]}-${coords[1]}`);
-            return {
-              id,
-              name: props.nameHe || props.name || props.nameEn || 'נקודת עניין',
-              nameHe: props.nameHe || props.name || props.nameEn || 'נקודת עניין',
-              nameEn: props.nameEn || props.name || props.nameHe || 'Point of Interest',
-              category: (props.category as PoiCategory) || 'heritage',
-              subcategory: props.subcategory || 'poi',
-              lon: Number(coords[0]),
-              lat: Number(coords[1]),
-              ele: typeof props.ele === 'number' ? props.ele : null,
-              waterStatus: props.waterStatus || null,
-              difficulty4x4: props.difficulty4x4 || null,
-              descHe: props.descHe || '',
-              descEn: props.descEn || '',
-              source: props.source || 'IsraelHiking / OSM',
-              wikipedia: props.wikipedia || null,
-              userNotes: existingNotes.get(id) || props.userNotes || '',
-            };
+          for (const r of records) osmNextIds.add(r.id);
+          const staleBundledIds = existingPois
+            .filter(
+              (p) =>
+                (p.id.startsWith('osm-') || p.id.startsWith('il-poi-')) &&
+                !osmNextIds.has(p.id) &&
+                !p.userNotes
+            )
+            .map((p) => p.id);
+
+          await db.transaction('rw', db.pois, async () => {
+            if (staleBundledIds.length > 0) {
+              await db.pois.bulkDelete(staleBundledIds);
+            }
+            await db.pois.bulkPut(records);
           });
+        }
+      }
 
-          await db.pois.bulkPut(records);
+      // Load separate Off-Road community overlay in memory (without bloating IndexedDB with 62k+ rows)
+      if (offroadRes && offroadRes.ok) {
+        try {
+          const offroadGeo = await offroadRes.json();
+          const feats = Array.isArray(offroadGeo?.features) ? offroadGeo.features : [];
+          const isOffroadCollection =
+            String(offroadGeo?.metadata?.source || '').includes('Off-Road') ||
+            feats.some((f: any) => String(f?.properties?.id || f?.id || '').startsWith('or-'));
+
+          if (isOffroadCollection && feats.length > 0) {
+            const parsedOffroad: PoiRecord[] = [];
+            for (let i = 0; i < feats.length; i++) {
+              const rec = hydrateGeojsonFeature(feats[i], i, existingNotes, {
+                defaultSource: 'Off-Road.io (קהילת השטח)',
+                basePriority: 220,
+              });
+              if (osmNextIds.has(rec.id)) continue;
+              parsedOffroad.push(rec);
+            }
+            PoiManager.offroadPoisCache = parsedOffroad;
+          }
+        } catch (orParseErr) {
+          console.warn('[PoiManager] Off-Road GeoJSON parse skipped:', orParseErr);
         }
       }
     } catch (err) {
       console.warn('[PoiManager] Offline mode — loading POIs from local IndexedDB cache:', err);
     }
 
-    return await db.pois.toArray();
+    const all = await db.pois.toArray();
+    return PoiManager.mergeWithOffroadCache(all);
   }
 
   static async getAllPois(): Promise<PoiRecord[]> {
-    return await db.pois.toArray();
+    const all = await db.pois.toArray();
+    return PoiManager.mergeWithOffroadCache(all);
   }
 
   static async searchPois(query: string, categoryFilter?: PoiCategory | 'all'): Promise<PoiRecord[]> {
     const q = query.trim().toLowerCase();
-    const all = await db.pois.toArray();
+    const all = await PoiManager.getAllPois();
     return all.filter((poi) => {
       if (categoryFilter && categoryFilter !== 'all' && poi.category !== categoryFilter) {
         return false;
@@ -81,6 +208,15 @@ export class PoiManager {
     fallbackRecord?: PoiRecord
   ): Promise<PoiRecord | undefined> {
     const updatedAt = new Date().toISOString();
+    const cachedIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poiId);
+    if (cachedIdx >= 0) {
+      PoiManager.offroadPoisCache[cachedIdx] = {
+        ...PoiManager.offroadPoisCache[cachedIdx],
+        userNotes,
+        updatedAt,
+      };
+    }
+
     const updatedCount = await db.pois.update(poiId, {
       userNotes,
       updatedAt,
@@ -96,6 +232,10 @@ export class PoiManager {
       return created;
     }
     return await db.pois.get(poiId);
+  }
+
+  static clearOffroadCacheForTesting(): void {
+    PoiManager.offroadPoisCache = [];
   }
 
   static async addCustomUserPoi(params: {
@@ -150,15 +290,17 @@ export class PoiManager {
       };
     }
 
-    const filtered = pois.filter((p) => {
-      if (p.category === 'water') return visibility.poiWater;
-      if (p.category === 'heritage') return visibility.poiHeritage;
-      if (p.category === 'campsite') return visibility.poiCampsites;
-      if (p.category === 'offroad') return visibility.poiOffroad;
-      if (p.category === 'peak') return visibility.poiPeaks;
-      if (p.category === 'user') return visibility.poiUser ?? true;
-      return true;
-    });
+    const filtered = pois
+      .filter((p) => {
+        if (p.category === 'water') return visibility.poiWater;
+        if (p.category === 'heritage') return visibility.poiHeritage;
+        if (p.category === 'campsite') return visibility.poiCampsites;
+        if (p.category === 'offroad') return visibility.poiOffroad;
+        if (p.category === 'peak') return visibility.poiPeaks;
+        if (p.category === 'user') return visibility.poiUser ?? true;
+        return true;
+      })
+      .sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b));
 
     return {
       type: 'FeatureCollection',
@@ -171,6 +313,34 @@ export class PoiManager {
         },
         properties: {
           ...p,
+          priority: getPoiSortPriority(p),
+        },
+      })),
+    };
+  }
+
+  /**
+   * Emits a lightweight GeoJSON FeatureCollection containing only styling/filtering
+   * properties so 62k+ Off-Road POIs tile smoothly in MapLibre's WebWorker without
+   * duplicating multi-megabyte descriptions; rich details are resolved on click via `id`.
+   */
+  static toCompactMapGeoJSON(pois: PoiRecord[]): GeoJSON.FeatureCollection {
+    const sorted = [...pois].sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b));
+    return {
+      type: 'FeatureCollection',
+      features: sorted.map((p) => ({
+        type: 'Feature',
+        id: p.id,
+        geometry: {
+          type: 'Point',
+          coordinates: [p.lon, p.lat],
+        },
+        properties: {
+          id: p.id,
+          nameHe: p.nameHe || p.name,
+          category: p.category,
+          subcategory: p.subcategory,
+          priority: getPoiSortPriority(p),
         },
       })),
     };

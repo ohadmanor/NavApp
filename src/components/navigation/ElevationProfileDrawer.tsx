@@ -120,8 +120,30 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
     ) as Array<GeoJSON.Feature<GeoJSON.LineString>>;
 
     if (lineFeatures.length > 0 && pois.length > 0) {
+      let minLon = Infinity;
+      let minLat = Infinity;
+      let maxLon = -Infinity;
+      let maxLat = -Infinity;
+      for (const lf of lineFeatures) {
+        for (const [lon, lat] of lf.geometry.coordinates) {
+          if (lon < minLon) minLon = lon;
+          if (lon > maxLon) maxLon = lon;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+        }
+      }
+      // ~2.2 km generous bbox margin (~0.02 deg) to avoid calling pointToLineDistance on thousands of distant POIs
+      const padDeg = 0.02;
+      minLon -= padDeg;
+      maxLon += padDeg;
+      minLat -= padDeg;
+      maxLat += padDeg;
+
       const nearbyWpts: RoutePointOption[] = [];
       for (const poi of pois) {
+        if (poi.lon < minLon || poi.lon > maxLon || poi.lat < minLat || poi.lat > maxLat) {
+          continue;
+        }
         const pt = turf.point([poi.lon, poi.lat]);
         let minLineKm = Infinity;
         for (const lf of lineFeatures) {
