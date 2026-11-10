@@ -423,6 +423,271 @@ const ROAD_CASING_GRAY_IDS = new Set([
 const ROAD_CASING_TUNNEL_IDS = new Set(['layer-1-casing-minor', 'layer-1-casing-tertiary']);
 const ROAD_CASING_ZOOM_GUARDED_IDS = new Set(['casing-primary', 'casing-trunk']);
 
+const HAS_LANES_EXPR: any = ['all', ['has', 'lanes'], ['>', ['to-number', ['get', 'lanes'], 0], 0]];
+const CLAMPED_LANES_EXPR: any = ['min', 6, ['max', 1, ['to-number', ['get', 'lanes'], 2]]];
+const IS_RAMP_EXPR: any = ['==', ['coalesce', ['to-number', ['get', 'ramp'], 0], 0], 1];
+const IS_ONEWAY_EXPR: any = ['!=', ['coalesce', ['to-number', ['get', 'oneway'], 0], 0], 0];
+
+const Z16_FILL_WIDTH_MOTORWAY: any = [
+  'case',
+  HAS_LANES_EXPR,
+  ['+', ['*', CLAMPED_LANES_EXPR, 3.6], 2.0],
+  IS_RAMP_EXPR,
+  5.6,
+  9.2,
+];
+
+const Z16_FILL_WIDTH_TRUNK: any = [
+  'case',
+  HAS_LANES_EXPR,
+  ['+', ['*', CLAMPED_LANES_EXPR, 3.5], 1.8],
+  IS_RAMP_EXPR,
+  5.3,
+  8.8,
+];
+
+const Z16_FILL_WIDTH_PRIMARY: any = [
+  'case',
+  HAS_LANES_EXPR,
+  ['+', ['*', CLAMPED_LANES_EXPR, 3.4], 1.4],
+  IS_RAMP_EXPR,
+  5.0,
+  8.2,
+];
+
+const Z16_FILL_WIDTH_SECONDARY: any = [
+  'case',
+  HAS_LANES_EXPR,
+  ['+', ['*', CLAMPED_LANES_EXPR, 3.2], 1.0],
+  IS_RAMP_EXPR,
+  4.5,
+  7.4,
+];
+
+const Z16_FILL_WIDTH_TERTIARY: any = [
+  'case',
+  HAS_LANES_EXPR,
+  ['+', ['*', CLAMPED_LANES_EXPR, 3.1], 0.9],
+  IS_RAMP_EXPR,
+  4.2,
+  IS_ONEWAY_EXPR,
+  5.5,
+  6.8,
+];
+
+const Z16_FILL_WIDTH_MINOR: any = [
+  'case',
+  HAS_LANES_EXPR,
+  ['+', ['*', CLAMPED_LANES_EXPR, 3.0], 1.0],
+  ['==', ['coalesce', ['get', 'class'], ''], 'service'],
+  4.0,
+  IS_ONEWAY_EXPR,
+  5.2,
+  6.5,
+];
+
+const Z16_CASING_WIDTH_MOTORWAY: any = ['+', Z16_FILL_WIDTH_MOTORWAY, 3.0];
+const Z16_CASING_WIDTH_TRUNK: any = ['+', Z16_FILL_WIDTH_TRUNK, 3.0];
+const Z16_CASING_WIDTH_PRIMARY: any = ['+', Z16_FILL_WIDTH_PRIMARY, 3.0];
+const Z16_CASING_WIDTH_SECONDARY: any = ['+', Z16_FILL_WIDTH_SECONDARY, 2.6];
+const Z16_CASING_WIDTH_TERTIARY: any = ['+', Z16_FILL_WIDTH_TERTIARY, 2.4];
+const Z16_CASING_WIDTH_MINOR: any = ['+', Z16_FILL_WIDTH_MINOR, 2.2];
+
+const Z16_BOX_WIDTH_HIGHWAYS: any = [
+  'match',
+  ['coalesce', ['get', 'class'], ''],
+  'motorway',
+  ['+', Z16_CASING_WIDTH_MOTORWAY, 4.0],
+  'trunk',
+  ['+', Z16_CASING_WIDTH_TRUNK, 4.0],
+  ['+', Z16_CASING_WIDTH_PRIMARY, 4.0],
+];
+
+const Z16_BOX_WIDTH_PAVED_LOCAL: any = [
+  'match',
+  ['coalesce', ['get', 'class'], ''],
+  'secondary',
+  ['+', Z16_CASING_WIDTH_SECONDARY, 3.0],
+  'tertiary',
+  ['+', Z16_CASING_WIDTH_TERTIARY, 3.0],
+  ['+', Z16_CASING_WIDTH_MINOR, 3.0],
+];
+
+const Z16_BOX_WIDTH_ALL_PAVED: any = [
+  'match',
+  ['coalesce', ['get', 'class'], ''],
+  'motorway',
+  ['+', Z16_CASING_WIDTH_MOTORWAY, 4.0],
+  'trunk',
+  ['+', Z16_CASING_WIDTH_TRUNK, 4.0],
+  'primary',
+  ['+', Z16_CASING_WIDTH_PRIMARY, 4.0],
+  'secondary',
+  ['+', Z16_CASING_WIDTH_SECONDARY, 3.0],
+  'tertiary',
+  ['+', Z16_CASING_WIDTH_TERTIARY, 3.0],
+  ['+', Z16_CASING_WIDTH_MINOR, 3.0],
+];
+
+const Z16_BOX_WIDTH_TRACK_AND_MINOR: any = [
+  'case',
+  ['==', ['coalesce', ['get', 'class'], ''], 'track'],
+  6.4,
+  ['+', Z16_CASING_WIDTH_MINOR, 3.0],
+];
+
+function buildProportionalZoomExpr(
+  existingValue: any,
+  z16Value: any
+): any {
+  const args: any[] = [];
+  if (
+    existingValue &&
+    typeof existingValue === 'object' &&
+    !Array.isArray(existingValue) &&
+    Array.isArray(existingValue.stops)
+  ) {
+    for (const stop of existingValue.stops) {
+      if (Array.isArray(stop) && stop.length >= 2 && typeof stop[0] === 'number' && stop[0] < 16) {
+        args.push(stop[0], stop[1]);
+      }
+    }
+  }
+  const z22Value =
+    typeof z16Value === 'number'
+      ? Number((z16Value * 64).toFixed(2))
+      : ['*', z16Value, 64];
+  args.push(16, z16Value, 22, z22Value);
+  return ['interpolate', ['exponential', 2], ['zoom'], ...args];
+}
+
+function getProportionalLinePaintUpdates(
+  layer: LayerSpecification
+): Record<string, any> | null {
+  if (layer.type !== 'line') return null;
+  if (typeof layer.maxzoom === 'number' && layer.maxzoom < 16) return null;
+
+  const id = layer.id;
+  const paint: any = (layer as any).paint || {};
+  const updates: Record<string, any> = {};
+
+  if (id === 'road-motorway' || id.endsWith('-road-motorway')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_FILL_WIDTH_MOTORWAY);
+  } else if (id === 'road-trunk' || id.endsWith('-road-trunk')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_FILL_WIDTH_TRUNK);
+  } else if (id === 'road-primary' || id.endsWith('-road-primary')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_FILL_WIDTH_PRIMARY);
+  } else if (id === 'road-secondary' || id.endsWith('-road-secondary')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_FILL_WIDTH_SECONDARY);
+  } else if (id === 'road-tertiary' || id.endsWith('-road-tertiary')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_FILL_WIDTH_TERTIARY);
+  } else if (id === 'road-minor' || id.endsWith('-road-minor')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_FILL_WIDTH_MINOR);
+  } else if (id === 'casing-motorway' || id.endsWith('-casing-motorway')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_CASING_WIDTH_MOTORWAY);
+  } else if (id === 'casing-trunk' || id.endsWith('-casing-trunk')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_CASING_WIDTH_TRUNK);
+  } else if (id === 'casing-primary' || id.endsWith('-casing-primary')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_CASING_WIDTH_PRIMARY);
+  } else if (id === 'casing-secondary' || id.endsWith('-casing-secondary')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_CASING_WIDTH_SECONDARY);
+  } else if (id === 'casing-tertiary' || id.endsWith('-casing-tertiary')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_CASING_WIDTH_TERTIARY);
+  } else if (id === 'casing-minor' || id.endsWith('-casing-minor')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_CASING_WIDTH_MINOR);
+  } else if (id === 'casing-minor-colour2') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], [
+      '*',
+      Z16_CASING_WIDTH_MINOR,
+      0.5,
+    ]);
+    updates['line-offset'] = buildProportionalZoomExpr(paint['line-offset'], [
+      '*',
+      Z16_CASING_WIDTH_MINOR,
+      0.25,
+    ]);
+  } else if (id === 'layer1-box-highways') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_BOX_WIDTH_HIGHWAYS);
+  } else if (id === 'layer1-box-paved') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_BOX_WIDTH_PAVED_LOCAL);
+  } else if (id === 'layer2-box-paved') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], Z16_BOX_WIDTH_ALL_PAVED);
+  } else if (id === 'layer-1-box-track+minor') {
+    updates['line-width'] = buildProportionalZoomExpr(
+      paint['line-width'],
+      Z16_BOX_WIDTH_TRACK_AND_MINOR
+    );
+  } else if (id === 'layer1-box-track') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 6.4);
+  } else if (TRACK_CASING_IDS.has(id)) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.6);
+  } else if (TRACK_RIGHT_IDS.has(id)) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 1.3);
+    updates['line-offset'] = buildProportionalZoomExpr(paint['line-offset'], 1.25);
+  } else if (TRACK_LEFT_IDS.has(id)) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 1.3);
+    updates['line-offset'] = buildProportionalZoomExpr(paint['line-offset'], -1.25);
+  } else if (
+    id === 'path-path' ||
+    id.endsWith('-path-path') ||
+    id === 'path-footway' ||
+    id.endsWith('-path-footway') ||
+    id === 'casing-path' ||
+    id.endsWith('-casing-path')
+  ) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 2.5);
+  } else if (
+    id === 'path-cycleway' ||
+    id.endsWith('-path-cycleway') ||
+    id === 'casing-cycleway' ||
+    id.endsWith('-casing-cycleway')
+  ) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 3.0);
+  } else if (id === 'casing-marked-path' || id === 'casing-marked-cycleway') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.8);
+  } else if (id === 'path-steps' || id.endsWith('-path-steps') || id === 'casing-steps' || id.endsWith('-casing-steps')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 3.5);
+  } else if (id.endsWith('-box-path')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.5);
+  } else if (id.endsWith('-box-cycleway')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 5.0);
+  } else if (id.endsWith('-box-steps')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 6.0);
+  } else if (id === 'rail-casing' || id.endsWith('-rail-casing')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.5);
+  } else if (id === 'rail-dash' || id.endsWith('-rail-dash') || id === 'layer-1-rail-dash-tunnel') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 2.2);
+  } else if (id.endsWith('-box-rail')) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 7.0);
+  } else if (id === 'trail-israel-secondary-') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 16);
+  } else if (id === 'trail-israel-primary+') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 24);
+  } else if (
+    id === 'trail-regional-line' ||
+    id === 'trail-regional-line-purple' ||
+    id === 'trail-regional-dash'
+  ) {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.0);
+    updates['line-offset'] = buildProportionalZoomExpr(
+      paint['line-offset'],
+      id === 'trail-regional-line-purple' ? -6.0 : 6.0
+    );
+  } else if (id === 'aeroway-runway') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 45);
+  } else if (id === 'aeroway-taxiway') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 22);
+  } else if (id === 'casing-pier') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.0);
+  } else if (id === 'goods_conveyor' || id === 'goods_conveyor-dash') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 4.0);
+  } else if (id === 'goods_conveyor-bridge') {
+    updates['line-width'] = buildProportionalZoomExpr(paint['line-width'], 8.0);
+  }
+
+  return Object.keys(updates).length > 0 ? updates : null;
+}
+
 function getDynamicPaintUpdates(
   layerId: string,
   visibility: OutdoorLayerVisibility
@@ -784,11 +1049,13 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       } as any;
     }
 
+    const proportionalUpdates = getProportionalLinePaintUpdates(layer);
     const paintUpdates = getDynamicPaintUpdates(layer.id, visibility);
-    if (paintUpdates) {
+    if (proportionalUpdates || paintUpdates) {
       (layer as any).paint = {
         ...((layer as any).paint || {}),
-        ...paintUpdates,
+        ...(proportionalUpdates || {}),
+        ...(paintUpdates || {}),
       };
     }
 

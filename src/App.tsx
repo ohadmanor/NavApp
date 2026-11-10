@@ -3162,40 +3162,55 @@ export const App: React.FC = () => {
     );
   };
 
-  const renderNavOrientationToggle = (compact = false) => {
+  const renderNavOrientationIconButton = (mobile = false) => {
     const headingActive = navOrientation === 'heading-up';
-    return (
-      <div
-        role="group"
-        aria-label="כיוון מפה בניווט"
-        className={`rounded-full border p-0.5 flex items-center gap-0.5 shadow-xl ${t.panel}`}
-      >
-        <button
-          type="button"
-          onClick={() => handleChangeNavOrientation('heading-up')}
-          aria-pressed={headingActive}
-          title="המפה מסתובבת לכיוון הנסיעה/ההליכה (ברירת מחדל)"
-          className={`${compact ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'} rounded-full font-bold flex items-center gap-1.5 transition-all whitespace-nowrap ${
-            headingActive ? 'bg-sky-600 text-white shadow-sm' : t.hoverRow
-          }`}
-        >
-          <Navigation className="w-3.5 h-3.5 shrink-0" />
-          <span>{compact ? 'כיוון תנועה' : 'עם כיוון התנועה'}</span>
-        </button>
+    const nextMode: MapNavigationOrientation = headingActive ? 'north-up' : 'heading-up';
+    const label = headingActive
+      ? 'כיוון מפה: כיוון תנועה — לחץ למעבר לצפון למעלה'
+      : 'כיוון מפה: צפון למעלה — לחץ למעבר לכיוון התנועה';
 
-        <button
-          type="button"
-          onClick={() => handleChangeNavOrientation('north-up')}
-          aria-pressed={!headingActive}
-          title="שמור צפון תמיד למעלה והחץ מסתובב על המפה"
-          className={`${compact ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'} rounded-full font-bold flex items-center gap-1.5 transition-all whitespace-nowrap ${
-            !headingActive ? 'bg-rose-600 text-white shadow-sm' : t.hoverRow
-          }`}
-        >
-          <Compass className="w-3.5 h-3.5 shrink-0" />
-          <span>צפון למעלה</span>
-        </button>
-      </div>
+    return (
+      <button
+        type="button"
+        onClick={() => handleChangeNavOrientation(nextMode)}
+        aria-label={label}
+        aria-pressed={headingActive}
+        title={label}
+        className={`${
+          mobile ? 'w-11 h-11 rounded-full mb-0.5' : 'w-10 h-10 rounded-xl'
+        } border shadow-xl flex items-center justify-center transition-all shrink-0 ${
+          headingActive
+            ? `${t.pillBtn} border-sky-500/80 ring-2 ring-sky-500/25 ${
+                theme === 'topo-dark' ? 'text-sky-400' : 'text-sky-600'
+              }`
+            : `${t.pillBtn} border-rose-500/75 ring-2 ring-rose-500/20 ${
+                theme === 'topo-dark' ? 'text-rose-400' : 'text-rose-600'
+              }`
+        }`}
+      >
+        {headingActive ? (
+          <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
+            <path
+              d="M12 2.5L4.5 20.5l7.5-3.6 7.5 3.6L12 2.5z"
+              fill="currentColor"
+            />
+          </svg>
+        ) : (
+          <svg
+            viewBox="0 0 24 24"
+            className="w-5 h-5 transition-transform"
+            style={{ transform: `rotate(${-mapBearing}deg)` }}
+            aria-hidden="true"
+          >
+            <path
+              d="M9.2 7.5V2.5h1.3l3 3.5V2.5h1.3v5h-1.3l-3-3.5v3.5H9.2z"
+              fill="#e11d48"
+            />
+            <polygon points="12,8.8 15.2,15.4 8.8,15.4" fill="#e11d48" />
+            <polygon points="12,22 15.2,15.4 8.8,15.4" fill="#64748b" opacity="0.75" />
+          </svg>
+        )}
+      </button>
     );
   };
 
@@ -3429,8 +3444,6 @@ export const App: React.FC = () => {
                 </div>
               ) : null}
 
-              {isNavigationActive && renderNavOrientationToggle(false)}
-
               {/* Compact Offline Status Pill */}
               <button
                 onClick={() => setIsStorageOpen(true)}
@@ -3586,22 +3599,18 @@ export const App: React.FC = () => {
                   3D
                 </button>
 
-                <button
-                  onClick={handleResetNorth}
-                  className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`}
-                  title={
-                    isNavigationActive
-                      ? navOrientation === 'heading-up'
-                        ? 'עבור לצפון למעלה'
-                        : 'עבור לכיוון התנועה'
-                      : 'אפס כיוון לצפון'
-                  }
-                >
-                  <Compass
-                    className="w-4 h-4 text-rose-500 transition-transform"
-                    style={{ transform: `rotate(${-mapBearing}deg)` }}
-                  />
-                </button>
+                {!isNavigationActive && (
+                  <button
+                    onClick={handleResetNorth}
+                    className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`}
+                    title="אפס כיוון לצפון"
+                  >
+                    <Compass
+                      className="w-4 h-4 text-rose-500 transition-transform"
+                      style={{ transform: `rotate(${-mapBearing}deg)` }}
+                    />
+                  </button>
+                )}
 
                 <button
                   onClick={() => setShowCenterCrosshair(!showCenterCrosshair)}
@@ -3644,6 +3653,8 @@ export const App: React.FC = () => {
                     size="sm"
                   />
                 </button>
+
+                {isNavigationActive && renderNavOrientationIconButton(false)}
 
                 <button
                   onClick={handleLocateMe}
@@ -3735,102 +3746,110 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* MODE B: NAVIGATING — No Search, No Chips! Slim Top Navigation/Status Pill + Orientation Toggle + Planning Toggle */}
+            {/* MODE B: NAVIGATING — No Search, No Chips! Compact Icon Navigation Status + Planning Icon */}
             {mobileDisplayMode === 'navigating' && (
-              <>
-                <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-auto">
-                  {isNavigatingRoute && activeRoute ? (
-                    <div
-                      className={`p-2.5 rounded-2xl shadow-2xl flex items-center justify-between gap-2 text-xs font-bold backdrop-blur-md ${
-                        offRouteWarning !== null
-                          ? 'bg-red-600/95 text-white animate-pulse'
-                          : 'bg-emerald-600/95 text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        {offRouteWarning !== null ? (
-                          <AlertTriangle className="w-4 h-4 shrink-0" />
-                        ) : (
-                          <Navigation className="w-4 h-4 shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          <div className="truncate">
-                            {offRouteWarning !== null
-                              ? `סטייה מציר • ${offRouteWarning} מטרים`
-                              : activeRoute.name}
-                          </div>
-                          <div className="font-normal opacity-90 truncate">
-                            {offRouteWarning !== null
-                              ? 'חזור לכיוון הציר המתוכנן'
-                              : `נותרו ${remainingDistKm ?? activeRoute.distanceKm} ק״מ • במעקב GPS`}
-                          </div>
+              <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-none">
+                {isNavigatingRoute && activeRoute ? (
+                  <div
+                    className={`p-2.5 rounded-2xl shadow-2xl flex items-center justify-between gap-2 text-xs font-bold backdrop-blur-md pointer-events-auto ${
+                      offRouteWarning !== null
+                        ? 'bg-red-600/95 text-white animate-pulse'
+                        : 'bg-emerald-600/95 text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {offRouteWarning !== null ? (
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                      ) : (
+                        <Navigation className="w-4 h-4 shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="truncate">
+                          {offRouteWarning !== null
+                            ? `סטייה מציר • ${offRouteWarning} מטרים`
+                            : activeRoute.name}
+                        </div>
+                        <div className="font-normal opacity-90 truncate">
+                          {offRouteWarning !== null
+                            ? 'חזור לכיוון הציר המתוכנן'
+                            : `נותרו ${remainingDistKm ?? activeRoute.distanceKm} ק״מ • במעקב GPS`}
                         </div>
                       </div>
-                      <button
-                        onClick={() => {
-                          setIsFreeNavigation(false);
-                          setMobileDisplayMode('planning');
-                          setMobileTab('routes');
-                          setMobileNavOverlay(null);
-                        }}
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-950/35 text-white text-xs font-bold shrink-0"
-                      >
-                        תכנון
-                      </button>
                     </div>
-                  ) : (
-                    <div className="flex items-center justify-between gap-2">
-                      <div
-                        className={`px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-2 ${t.panel}`}
-                      >
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full ${
-                            isRecordingTrack && !isRecordingPaused
-                              ? 'bg-rose-500 animate-pulse'
-                              : 'bg-emerald-500'
-                          }`}
-                        />
-                        <span className="tabular-nums">
-                          {isRecordingTrack
-                            ? `מקליט ${formatDuration(recordElapsedSeconds)}`
-                            : isScreenWakeLockActive
-                              ? 'מצב ניווט • מסך דולק'
-                              : 'מצב ניווט • GPS'}
-                        </span>
-                      </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsFreeNavigation(false);
+                        setMobileDisplayMode('planning');
+                        setMobileTab('routes');
+                        setMobileNavOverlay(null);
+                      }}
+                      aria-label="תכנון וחיפוש"
+                      title="תכנון וחיפוש"
+                      className="w-9 h-9 rounded-xl bg-slate-950/35 hover:bg-slate-950/50 text-white flex items-center justify-center shrink-0 transition-colors"
+                    >
+                      <MapIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    {(() => {
+                      const navStatLabel = isRecordingTrack
+                        ? `מקליט ${formatDuration(recordElapsedSeconds)}`
+                        : isScreenWakeLockActive
+                          ? 'מצב ניווט • מסך דולק'
+                          : 'מצב ניווט • GPS';
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => showToast(navStatLabel)}
+                          aria-label={navStatLabel}
+                          title={navStatLabel}
+                          className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center relative pointer-events-auto transition-all ${t.panel}`}
+                        >
+                          <Navigation
+                            className={`w-4 h-4 ${
+                              isRecordingTrack && !isRecordingPaused
+                                ? 'text-rose-500'
+                                : 'text-emerald-500'
+                            }`}
+                          />
+                          <span
+                            className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full border border-white ${
+                              isRecordingTrack && !isRecordingPaused
+                                ? 'bg-rose-500 animate-pulse'
+                                : 'bg-emerald-500'
+                            }`}
+                          />
+                        </button>
+                      );
+                    })()}
 
-                      <button
-                        onClick={() => {
-                          setIsFreeNavigation(false);
-                          setMobileDisplayMode('planning');
-                          setMobileNavOverlay(null);
-                        }}
-                        className={`px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold flex items-center gap-1.5 ${t.panel}`}
-                      >
-                        <MapIcon className="w-3.5 h-3.5 text-emerald-500" />
-                        <span>תכנון וחיפוש</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div
-                  className={`absolute right-3 z-20 pt-safe pointer-events-auto ${
-                    isNavigatingRoute && activeRoute ? 'top-[5.25rem]' : 'top-[4.25rem]'
-                  }`}
-                >
-                  {renderNavOrientationToggle(true)}
-                </div>
-              </>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsFreeNavigation(false);
+                        setMobileDisplayMode('planning');
+                        setMobileNavOverlay(null);
+                      }}
+                      aria-label="תכנון וחיפוש"
+                      title="תכנון וחיפוש"
+                      className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center pointer-events-auto transition-all ${t.panel}`}
+                    >
+                      <MapIcon className="w-4 h-4 text-emerald-500" />
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
 
-            {/* Mobile Left-Edge Floating Controls (Layers, 3D, Compass, Crosshair) */}
+            {/* Mobile Left-Edge Floating Controls (Layers, 3D, Compass when rotated outside nav, Crosshair) */}
             <div
               className={`absolute left-3 z-20 flex flex-col gap-2 pointer-events-auto pt-safe ${
                 mobileDisplayMode === 'navigating'
                   ? isNavigatingRoute && activeRoute
                     ? 'top-[5.25rem]'
-                    : 'top-[4.25rem]'
+                    : 'top-[4rem]'
                   : 'top-[4.5rem]'
               }`}
             >
@@ -3863,17 +3882,11 @@ export const App: React.FC = () => {
                 3D
               </button>
 
-              {(isNavigationActive || Math.abs(mapBearing) > 2) && (
+              {!isNavigationActive && Math.abs(mapBearing) > 2 && (
                 <button
                   onClick={handleResetNorth}
                   className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}`}
-                  title={
-                    isNavigationActive
-                      ? navOrientation === 'heading-up'
-                        ? 'עבור לצפון למעלה'
-                        : 'עבור לכיוון התנועה'
-                      : 'צפון'
-                  }
+                  title="צפון"
                 >
                   <Compass
                     className="w-4 h-4 text-rose-500"
@@ -3893,67 +3906,74 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Mobile Bottom-Left Thumb FABs (Change Icon + Add Pin + Locate GPS) */}
-            <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-2 pointer-events-auto">
-              <button
-                onClick={() => {
-                  if (mobileDisplayMode === 'navigating') {
-                    setMobileNavOverlay(mobileNavOverlay === 'user-icon' ? null : 'user-icon');
-                  } else {
-                    setMobilePlanningOverlay(mobilePlanningOverlay === 'user-icon' ? null : 'user-icon');
-                  }
-                }}
-                className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
-                  (mobileDisplayMode === 'navigating'
-                    ? mobileNavOverlay === 'user-icon'
-                    : mobilePlanningOverlay === 'user-icon')
-                    ? 'border-emerald-500 ring-2 ring-emerald-500/50'
-                    : ''
-                } ${t.pillBtn}`}
-                title={`שנה אייקון מיקום (${userIconPref.icon.labelHe})`}
-              >
-                <UserLocationIconBadge
-                  icon={userIconPref.icon}
-                  accentColor={userIconPref.accentColor}
-                  size="sm"
-                />
-              </button>
+            {/* Mobile Bottom-Left Thumb FABs (Change Icon + Add Pin + Locate GPS + Direction/North-Up) */}
+            <div
+              dir="ltr"
+              className="absolute bottom-3 left-3 z-20 flex items-end gap-2 pointer-events-auto"
+            >
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  onClick={() => {
+                    if (mobileDisplayMode === 'navigating') {
+                      setMobileNavOverlay(mobileNavOverlay === 'user-icon' ? null : 'user-icon');
+                    } else {
+                      setMobilePlanningOverlay(mobilePlanningOverlay === 'user-icon' ? null : 'user-icon');
+                    }
+                  }}
+                  className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
+                    (mobileDisplayMode === 'navigating'
+                      ? mobileNavOverlay === 'user-icon'
+                      : mobilePlanningOverlay === 'user-icon')
+                      ? 'border-emerald-500 ring-2 ring-emerald-500/50'
+                      : ''
+                  } ${t.pillBtn}`}
+                  title={`שנה אייקון מיקום (${userIconPref.icon.labelHe})`}
+                >
+                  <UserLocationIconBadge
+                    icon={userIconPref.icon}
+                    accentColor={userIconPref.accentColor}
+                    size="sm"
+                  />
+                </button>
 
-              <button
-                onClick={() => {
-                  if (mobileDisplayMode === 'navigating') {
-                    setMobileNavOverlay(mobileNavOverlay === 'add-poi' ? null : 'add-poi');
-                  } else {
-                    setMobilePlanningOverlay(mobilePlanningOverlay === 'add-poi' ? null : 'add-poi');
-                  }
-                }}
-                className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
-                  isAddingPoiMode ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn
-                }`}
-                title="דווח נקודת שטח"
-              >
-                <Plus className="w-5 h-5 text-sky-500" />
-              </button>
+                <button
+                  onClick={() => {
+                    if (mobileDisplayMode === 'navigating') {
+                      setMobileNavOverlay(mobileNavOverlay === 'add-poi' ? null : 'add-poi');
+                    } else {
+                      setMobilePlanningOverlay(mobilePlanningOverlay === 'add-poi' ? null : 'add-poi');
+                    }
+                  }}
+                  className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
+                    isAddingPoiMode ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn
+                  }`}
+                  title="דווח נקודת שטח"
+                >
+                  <Plus className={`w-5 h-5 ${isAddingPoiMode ? 'text-white' : 'text-sky-500'}`} />
+                </button>
 
-              <button
-                onClick={handleLocateMe}
-                className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${
-                  isFollowingUser && userLocation
-                    ? 'bg-sky-600 hover:bg-sky-500 ring-2 ring-sky-300/80 text-white'
-                    : userLocation
-                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                      : 'bg-slate-800/95 border border-slate-600 text-sky-400'
-                }`}
-                title={
-                  isFollowingUser && userLocation
-                    ? 'מעקב מיקום רציף פעיל'
-                    : userLocation
-                      ? 'מרכז ונעל מעקב מיקום רציף (GPS)'
-                      : 'מאתר מיקום GPS רציף...'
-                }
-              >
-                <LocateFixed className={`w-5 h-5 ${!userLocation ? 'animate-pulse' : ''}`} />
-              </button>
+                <button
+                  onClick={handleLocateMe}
+                  className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${
+                    isFollowingUser && userLocation
+                      ? 'bg-sky-600 hover:bg-sky-500 ring-2 ring-sky-300/80 text-white'
+                      : userLocation
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        : 'bg-slate-800/95 border border-slate-600 text-sky-400'
+                  }`}
+                  title={
+                    isFollowingUser && userLocation
+                      ? 'מעקב מיקום רציף פעיל'
+                      : userLocation
+                        ? 'מרכז ונעל מעקב מיקום רציף (GPS)'
+                        : 'מאתר מיקום GPS רציף...'
+                  }
+                >
+                  <LocateFixed className={`w-5 h-5 ${!userLocation ? 'animate-pulse' : ''}`} />
+                </button>
+              </div>
+
+              {isNavigationActive && renderNavOrientationIconButton(true)}
             </div>
 
             {/* Mobile Planning Mode Compact HUD Pill (Hidden in Navigating mode since telemetry bar already shows it!) */}
@@ -4399,6 +4419,7 @@ export const App: React.FC = () => {
 
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
+                  type="button"
                   onClick={() => {
                     if (!isRecordingTrack || isRecordingPaused) {
                       handleStartOrResumeRecording();
@@ -4406,31 +4427,39 @@ export const App: React.FC = () => {
                       setIsRecordingPaused(true);
                     }
                   }}
-                  className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1 ${t.pillBtn}`}
+                  className={`w-9 h-9 rounded-xl border text-xs font-bold flex items-center justify-center ${t.pillBtn}`}
                   title={isRecordingTrack && !isRecordingPaused ? 'השהה הקלטה' : 'התחל הקלטה'}
+                  aria-label={isRecordingTrack && !isRecordingPaused ? 'השהה הקלטה' : 'התחל הקלטה'}
                 >
                   {isRecordingTrack && !isRecordingPaused ? (
-                    <Pause className="w-3.5 h-3.5 text-rose-500" />
+                    <Pause className="w-4 h-4 text-rose-500" />
                   ) : (
-                    <Play className="w-3.5 h-3.5 text-emerald-500" />
+                    <Play className="w-4 h-4 text-emerald-500" />
                   )}
                 </button>
 
-                <button
-                  onClick={() => {
-                    if (isNavigatingRoute) {
-                      handleStopRouteNavigation();
-                    } else {
+                {isNavigatingRoute ? (
+                  <button
+                    type="button"
+                    onClick={handleStopRouteNavigation}
+                    className="px-3 h-9 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-500 flex items-center justify-center"
+                  >
+                    סיום
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
                       setIsFreeNavigation(false);
                       setMobileDisplayMode('planning');
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold text-white ${
-                    isNavigatingRoute ? 'bg-red-600 hover:bg-red-500' : 'bg-emerald-600 hover:bg-emerald-500'
-                  }`}
-                >
-                  {isNavigatingRoute ? 'סיום' : 'תכנון'}
-                </button>
+                    }}
+                    aria-label="תכנון"
+                    title="מצב תכנון"
+                    className="w-9 h-9 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center"
+                  >
+                    <PenTool className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
           )}

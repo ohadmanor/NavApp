@@ -1193,6 +1193,124 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
       expect(layer?.layout?.['line-cap']).toBe('butt');
     }
   });
+
+  it('scales highway, road, and dirt track widths 1:1 with ground meters (2^Δz) from zoom 16 to 22 using OSM lanes/ramps', () => {
+    const styleSpec = createRequire(import.meta.url)('@maplibre/maplibre-gl-style-spec');
+    const style = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
+
+    const byId = new Map<string, any>(style.layers.map((l) => [l.id, l]));
+    const evalLineProp = (
+      layerId: string,
+      prop: 'line-width' | 'line-offset',
+      props: Record<string, any>,
+      zoom: number
+    ): number => {
+      const layer = byId.get(layerId);
+      expect(layer, `Missing layer ${layerId}`).toBeDefined();
+      const raw = layer.paint?.[prop];
+      expect(raw, `Missing ${prop} on ${layerId}`).toBeDefined();
+      const compiled = styleSpec.createPropertyExpression(raw, styleSpec.latest.paint_line[prop]);
+      expect(compiled.result, `${layerId}.${prop}: ${JSON.stringify(compiled.errors)}`).toBe('success');
+      return compiled.value.evaluate({ zoom }, { type: 2, properties: props });
+    };
+
+    // 1. Exact 2^(z - 16) scaling from z16 to z22 across paved roads, tunnels, bridges, tracks, paths, and trails
+    const proportionalChecks: Array<{
+      id: string;
+      prop: 'line-width' | 'line-offset';
+      props: Record<string, any>;
+    }> = [
+      { id: 'road-motorway', prop: 'line-width', props: { class: 'motorway', lanes: 3 } },
+      { id: 'layer-1-road-motorway', prop: 'line-width', props: { class: 'motorway', brunnel: 'tunnel', lanes: 2 } },
+      { id: 'layer1-road-trunk', prop: 'line-width', props: { class: 'trunk', layer: 1, lanes: 2 } },
+      { id: 'layer2-road-primary', prop: 'line-width', props: { class: 'primary', layer: 2, brunnel: 'bridge' } },
+      { id: 'road-secondary', prop: 'line-width', props: { class: 'secondary' } },
+      { id: 'road-tertiary', prop: 'line-width', props: { class: 'tertiary', oneway: 1 } },
+      { id: 'road-minor', prop: 'line-width', props: { class: 'minor' } },
+      { id: 'casing-minor', prop: 'line-width', props: { class: 'minor' } },
+      { id: 'casing-minor-colour2', prop: 'line-width', props: { class: 'minor', colour: 'red;blue' } },
+      { id: 'casing-minor-colour2', prop: 'line-offset', props: { class: 'minor', colour: 'red;blue' } },
+      { id: 'casing-track', prop: 'line-width', props: { class: 'track' } },
+      { id: 'track-right', prop: 'line-width', props: { class: 'track' } },
+      { id: 'track-right', prop: 'line-offset', props: { class: 'track' } },
+      { id: 'track-left', prop: 'line-offset', props: { class: 'track' } },
+      { id: 'track-left-grade5', prop: 'line-offset', props: { class: 'track', tracktype: 'grade5' } },
+      { id: 'layer-1-track-left', prop: 'line-offset', props: { class: 'track', brunnel: 'tunnel' } },
+      { id: 'path-path', prop: 'line-width', props: { class: 'path', subclass: 'path' } },
+      { id: 'path-cycleway', prop: 'line-width', props: { class: 'path', subclass: 'cycleway' } },
+      { id: 'path-steps', prop: 'line-width', props: { class: 'path', subclass: 'steps' } },
+      { id: 'rail-casing', prop: 'line-width', props: { class: 'rail' } },
+      { id: 'trail-israel-secondary-', prop: 'line-width', props: { class: 'path', is_int: 1 } },
+      { id: 'trail-regional-line', prop: 'line-offset', props: { class: 'track' } },
+      { id: 'trail-regional-line-purple', prop: 'line-offset', props: { class: 'track' } },
+    ];
+
+    for (const check of proportionalChecks) {
+      const v16 = evalLineProp(check.id, check.prop, check.props, 16);
+      expect(Math.abs(v16)).toBeGreaterThan(0);
+      for (const z of [17, 18, 19, 20, 21, 22]) {
+        const vz = evalLineProp(check.id, check.prop, check.props, z);
+        const expected = v16 * Math.pow(2, z - 16);
+        expect(vz, `${check.id}.${check.prop} at z${z}`).toBeCloseTo(expected, 4);
+      }
+    }
+
+    // 2. Lane-based, ramp, oneway, and service z16 ground calibration (~1.02 m/px at 31.5N)
+    const mway2 = evalLineProp('road-motorway', 'line-width', { class: 'motorway', lanes: 2 }, 16);
+    const mway4 = evalLineProp('road-motorway', 'line-width', { class: 'motorway', lanes: 4 }, 16);
+    const mwayRamp = evalLineProp('road-motorway', 'line-width', { class: 'motorway', ramp: 1 }, 16);
+    const mwayDefault = evalLineProp('road-motorway', 'line-width', { class: 'motorway', lanes: null }, 16);
+    expect(mway4).toBeGreaterThan(mway2);
+    expect(mway2).toBeGreaterThan(mwayRamp);
+    expect(mwayDefault).toBeCloseTo(mway2, 4);
+
+    const secDefault = evalLineProp('road-secondary', 'line-width', { class: 'secondary' }, 16);
+    const sec3Lanes = evalLineProp('road-secondary', 'line-width', { class: 'secondary', lanes: 3 }, 16);
+    expect(secDefault).toBeGreaterThanOrEqual(7);
+    expect(sec3Lanes).toBeGreaterThan(secDefault);
+
+    const minor2Way = evalLineProp('road-minor', 'line-width', { class: 'minor' }, 16);
+    const minor1Way = evalLineProp('road-minor', 'line-width', { class: 'minor', oneway: 1 }, 16);
+    const minorRev1Way = evalLineProp('road-minor', 'line-width', { class: 'minor', oneway: -1 }, 16);
+    const serviceRoad = evalLineProp('road-minor', 'line-width', { class: 'service' }, 16);
+    expect(minor2Way).toBeGreaterThan(minor1Way);
+    expect(minorRev1Way).toBeCloseTo(minor1Way, 4);
+    expect(minor1Way).toBeGreaterThan(serviceRoad);
+    expect(serviceRoad).toBeCloseTo(4.0, 2);
+
+    // 3. Dirt tracks remain ~4m wide at z16 and keep left/right rails symmetric
+    const trackCasing16 = evalLineProp('casing-track', 'line-width', { class: 'track' }, 16);
+    const trackRightWidth16 = evalLineProp('track-right', 'line-width', { class: 'track' }, 16);
+    const trackRightOff16 = evalLineProp('track-right', 'line-offset', { class: 'track' }, 16);
+    const trackLeftOff16 = evalLineProp('track-left', 'line-offset', { class: 'track' }, 16);
+    expect(trackCasing16).toBeCloseTo(4.6, 2);
+    expect(trackRightOff16 + trackRightWidth16 / 2 - (trackLeftOff16 - trackRightWidth16 / 2)).toBeCloseTo(3.8, 2);
+    expect(evalLineProp('track-left', 'line-offset', { class: 'track' }, 22)).toBeCloseTo(
+      -evalLineProp('track-right', 'line-offset', { class: 'track' }, 22),
+      4
+    );
+
+    // 4. Bridge/tunnel hierarchy invariant: box > casing > road fill at z16..z22
+    for (const z of [16, 18, 20, 22]) {
+      const mFill = evalLineProp('layer1-road-motorway', 'line-width', { class: 'motorway', layer: 1, lanes: 4 }, z);
+      const mCasing = evalLineProp('layer1-casing-motorway', 'line-width', { class: 'motorway', layer: 1, lanes: 4 }, z);
+      const mBox = evalLineProp('layer1-box-highways', 'line-width', { class: 'motorway', layer: 1, lanes: 4 }, z);
+      expect(mCasing).toBeGreaterThan(mFill);
+      expect(mBox).toBeGreaterThan(mCasing);
+
+      const sFill = evalLineProp('layer2-road-secondary', 'line-width', { class: 'secondary', layer: 2, brunnel: 'bridge', lanes: 2 }, z);
+      const sCasing = evalLineProp('layer2-casing-secondary', 'line-width', { class: 'secondary', layer: 2, brunnel: 'bridge', lanes: 2 }, z);
+      const sBox = evalLineProp('layer2-box-paved', 'line-width', { class: 'secondary', layer: 2, brunnel: 'bridge', lanes: 2 }, z);
+      expect(sCasing).toBeGreaterThan(sFill);
+      expect(sBox).toBeGreaterThan(sCasing);
+    }
+  });
 });
 
 describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extraction', () => {
