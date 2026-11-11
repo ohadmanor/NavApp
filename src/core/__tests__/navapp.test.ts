@@ -1586,6 +1586,52 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
       expect(sBox).toBeGreaterThan(sCasing);
     }
   });
+
+  it('uses a pure white day map background (#FFFFFF) and omits all farmland-class polygons while keeping wood/grass/beach landcover', () => {
+    const styleSpec = createRequire(import.meta.url)('@maplibre/maplibre-gl-style-spec');
+    const dayStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
+    const darkStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-dark',
+    });
+
+    const dayBg = dayStyle.layers.find((l) => l.id === 'background') as any;
+    const darkBg = darkStyle.layers.find((l) => l.id === 'background') as any;
+    expect(dayBg?.paint?.['background-color']).toBe('#FFFFFF');
+    expect(darkBg?.paint?.['background-color']).toBe('#0b1015');
+
+    const landcoverLayer = dayStyle.layers.find((l) => l.id === 'area-landcover-low') as any;
+    expect(landcoverLayer).toBeDefined();
+    expect(styleSpec.validateStyleMin(dayStyle)).toEqual([]);
+
+    const filterFn = styleSpec.featureFilter(landcoverLayer.filter);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'farmland', subclass: 'farmland' } })).toBe(false);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'farmland', subclass: 'orchard' } })).toBe(false);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'farmland', subclass: 'vineyard' } })).toBe(false);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'orchard' } })).toBe(false);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'wood', subclass: 'forest' } })).toBe(true);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'grass', subclass: 'meadow' } })).toBe(true);
+    expect(filterFn.filter({ zoom: 12 }, { type: 3, properties: { class: 'sand', subclass: 'beach' } })).toBe(true);
+
+    const fillExpr = styleSpec.createPropertyExpression(
+      landcoverLayer.paint['fill-color'],
+      styleSpec.latest.paint_fill['fill-color']
+    ).value;
+    expect(fillExpr.evaluate({ zoom: 12 }, { type: 3, properties: { class: 'farmland', subclass: 'farmland' } }).a).toBe(0);
+    expect(fillExpr.evaluate({ zoom: 12 }, { type: 3, properties: { class: 'farmland', subclass: 'orchard' } }).a).toBe(0);
+    expect(fillExpr.evaluate({ zoom: 12 }, { type: 3, properties: { class: 'wood', subclass: 'forest' } }).a).toBe(1);
+    expect(fillExpr.evaluate({ zoom: 12 }, { type: 3, properties: { class: 'grass', subclass: 'meadow' } }).a).toBe(1);
+    expect(fillExpr.evaluate({ zoom: 12 }, { type: 3, properties: { class: 'sand', subclass: 'beach' } }).a).toBe(1);
+  });
 });
 
 describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extraction', () => {

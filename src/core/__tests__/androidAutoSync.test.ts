@@ -418,6 +418,13 @@ describe('Android Auto Sync, Native Offline Storage & Car Style Templates', () =
       expect(parsed.layers.some((l: any) => l.id === 'trail-israel-secondary-')).toBe(true);
       expect(parsed.layers.some((l: any) => l.id === 'Terrain')).toBe(true);
       expect(parsed.layers.length).toBeGreaterThanOrEqual(240);
+
+      const bg = parsed.layers.find((l: any) => l.id === 'background');
+      expect(bg?.paint?.['background-color']).toBe(
+        stylePath === dayPath ? '#FFFFFF' : '#0b1015'
+      );
+      const landcover = parsed.layers.find((l: any) => l.id === 'area-landcover-low');
+      expect(JSON.stringify(landcover)).not.toContain('farmland');
     }
   });
 });

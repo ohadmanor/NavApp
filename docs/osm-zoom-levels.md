@@ -27,7 +27,7 @@ In MapLibre GL JS:
 | **Oceans & Sea** | `water` (`class: ocean`) | **z0** | **z0** | **z0** |
 | **Lakes & Water Bodies** | `water` (`class: lake, reservoir`) | **z6** | **z0** | **z6** |
 | **Intermittent Water Bodies** | `water` (`intermittent: 1`) | **z6** | **z0** | **z6** |
-| **Landcover (Sand, Forest/Wood, Farmland, Grass, Wetland)** | `landcover` (`class: sand, wood, farmland, grass, wetland`) | **z0** *(sand/wood/grass at z6)* | **z0** | **z0 / z6** |
+| **Landcover (Sand/Beach, Forest/Wood, Grass, Wetland)** | `landcover` (`class: sand, wood, grass, wetland`) | **z0** *(sand/wood/grass at z6)* | **z0** | **z0 / z6** |
 | **Quarries** | `landcover` (`subclass: quarry`) | **z6** | **z0** | **z6** |
 | **Residential / Urban Areas** | `landuse` (`class: residential`) | **z4** | **z0** | **z4** |
 | **Industrial, Substations & Plants** | `landuse` (`class: industrial, substation, plant`) | **z11** *(layer minzoom: z4)* | **z0** | **z11** |

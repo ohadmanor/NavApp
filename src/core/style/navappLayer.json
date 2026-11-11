@@ -6,7 +6,7 @@
       "IHM:overlay": false
     },
     "paint": {
-      "background-color": "#F1EEE6"
+      "background-color": "#FFFFFF"
     }
   },
   {
@@ -44,10 +44,6 @@
       "class",
       "sand",
       "wood",
-      "sand",
-      "farmland",
-      "orchard",
-      "grass",
       "grass"
     ],
     "paint": {
@@ -70,10 +66,6 @@
         ],
         "wood",
         "#C5DDA5",
-        "farmland",
-        "#EAE8CC",
-        "orchard",
-        "#CFE2A8",
         "grass",
         "#DCEAC0",
         "transparent"
