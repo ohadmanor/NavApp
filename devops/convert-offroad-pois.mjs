@@ -227,8 +227,61 @@ function extractDifficulty4x4(mapItemType, combinedText, descHe, attrs) {
   return null;
 }
 
-function classifyByKeywords(title, desc, typeKey, defaultCategory, defaultSubcategory) {
-  const combined = `${title} ${desc}`.toLowerCase();
+const RTG_CAMP_META_RE = /(?:מקומות לינה|פיתוח:|גנרטור:)/;
+const NON_PEAK_SETTLEMENT_INTRO_RE =
+  /(?:^|\s)(?:הוא|היא)\s+(?:כיום\s+מקום\s+מושבו|משכונות|מושב|קיבוץ|התנחלות|יישוב|ישוב|שכונה|כפר|מועצה מקומית|עיר בישראל|מוסד חינוכי|חטיבת ביניים|בית ספר|קבוצה של שישה בתים|אזור בירושלים|אתר התיישבות)|^\s*(?:קיבוץ|מושב|שכונה|שכונת|יישוב|ישוב|אתר הנצחה)\s|\),\s*(?:מושב|קיבוץ|יישוב|ישוב|כפר|שכונה)(?:\s|$)/;
+const NON_PEAK_SETTLEMENT_HINT_RE =
+  /(?:\((?:מושב|יישוב|קיבוץ|מוסד חינוכי|שכונה|ירושלים)\)|^(?:שכונת|מושב|קיבוץ)\s)/;
+const BOTANICAL_OR_MEMORIAL_HILL_RE =
+  /(?:^|\s)גבעת\s+(?:הכלניות|הרקפות|האירוסים|החלמוניות|הנרקיסים|הפרחים|התורמוסים|הקוצים)|גבעת השבשבת|גבעת הקיבוצים|גבעת רועי|גבעת תום ותומר|חורשת שולה וגבעת שולה/;
+const HERITAGE_GATE_EXCEPTIONS_RE =
+  /שער\s+(?:הגיא|העמק|הניצחון|ציון|יפו|שכם|האריות|הרחמים|המוגרבים|אפרים|מנשה)/;
+const MUNICIPAL_MAALE_EXCEPTIONS_RE =
+  /מעלה\s+(?:אדומים|אפרים|החמישה|לבונה|שומרון|מכמש|גלבוע|גמלא|עמוס|חבר)/;
+const TOWN_BEER_EXCEPTIONS_RE = /באר\s+(?:שבע|יעקב|טוביה|גנים|אורה)/;
+const NON_WATER_HAZARD_OR_BASIN_RE =
+  /(?:זהירות בור|בור פתוח|בור ביוב|ביוב זורם|סכנת שקיעה|שקיעה בבוץ|בריכות\s+(?:דגים|שיקוע|חימצון|חמצון|משקעים|ביוב)|מאגרי\s+השיקוע|לצפרות|מכון\s+טיהור)/i;
+
+function stripNiqqud(s) {
+  return String(s || '').replace(/[\u0591-\u05C7]/g, '');
+}
+
+function isGenuinePeak(title, desc) {
+  const plainTitle = stripNiqqud(title);
+  if (/^(?:נ\.ג\.?(?:\s|\d|$)|טריג(?:\s|\d|$))/i.test(plainTitle)) {
+    return true;
+  }
+  const hasPeakHead =
+    /^(?:הר(?!צליה)\s|הרי\s|פסגת\s|פסגה(?:\s|$)|גבעת\s|mountain peak|\bpeak\b)/i.test(plainTitle);
+  if (!hasPeakHead) return false;
+  if (BOTANICAL_OR_MEMORIAL_HILL_RE.test(plainTitle)) return false;
+  const trimmedDesc = stripNiqqud(cleanText(desc));
+  if (NON_PEAK_SETTLEMENT_HINT_RE.test(plainTitle)) return false;
+  if (NON_PEAK_SETTLEMENT_INTRO_RE.test(trimmedDesc.slice(0, 180))) {
+    // Keep genuine geographical peaks whose prose mentions a nearby village only if intro calls it a peak/hill
+    const explicitPeakIntro = /(?:^|\s)(?:הוא\s+הר|היא\s+גבעה|פסגה\s+בהר)/.test(
+      trimmedDesc.slice(0, 100)
+    );
+    if (!explicitPeakIntro) return false;
+  }
+  if (/^\s*(?:גבעת\s+רועי|גבעת\s+שולה)/.test(plainTitle) && /לזכר|אנדרטה/.test(trimmedDesc)) {
+    return false;
+  }
+  return true;
+}
+
+export function classifyByKeywords(
+  title,
+  desc,
+  typeKey,
+  defaultCategory,
+  defaultSubcategory,
+  options = {}
+) {
+  const { preserveWaterSubcategory = false } = options;
+  const cleanTitle = stripNiqqud(cleanText(title));
+  const cleanDesc = stripNiqqud(cleanText(desc));
+  const combined = `${cleanTitle} ${cleanDesc}`.toLowerCase();
 
   // Check explicit typeKey first when structured
   if (typeKey === 'gate') return { category: 'offroad', subcategory: 'gate' };
@@ -243,47 +296,121 @@ function classifyByKeywords(title, desc, typeKey, defaultCategory, defaultSubcat
   if (typeKey === 'viewpoint') return { category: 'heritage', subcategory: 'viewpoint' };
   if (typeKey === 'rv_point') return { category: 'campsite', subcategory: 'camp_site' };
 
-  // 1. Blocked roads & trail gates
+  // 0. Unambiguous Head-Noun Prefix Rules on Title (prevents mentioned nearby landmark names from stealing category)
+  if (/^(?:תצפית|מצפה|מצפור|מרפסת נוף|נקודת נוף)(?:\s|$)/i.test(cleanTitle)) {
+    return { category: 'heritage', subcategory: 'viewpoint' };
+  }
   if (
-    /(שער נעול|שער סגור|שער חסום|שער בקר|אין מעבר|דרך חסומה|חסימה|חסום למ|ציר חסום|מחסום)/i.test(
-      title
+    /^(?:חניון לילה|לינת לילה|לינת שטח|מאהל|קמפינג|חאן\s)/i.test(cleanTitle) ||
+    (/^(?:חניון\s|חניון$)/.test(cleanTitle) && /(?:חניון לילה|לינת לילה|לינת שטח|קמפינג)/i.test(cleanDesc))
+  ) {
+    return { category: 'campsite', subcategory: 'camp_site' };
+  }
+  if (
+    /^(?:חניון\s(?!(?:רכבים|מכוניות|פרטיים|אוטובוסים|לנחל))|חניון$|זולה(?:\s|$)|ספסל(?:\s|$)|פרגולה(?:\s|$)|פינת\s+(?:ישיבה|קפה|צל|פיקניק)|שולחן\s+פיקניק)/i.test(
+      cleanTitle
     )
   ) {
-    const isGate = /(שער|מחסום|gate|barrier)/i.test(title);
+    return { category: 'campsite', subcategory: 'picnic_site' };
+  }
+  if (
+    /^(?:שער(?:\s|\d|$)|מחסום(?:\s|$))/i.test(cleanTitle) &&
+    !HERITAGE_GATE_EXCEPTIONS_RE.test(cleanTitle)
+  ) {
+    return { category: 'offroad', subcategory: 'gate' };
+  }
+  if (
+    /^(?:מעלה|ירידה|ירידת|עלייה|עליית|עליה)\s/i.test(cleanTitle) &&
+    !MUNICIPAL_MAALE_EXCEPTIONS_RE.test(cleanTitle) &&
+    !RTG_CAMP_META_RE.test(cleanDesc)
+  ) {
+    return { category: 'offroad', subcategory: 'upward' };
+  }
+  if (/^(?:מערת|מערה|מערות|הוטה|הוטת)(?:\s|$)/i.test(cleanTitle)) {
+    return { category: 'heritage', subcategory: 'cave' };
+  }
+  if (/^(?:חורבת|חירבת|חרבת|ח['׳]\s|חירב['׳]?\s)/i.test(cleanTitle)) {
+    return { category: 'heritage', subcategory: 'ruins' };
+  }
+  if (/^(?:שרידי\s|חפירות\s|מצודת\s|מבצר\s|אמת\s+מים)/i.test(cleanTitle)) {
+    return { category: 'heritage', subcategory: 'archaeological_site' };
+  }
+  if (/^(?:אנדרטה|אנדרטת|גלעד\s|יד\s+ל|בית\s+קברות|קבר\s|קברי\s)/i.test(cleanTitle)) {
+    return { category: 'heritage', subcategory: 'memorial' };
+  }
+  if (
+    /^(?:מעקף(?:\s|$)|(?:שביל|ציר|מסלול|מעבר)\s+עוקף|מעבר\s+(?:נחל|מים|טכני|צר|סלע|בוץ)|(?:פנייה|פניה|פנו)\s+(?:שמאלה|ימינה|דרומה|צפונה|מזרחה|מערבה|בצומת|לכיוון|ל\S)|גישה\s+ל|דרך\s+גישה|שביל\s+(?:גישה|כניסה|כורכר|הליכה|לג'יפ|לג׳יפ|גיפים|ג'יפים)|ציר\s+(?:גישה|כניסה|יציאה|סובב|הקפי|היקפי|ה?מעיינות|המעינות|מפל|מפלי|מאגור|מאגר|עין|ל\S)|(?:כניסה|יציאה)\s+(?:לציר|למסלול|לשביל|לדרך|לכיוון|לחני|לחניון|מ(?:עין|מעיין|נחל|ציר|שביל)))/i.test(
+      cleanTitle
+    )
+  ) {
+    return { category: 'offroad', subcategory: '4x4_pass' };
+  }
+
+  // 1. Blocked roads & trail gates
+  if (
+    (/(שער נעול|שער סגור|שער חסום|שער בקר|שער חקלאי|שער חשמלי|אין מעבר|אין יציאה|אין המשך|דרך חסומה|חסימה|^חסום(?:\s|$)|\sחסום(?:\s|$)|חסום למ|ציר חסום|מחסום|סגור לתנועה|דרך מגודרת)/i.test(
+      cleanTitle
+    ) ||
+      /\sשער(?:\s|\d|$)/i.test(cleanTitle)) &&
+    !HERITAGE_GATE_EXCEPTIONS_RE.test(cleanTitle)
+  ) {
+    const isGate = /(שער|מחסום|gate|barrier)/i.test(cleanTitle);
     return { category: 'offroad', subcategory: isGate ? 'gate' : 'blocked_road' };
   }
 
-  // 2. Water sources (exclude warnings like "בור פתוח" / "זהירות בור")
-  const looksLikeHazardPit = /(זהירות בור|בור פתוח|בור ביוב|ביוב זורם|שקיעה)/i.test(combined);
-  if (!looksLikeHazardPit) {
-    if (/(מפל\s|מפל$|מפלי\s|waterfall)/i.test(title)) {
+  // 2. Water sources (check title, avoiding towns/hazards/commercial fishponds)
+  const looksLikeNonWaterBasin = NON_WATER_HAZARD_OR_BASIN_RE.test(combined);
+  if (!looksLikeNonWaterBasin) {
+    const titleWithoutTowns = cleanTitle
+      .replace(/באר\s+(?:שבע|יעקב|טוביה|גנים|אורה)/g, '')
+      .trim();
+
+    if (/(^|\s)(?:מפל|מפלי|מפלים)(?:\s|$)|waterfall/i.test(titleWithoutTowns)) {
       return { category: 'water', subcategory: 'waterfall' };
     }
-    if (/(^גב\s|\sגב\s|\sגב$|גבי\s|גב מים|מאגר\s|אגם\s|בריכת חורף|waterhole)/i.test(title)) {
+    if (
+      /(^|\s)(?:גב|גבי|מאגר|אגם|אגמון)(?:\s|$)|בריכת חורף|שלולית חורף|waterhole/i.test(
+        titleWithoutTowns
+      )
+    ) {
       return { category: 'water', subcategory: 'waterhole' };
     }
-    if (/(בור מים|^בור\s|בורות מים|cistern)/i.test(combined)) {
+    if (/(בור\s*מים|בורות\s*מים|מאגור|מאגורת|^בור(?:\s|$)|cistern)/i.test(titleWithoutTowns)) {
       return { category: 'water', subcategory: 'cistern' };
     }
-    if (/(^באר\s|\sבאר\s|באר מים|water well)/i.test(title)) {
+    if (
+      /(?:^באר(?:\s|$)|\sבאר\s|בארות(?:\s|$)|באר מים|water well)/i.test(titleWithoutTowns) &&
+      !TOWN_BEER_EXCEPTIONS_RE.test(cleanTitle)
+    ) {
       return { category: 'water', subcategory: 'water_well' };
     }
-    if (/(ברז\s|מילוי מים|מי שתייה|drinking water)/i.test(title)) {
+    if (/(ברז(?:\s|$)|מילוי מים|מי שתייה|מי שתיה|שוקת(?:\s|$)|drinking water)/i.test(titleWithoutTowns)) {
       return { category: 'water', subcategory: 'drinking_water' };
     }
-    if (/(^עין\s|\sעין\s|מעיין|מעין|בריכת\s|בריכה\s|^בריכה$|נביעה|spring)/i.test(title)) {
-      return { category: 'water', subcategory: 'spring' };
+    if (
+      /(?:^עין\s|\sעין\s|^עינות\s|\sעינות\s|^עיינות\s|\sעיינות\s|מעיין|מעין|מעיינות|מעינות|נקבת\s|ניקבת\s|נביעה|נביעות|מקור מים|בריכת\s|בריכות\s|בריכה\s|^בריכה$|^בריכות$|מקווה(?:\s|$)|spring)/i.test(
+        titleWithoutTowns
+      )
+    ) {
+      return {
+        category: 'water',
+        subcategory: preserveWaterSubcategory && defaultCategory === 'water' ? defaultSubcategory : 'spring',
+      };
     }
   }
 
   // 3. 4x4 climbs, obstacles, mud, hazards & offroad trail junctions
   if (
-    /(^מעלה\s|\sמעלה\s|^מעלה$|ירידה|ירידת\s|עלייה|עליית\s|עליה תלולה|מדרגה|מדרגת\s|מדרגות|דרדרת|בולדר|הצלבה|שיפוע|בוץ|שקיעה|עבירות|4x4|4\+4|4\*4|רכב שטח|ג'יפ|גיפ|חילוץ|פיצול|מסעף|^ציר\s|\sציר\s|^מעבר\s|מעבר נחל|מעבר מים|מעבר טכני|מעבר צר|מעבר סלע|שטח אש|סכנה)/i.test(
-      title
-    )
+    /(^מעלה\s|\sמעלה\s|^מעלה$|כניסה למעלה|ירידה|ירידת\s|עלייה|עליית\s|עליה תלולה|מדרגה|מדרגת\s|מדרגות|דרדרת|בולדר|בולען|דשדש|הצלבה|הצלבות|שיפוע|בוץ|שקיעה|עבירות|4x4|4\+4|4\*4|4×4|רכב שטח|ג'יפ|ג׳יפ|גיפ|חילוץ|פיצול|מסעף|^ציר\s|\sציר\s|כניסה לציר|צומת צירים|מפגש צירים|מזלג דרכים|^מעבר\s|מעבר נחל|מעבר מים|מעבר טכני|מעבר צר|מעבר סלע|^מעקף(?:\s|$)|\sמעקף\s|פודרה|דיונה|דיונת|דיונות|שלוליות עמוקות|דרך משובשת|שטח אש|סכנה)/i.test(
+      cleanTitle
+    ) &&
+    !MUNICIPAL_MAALE_EXCEPTIONS_RE.test(cleanTitle)
   ) {
-    const isDanger = /(בוץ|שקיעה|סכנה|מכשול|זהירות|בור פתוח|דרדרת|בולדר|הצלבה|שיפוע)/i.test(title);
-    const isUpward = /(מעלה|ירידה|ירידת|עלייה|עליית|מדרגה|מדרגת|מדרגות)/i.test(title);
+    const isDanger =
+      /(בוץ|שקיעה|סכנה|מכשול|זהירות|בור פתוח|דרדרת|בולדר|בולען|דשדש|הצלבה|הצלבות|שיפוע|שלוליות עמוקות|דרך משובשת)/i.test(
+        cleanTitle
+      );
+    const isUpward = /(מעלה|ירידה|ירידת|עלייה|עליית|מדרגה|מדרגת|מדרגות)/i.test(cleanTitle);
     return {
       category: 'offroad',
       subcategory: isUpward ? 'upward' : isDanger ? 'danger' : '4x4_pass',
@@ -291,39 +418,47 @@ function classifyByKeywords(title, desc, typeKey, defaultCategory, defaultSubcat
   }
 
   // 4. Night camps & picnic/shade
-  if (/(חניון לילה|לינת לילה|לינת שטח|מאהל|קמפינג|camp(?:ing|site)?)/i.test(combined)) {
+  if (
+    /(חניון לילה|לינת לילה|לינת שטח|מאהל|קמפינג|\bcamp(?:ing|site)?\b)/i.test(cleanTitle) ||
+    RTG_CAMP_META_RE.test(cleanDesc)
+  ) {
     return { category: 'campsite', subcategory: 'camp_site' };
   }
-  if (/(חניון\s|חניון$|פיקניק|ספסל|שולחן קק|שולחנות|סככה|חאן\s|זולה|פינת קפה|פינת ישיבה|מקום מוצל|פינת צל|picnic)/i.test(title)) {
+  if (
+    /(חניון\s(?!(?:רכבים|מכוניות|פרטיים))|חניון$|פיקניק|^ספסל(?:\s|$)|\sספסל(?:\s|$)|שולחן קק|שולחן פיקניק|שולחנות|^סככה(?:\s|$)|^חאן\s|^זולה(?:\s|$)|\sזולה(?:\s|$)|פינת קפה|פינת ישיבה|מקום מוצל|פינת צל|picnic)/i.test(
+      cleanTitle
+    ) &&
+    !/^(?:הר|גבעת)\s/.test(cleanTitle)
+  ) {
     return { category: 'campsite', subcategory: 'picnic_site' };
   }
 
-  // 5. Mountain peaks & trig points
-  if (/(^הר\s|^הרי\s|פסגת\s|פסגה|גבעת\s|נ\.ג\.?|טריג\s|mountain peak|\bpeak\b)/i.test(title)) {
+  // 5. Genuine Mountain Peaks & Trig Points (excludes settlements, schools, neighborhoods, flower hills)
+  if (isGenuinePeak(cleanTitle, cleanDesc)) {
     return { category: 'peak', subcategory: 'peak' };
   }
 
   // 6. Heritage / Viewpoints / Nature / Caves / Ruins / Memorials / Archaeology
-  if (/(מערה|מערת|\bcave\b)/i.test(title)) {
+  if (/(מערה|מערת|מערות|הוטה|הוטת|\bcave\b)/i.test(cleanTitle)) {
     return { category: 'heritage', subcategory: 'cave' };
   }
-  if (/(חורבה|חורבת|חירבת|ח['׳]\s|\bruins?\b)/i.test(title)) {
+  if (/(חורבה|חורבת|חירבת|חרבת|ח['׳]\s|חירב['׳]?\s|\bruins?\b)/i.test(cleanTitle)) {
     return { category: 'heritage', subcategory: 'ruins' };
   }
-  if (/(אנדרטה|אנדרטת|גלעד|הנצחה|יד ל|בית קברות|קבר\s|קברי\s|memorial)/i.test(title)) {
+  if (/(אנדרטה|אנדרטת|גלעד|הנצחה|יד ל|לזכר\s|בית קברות|קבר\s|קברי\s|memorial)/i.test(cleanTitle)) {
     return { category: 'heritage', subcategory: 'memorial' };
   }
   if (
-    /(^תל\s|\sתל\s|מצד\s|מצודת|מבצר|עתיק|בית בד|גת\s|גתות|פסיפס|מוצב|בונקר|בית כנסת|מנזר|כנסייה|טחנת קמח|גשר\s|מחצבה|אמת מים|archaeolog)/i.test(
-      title
+    /(^תל\s|\sתל\s|מצד\s|מצודת|מבצר|עתיק|עתיקות|בית בד|גת\s|גתות|פסיפס|קולומבריום|מוצב|בונקר|בית כנסת|מנזר|כנסייה|טחנת\s+(?:ה)?קמח|גשר\s|מחצבה|אמת מים|שרידי\s|חפירות\s|archaeolog)/i.test(
+      cleanTitle
     )
   ) {
     return { category: 'heritage', subcategory: 'archaeological_site' };
   }
-  if (/(פריחה|אירוס|כלניות|רקפות|חלמוניות|שמורת|שמורה\s|בוסתן|חורשת|עץ עתיק)/i.test(title)) {
+  if (/(פריחה|אירוס|כלניות|רקפות|חלמוניות|נרקיסים|תורמוסים|שמורת|שמורה\s|בוסתן|חורשת|יער\s|שקדיות|עץ עתיק)/i.test(cleanTitle)) {
     return { category: 'heritage', subcategory: 'nature_site' };
   }
-  if (/(תצפית|מצפה|מצפור|נקודת נוף|מרפסת נוף|פנורמה|נוף\s|viewpoint|lookout)/i.test(title)) {
+  if (/(תצפית|מצפה|מצפור|נקודת נוף|מרפסת נוף|פנורמה|נוף\s|viewpoint|lookout)/i.test(cleanTitle)) {
     return { category: 'heritage', subcategory: 'viewpoint' };
   }
 
@@ -380,14 +515,18 @@ export function classifyOffroadItem(rawProps, options = {}) {
 
   switch (mit) {
     case 'Fountain': {
-      category = 'water';
-      if (/(מפל|waterfall)/i.test(combined)) subcategory = 'waterfall';
+      let defaultWaterSub = 'spring';
+      if (/(מפל|waterfall)/i.test(combined)) defaultWaterSub = 'waterfall';
       else if (/(^גב\s|\sגב\s|\sגב$|גבי\s|בריכה|בריכת|waterhole)/i.test(combined)) {
-        subcategory = 'waterhole';
-      } else if (/(בור\s|בורות\s|cistern)/i.test(combined)) subcategory = 'cistern';
-      else if (/(באר\s|well)/i.test(combined)) subcategory = 'water_well';
-      else if (/(ברז|שוקת|שתייה|שתיה)/i.test(combined)) subcategory = 'drinking_water';
-      else subcategory = 'spring';
+        defaultWaterSub = 'waterhole';
+      } else if (/(בור\s|בורות\s|cistern)/i.test(combined)) defaultWaterSub = 'cistern';
+      else if (/(באר\s|well)/i.test(combined)) defaultWaterSub = 'water_well';
+      else if (/(ברז|שוקת|שתייה|שתיה)/i.test(combined)) defaultWaterSub = 'drinking_water';
+      const res = classifyByKeywords(title, descHe, typeKey, 'water', defaultWaterSub, {
+        preserveWaterSubcategory: true,
+      });
+      category = res.category;
+      subcategory = res.subcategory;
       break;
     }
     case 'Upward':
@@ -529,7 +668,7 @@ export function classifyOffroadItem(rawProps, options = {}) {
 
 /**
  * Computes deterministic MapLibre `symbol-sort-key` priority for Off-Road POIs.
- * Lower numbers win placement within `israel-offroad-pois-labels`.
+ * Lower numbers win placement within `israel-pois-labels`.
  */
 export function computeOffroadPriority(params) {
   const {
@@ -812,9 +951,9 @@ export async function convertOffroadPois(options = {}) {
   const collection = {
     type: 'FeatureCollection',
     metadata: {
-      source: 'Off-Road.io Community Export (Overlay on Top of OSM)',
+      source: 'Off-Road.io Community Export (Unified with OSM in NavApp)',
       generatedUtc: new Date().toISOString(),
-      minRenderZoom: 15,
+      minRenderZoom: 13,
       boundarySource: 'data/Israel.osm.pmtiles (admin_area)',
       totalRawRecords: stats.totalRawFeatures,
       uniqueInputIds: stats.uniqueInputIds,
@@ -849,11 +988,209 @@ export async function convertOffroadPois(options = {}) {
   return { collection, stats, categoryCounts, subcategoryCounts, sizeMb: Number(sizeMb) };
 }
 
+function inferMitFromExisting(category, subcategory) {
+  if (category === 'offroad') {
+    if (subcategory === 'wifi_sos') return 'WifiSos';
+    if (subcategory === 'ratag_info') return 'RatagInspectorInfo';
+    if (subcategory === 'upward') return 'Upward';
+    if (subcategory === 'blocked_road') return 'BlockedRoad';
+    if (subcategory === 'floods') return 'Floods';
+    if (subcategory === 'danger') return 'Danger';
+    if (subcategory === 'clunker') return 'Clunker';
+    return 'POI';
+  }
+  if (category === 'water') return 'Fountain';
+  if (category === 'campsite') return subcategory === 'camp_site' ? 'Camp' : 'Picnic';
+  if (subcategory === 'offroad_photo') return 'Image';
+  if (subcategory === 'viewpoint') return 'ViewPoint';
+  if (subcategory === 'ruins') return 'Ruins';
+  if (subcategory === 'nature_site') return 'INature';
+  if (subcategory === 'archaeological_site' || subcategory === 'memorial') return 'HeritageSite';
+  return 'POI';
+}
+
+export function reclassifyExistingFeature(feature) {
+  const props = { ...(feature.properties || {}) };
+  const title = cleanText(props.nameHe || props.name || '');
+  const descHe = cleanText(props.descHe || '');
+  const combined = `${title} ${descHe}`;
+  const origCategory = String(props.category || 'heritage');
+  const origSubcategory = String(props.subcategory || 'offroad_poi');
+
+  let nextCat = origCategory;
+  let nextSub = origSubcategory;
+
+  const isProtectedOffroad =
+    origCategory === 'offroad' &&
+    ['floods', 'wifi_sos', 'ratag_info', 'clunker', 'blocked_road', 'danger', 'gate'].includes(
+      origSubcategory
+    );
+
+  if (isProtectedOffroad) {
+    // Keep explicit trail barriers, floods, WiFi/SOS, hazards
+  } else if (origCategory === 'offroad' && origSubcategory === 'upward') {
+    if (MUNICIPAL_MAALE_EXCEPTIONS_RE.test(title) && !RTG_CAMP_META_RE.test(descHe)) {
+      const res = classifyByKeywords(title, descHe, '', 'heritage', 'offroad_poi');
+      nextCat = res.category;
+      nextSub = res.subcategory;
+    }
+  } else if (origCategory === 'campsite') {
+    const hasCampSignal =
+      RTG_CAMP_META_RE.test(descHe) ||
+      /(?:חניון|קמפינג|מאהל|לינת|לינה|פיקניק|ספסל|חאן|קרון|מדורה|מנגל|שולחן|זולה|פרגולה|camp|picnic)/i.test(
+        title
+      );
+    if (!hasCampSignal) {
+      const res = classifyByKeywords(title, descHe, '', origCategory, origSubcategory);
+      nextCat = res.category;
+      nextSub = res.subcategory;
+    }
+  } else if (origCategory === 'water') {
+    const res = classifyByKeywords(title, descHe, '', 'water', origSubcategory, {
+      preserveWaterSubcategory: true,
+    });
+    nextCat = res.category;
+    nextSub = res.subcategory;
+  } else if (origCategory === 'peak') {
+    if (!isGenuinePeak(title, descHe)) {
+      const res = classifyByKeywords(title, descHe, '', 'heritage', 'offroad_poi');
+      nextCat = res.category;
+      nextSub = res.subcategory;
+    }
+  } else {
+    const res = classifyByKeywords(title, descHe, '', origCategory, origSubcategory);
+    nextCat = res.category;
+    nextSub = res.subcategory;
+  }
+
+  const updatedProps = {
+    ...props,
+    category: nextCat,
+    subcategory: nextSub,
+  };
+
+  if (nextCat === 'water') {
+    const status = updatedProps.waterStatus || extractWaterStatus(combined);
+    if (status) updatedProps.waterStatus = status;
+  } else {
+    delete updatedProps.waterStatus;
+  }
+
+  if (nextCat === 'offroad') {
+    const mit = inferMitFromExisting(nextCat, nextSub);
+    const diff = updatedProps.difficulty4x4 || extractDifficulty4x4(mit, combined, descHe, {});
+    if (diff) updatedProps.difficulty4x4 = diff;
+  } else {
+    delete updatedProps.difficulty4x4;
+  }
+
+  if (nextCat !== origCategory || nextSub !== origSubcategory) {
+    const mit = inferMitFromExisting(nextCat, nextSub);
+    updatedProps.priority = computeOffroadPriority({
+      mapItemType: mit,
+      category: nextCat,
+      subcategory: nextSub,
+      likes: Number(updatedProps.likes || 0) || 0,
+      reqDel: 0,
+      hasDesc: Boolean(descHe),
+      hasWikipedia: Boolean(updatedProps.wikipedia),
+      hasExternalUrl: Boolean(updatedProps.externalUrl),
+      sameAsOsmNearby: false,
+    });
+  }
+
+  return {
+    ...feature,
+    properties: updatedProps,
+  };
+}
+
+export async function reclassifyExistingOffroadGeojson(options = {}) {
+  const inputFile = options.inputFile || path.join(DATA_DIR, 'Israel.offroad.pois.geojson');
+  const outputFiles = options.outputFiles || OUTPUT_FILES;
+
+  const raw = JSON.parse(fs.readFileSync(inputFile, 'utf-8'));
+  const feats = Array.isArray(raw.features) ? raw.features : [];
+  let changedCategory = 0;
+  let changedSubcategory = 0;
+  const transitions = {};
+
+  const updatedFeatures = feats.map((f) => {
+    const prevCat = f.properties?.category;
+    const prevSub = f.properties?.subcategory;
+    const next = reclassifyExistingFeature(f);
+    const nextCat = next.properties.category;
+    const nextSub = next.properties.subcategory;
+    if (nextCat !== prevCat) {
+      changedCategory++;
+      const tk = `${prevCat}->${nextCat}`;
+      transitions[tk] = (transitions[tk] || 0) + 1;
+    } else if (nextSub !== prevSub) {
+      changedSubcategory++;
+    }
+    return next;
+  });
+
+  updatedFeatures.sort(
+    (a, b) =>
+      (a.properties?.priority ?? 500) - (b.properties?.priority ?? 500) ||
+      String(a.id).localeCompare(String(b.id))
+  );
+
+  const categoryCounts = {};
+  const subcategoryCounts = {};
+  for (const f of updatedFeatures) {
+    const p = f.properties || {};
+    categoryCounts[p.category] = (categoryCounts[p.category] || 0) + 1;
+    subcategoryCounts[p.subcategory] = (subcategoryCounts[p.subcategory] || 0) + 1;
+  }
+
+  const collection = {
+    ...raw,
+    metadata: {
+      ...(raw.metadata || {}),
+      source: 'Off-Road.io Community Export (Unified with OSM in NavApp)',
+      generatedUtc: new Date().toISOString(),
+      minRenderZoom: 13,
+      keptFeatures: updatedFeatures.length,
+      categoryCounts,
+    },
+    features: updatedFeatures,
+  };
+
+  const jsonPayload = JSON.stringify(collection);
+  for (const outPath of outputFiles) {
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    const tmpPath = `${outPath}.tmp`;
+    fs.writeFileSync(tmpPath, jsonPayload, 'utf-8');
+    fs.renameSync(tmpPath, outPath);
+  }
+
+  console.log(
+    `[Off-Road Reclassifier] Updated ${updatedFeatures.length} features (${changedCategory} category changes, ${changedSubcategory} subcategory refinements).`
+  );
+  console.log('[Off-Road Reclassifier] Category transitions:', transitions);
+  console.log('[Off-Road Reclassifier] New category counts:', categoryCounts);
+  console.log('[Off-Road Reclassifier] New subcategory counts:', subcategoryCounts);
+
+  return {
+    collection,
+    changedCategory,
+    changedSubcategory,
+    transitions,
+    categoryCounts,
+    subcategoryCounts,
+  };
+}
+
 const isMainModule =
   process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
 if (isMainModule) {
-  convertOffroadPois().catch((err) => {
+  const run = process.argv.includes('--reclassify-existing')
+    ? reclassifyExistingOffroadGeojson
+    : convertOffroadPois;
+  run().catch((err) => {
     console.error('[Off-Road Converter] Failed:', err);
     process.exit(1);
   });

@@ -1491,7 +1491,7 @@ export async function runHarvester() {
       metadata: {
         generatedAt: new Date().toISOString(),
         region: 'Israel + Golan + Judea & Samaria (Boundary Clipped)',
-        minRenderZoom: 15,
+        minRenderZoom: 13,
         totalPois: features.length,
         countsByCategory,
         stats: {

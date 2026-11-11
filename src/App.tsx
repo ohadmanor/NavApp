@@ -29,8 +29,8 @@ import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTiles
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
-  buildOffroadPoiLayerFilter,
-  isOffroadCommunityActive,
+  buildPoiLayerFilter,
+  isMasterPoiActive,
   DEFAULT_LAYER_VISIBILITY,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
@@ -40,12 +40,15 @@ import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsServic
 import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
 import {
   NavigationHeadingService,
-  computeBearingBetweenCoords,
   extractRouteTangentHeading,
   shortestAngleDeltaDeg,
   smoothHeadingDeg,
   type MapNavigationOrientation,
 } from './core/navigation/NavigationHeadingService';
+import {
+  GpsNavigationSmoother,
+  type SmoothedNavigationFrame,
+} from './core/navigation/GpsNavigationSmoother';
 import {
   UserLocationIconService,
   type UserLocationIconPreference,
@@ -347,8 +350,7 @@ export const App: React.FC = () => {
   const lastPlanSnapTsRef = useRef<number>(0);
   const snapSeqRef = useRef<number>(0);
   const activeRoutePromiseRef = useRef<Promise<void> | null>(null);
-  const lastPoiSyncRef = useRef<{ pois: PoiRecord[]; visKey: string } | null>(null);
-  const lastOffroadPoiSyncRef = useRef<{ sig: string } | null>(null);
+  const lastPoiSyncRef = useRef<PoiRecord[] | null>(null);
   const deletedRouteIdsRef = useRef<Set<string>>(new Set());
   const handlePlanMapClickRef = useRef<(lon: number, lat: number) => Promise<void>>(async () => {});
   const handleFinishPlanningRef = useRef<() => Promise<void>>(async () => {});
@@ -378,20 +380,19 @@ export const App: React.FC = () => {
     isNavigatingRoute || isFreeNavigation || (isMobile && mobileDisplayMode === 'navigating');
   const isNavigationActiveRef = useRef<boolean>(isNavigationActive);
   isNavigationActiveRef.current = isNavigationActive;
-  const gpsHeadingMetaRef = useRef<{
-    fixHeading: number | null;
-    speedMps: number | null;
-    courseHeading: number | null;
-    updatedAt: number;
-    courseUpdatedAt: number;
-    anchorLon?: number;
-    anchorLat?: number;
-  }>({
-    fixHeading: null,
-    speedMps: null,
-    courseHeading: null,
-    updatedAt: 0,
-    courseUpdatedAt: 0,
+  const navSmootherRef = useRef<GpsNavigationSmoother | null>(null);
+  if (!navSmootherRef.current) {
+    navSmootherRef.current = new GpsNavigationSmoother();
+  }
+  const smoothRafIdRef = useRef<number | null>(null);
+  const cameraTransitionInFlightRef = useRef<boolean>(false);
+  const cameraTransitionTimerRef = useRef<number | null>(null);
+  const userZoomingRef = useRef<boolean>(false);
+  const lastNavFollowMoveEndTsRef = useRef<number>(0);
+  const lastNavFollowGridTsRef = useRef<number>(0);
+  const lastBearingUiUpdateRef = useRef<{ ts: number; bearing: number }>({
+    ts: 0,
+    bearing: 0,
   });
   const compassMetaRef = useRef<{ heading: number | null; updatedAt: number }>({
     heading: null,
@@ -512,54 +513,61 @@ export const App: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [isRecordingTrack, isRecordingPaused]);
 
-  const recomputeAndSyncHeading = useCallback((): number | null => {
-    const nowMs = Date.now();
-    const gpsMeta = gpsHeadingMetaRef.current;
-    const compassMeta = compassMetaRef.current;
-    const currentLoc = userLocationRef.current;
-    const routeFallback =
-      isNavigationActiveRef.current && activeRouteRef.current
-        ? extractRouteTangentHeading(activeRouteRef.current, currentLoc?.lon, currentLoc?.lat)
-        : null;
-    const isStationarySpeed =
-      gpsMeta.speedMps !== null && gpsMeta.speedMps < 0.6;
-    const freshCourseHeading =
-      gpsMeta.courseHeading !== null &&
-      !isStationarySpeed &&
-      nowMs - gpsMeta.courseUpdatedAt <= 8000
-        ? gpsMeta.courseHeading
-        : null;
+  const beginCameraTransition = useCallback((durationHintMs = 1000) => {
+    cameraTransitionInFlightRef.current = true;
+    if (cameraTransitionTimerRef.current !== null) {
+      window.clearTimeout(cameraTransitionTimerRef.current);
+    }
+    cameraTransitionTimerRef.current = window.setTimeout(() => {
+      cameraTransitionInFlightRef.current = false;
+      cameraTransitionTimerRef.current = null;
+    }, Math.max(250, durationHintMs + 150));
+  }, []);
 
-    const rawResolved = NavigationHeadingService.resolveActiveHeading({
-      gpsFixHeading: gpsMeta.fixHeading,
-      gpsSpeedMps: gpsMeta.speedMps,
-      computedCourseHeading: freshCourseHeading,
-      compassHeading: compassMeta.heading,
-      lastValidHeading: liveHeadingRef.current,
-      routeFallbackHeading: routeFallback,
-      nowMs,
-      gpsUpdatedAtMs: gpsMeta.updatedAt || undefined,
-      compassUpdatedAtMs: compassMeta.updatedAt || undefined,
-    });
-
-    const resolved =
-      rawResolved !== null
-        ? smoothHeadingDeg(liveHeadingRef.current, rawResolved, 0.38)
-        : null;
+  const syncHeadingUi = useCallback((resolved: number | null, perfNowMs = performance.now()) => {
     liveHeadingRef.current = resolved;
-
     const prevSaved = lastHeadingStateUpdateRef.current;
     if (
       resolved !== prevSaved.heading &&
       (resolved === null ||
         prevSaved.heading === null ||
-        (nowMs - prevSaved.ts >= 180 &&
+        (perfNowMs - prevSaved.ts >= 180 &&
           Math.abs(shortestAngleDeltaDeg(prevSaved.heading, resolved)) >= 3))
     ) {
-      lastHeadingStateUpdateRef.current = { ts: nowMs, heading: resolved };
+      lastHeadingStateUpdateRef.current = { ts: perfNowMs, heading: resolved };
       setLiveHeading(resolved);
     }
+  }, []);
 
+  const resolveCurrentHeading = useCallback((): number | null => {
+    const latestFrame = navSmootherRef.current?.getLatestFrame();
+    if (latestFrame?.headingDeg !== undefined && latestFrame?.headingDeg !== null) {
+      syncHeadingUi(latestFrame.headingDeg, performance.now());
+      return latestFrame.headingDeg;
+    }
+
+    const nowMs = Date.now();
+    const currentLoc = userLocationRef.current;
+    const routeFallback =
+      isNavigationActiveRef.current && activeRouteRef.current
+        ? extractRouteTangentHeading(activeRouteRef.current, currentLoc?.lon, currentLoc?.lat)
+        : null;
+    const rawResolved = NavigationHeadingService.resolveActiveHeading({
+      gpsFixHeading: currentLoc?.heading ?? null,
+      gpsSpeedMps: currentLoc?.speed ?? null,
+      computedCourseHeading: null,
+      compassHeading: compassMetaRef.current.heading,
+      lastValidHeading: liveHeadingRef.current,
+      routeFallbackHeading: routeFallback,
+      nowMs,
+      gpsUpdatedAtMs: currentLoc?.timestamp,
+      compassUpdatedAtMs: compassMetaRef.current.updatedAt || undefined,
+    });
+    const resolved =
+      rawResolved !== null
+        ? smoothHeadingDeg(liveHeadingRef.current, rawResolved, 0.38)
+        : null;
+    syncHeadingUi(resolved, performance.now());
     if (userMarkerRef.current && mapRef.current) {
       UserLocationIconService.updateMarkerDirection(
         userMarkerRef.current.getElement(),
@@ -570,100 +578,207 @@ export const App: React.FC = () => {
       );
     }
     return resolved;
+  }, [syncHeadingUi]);
+
+  const applySmoothedFrameToMap = useCallback(
+    (frame: SmoothedNavigationFrame, perfNowMs: number) => {
+      syncHeadingUi(frame.headingDeg, perfNowMs);
+
+      const map = mapRef.current;
+      if (!map) return;
+
+      const curMapBearing = map.getBearing();
+      if (!userMarkerRef.current) {
+        userMarkerRef.current = new maplibregl.Marker({
+          element: createUserMarkerElement(
+            userIconPrefRef.current,
+            frame.headingDeg,
+            curMapBearing,
+            isNavigationActiveRef.current
+          ),
+          anchor: 'center',
+        })
+          .setLngLat([frame.lon, frame.lat])
+          .addTo(map);
+      } else {
+        userMarkerRef.current.setLngLat([frame.lon, frame.lat]);
+        UserLocationIconService.updateMarkerDirection(
+          userMarkerRef.current.getElement(),
+          userIconPrefRef.current,
+          frame.headingDeg,
+          curMapBearing,
+          isNavigationActiveRef.current
+        );
+      }
+
+      if (
+        isFollowingUserRef.current &&
+        !cameraTransitionInFlightRef.current &&
+        !userZoomingRef.current &&
+        !map.isZooming()
+      ) {
+        const targetBearing = isNavigationActiveRef.current
+          ? navOrientationRef.current === 'heading-up'
+            ? frame.headingDeg ?? curMapBearing
+            : 0
+          : null;
+
+        const curCenter = map.getCenter();
+        const centerMoved =
+          Math.abs(frame.lon - curCenter.lng) > 1e-7 ||
+          Math.abs(frame.lat - curCenter.lat) > 1e-7;
+        const bearingChanged =
+          targetBearing !== null &&
+          Math.abs(shortestAngleDeltaDeg(curMapBearing, targetBearing)) > 0.05;
+
+        if (centerMoved || bearingChanged) {
+          if (targetBearing !== null) {
+            lastCameraBearingRef.current = { ts: perfNowMs, bearing: targetBearing };
+          }
+          map.jumpTo(
+            {
+              center: [frame.lon, frame.lat],
+              ...(targetBearing !== null ? { bearing: targetBearing } : {}),
+            },
+            { navFollowTick: true }
+          );
+        }
+      }
+    },
+    [syncHeadingUi]
+  );
+
+  const stopSmoothLoop = useCallback(() => {
+    if (smoothRafIdRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(smoothRafIdRef.current);
+      smoothRafIdRef.current = null;
+    }
   }, []);
+
+  const scheduleSmoothLoop = useCallback(() => {
+    if (smoothRafIdRef.current !== null) return;
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      return;
+    }
+
+    const tick = () => {
+      smoothRafIdRef.current = null;
+      const smoother = navSmootherRef.current;
+      if (!smoother) return;
+      const perfNow = performance.now();
+      const frame = smoother.step(perfNow);
+      if (frame) {
+        applySmoothedFrameToMap(frame, perfNow);
+      }
+      if (smoother.needsAnimationFrame(perfNow)) {
+        smoothRafIdRef.current = window.requestAnimationFrame(tick);
+      }
+    };
+
+    smoothRafIdRef.current = window.requestAnimationFrame(tick);
+  }, [applySmoothedFrameToMap]);
+
+  // Clean up smoother loop and transition timers on unmount
+  useEffect(() => {
+    return () => {
+      stopSmoothLoop();
+      if (cameraTransitionTimerRef.current !== null) {
+        window.clearTimeout(cameraTransitionTimerRef.current);
+        cameraTransitionTimerRef.current = null;
+      }
+    };
+  }, [stopSmoothLoop]);
+
+  // Keep navigation smoother synced with active route & OSM PMTiles archive
+  useEffect(() => {
+    const smoother = navSmootherRef.current;
+    if (!smoother) return;
+    smoother.setActiveRoute(activeRoute);
+    if (!activeRoute) {
+      smoother.setPlanningMode('4x4');
+    }
+    const frame = smoother.getLatestFrame();
+    const refLon = frame?.kalmanLon ?? userLocationRef.current?.lon;
+    const refLat = frame?.kalmanLat ?? userLocationRef.current?.lat;
+    const routeFallback =
+      isNavigationActive && activeRoute
+        ? extractRouteTangentHeading(activeRoute, refLon, refLat)
+        : null;
+    smoother.setRouteFallbackHeading(routeFallback);
+  }, [activeRoute, isNavigationActive]);
+
+  useEffect(() => {
+    const smoother = navSmootherRef.current;
+    if (!smoother) return;
+    smoother.clearRoadNetworkCache();
+    const frame = smoother.getLatestFrame();
+    const lon = frame?.kalmanLon ?? userLocationRef.current?.lon;
+    const lat = frame?.kalmanLat ?? userLocationRef.current?.lat;
+    if (typeof lon === 'number' && typeof lat === 'number') {
+      void smoother.getRoadNetworkCache().ensureNear(lon, lat);
+    }
+  }, [osmInfo]);
 
   // Continuous live GPS position stream across all map modes (Explore, Planning, Navigating, Recording)
   useEffect(() => {
     const stopWatch = LiveGpsService.startContinuousWatch(
       async (fix) => {
-        const { lon, lat, heading, speed, accuracy } = fix;
-        const nowMs = Date.now();
-        const gpsMeta = gpsHeadingMetaRef.current;
-        const accurateEnough = accuracy === null || accuracy <= 40;
-        const computedCourse =
-          accurateEnough &&
-          typeof gpsMeta.anchorLon === 'number' &&
-          typeof gpsMeta.anchorLat === 'number'
-            ? computeBearingBetweenCoords(gpsMeta.anchorLon, gpsMeta.anchorLat, lon, lat, 3)
-            : null;
-        gpsHeadingMetaRef.current = {
-          fixHeading: heading,
-          speedMps: speed,
-          courseHeading: computedCourse ?? gpsMeta.courseHeading,
-          updatedAt: nowMs,
-          courseUpdatedAt: computedCourse !== null ? nowMs : gpsMeta.courseUpdatedAt,
-          anchorLon:
-            !accurateEnough || gpsMeta.anchorLon === undefined || computedCourse !== null
-              ? lon
-              : gpsMeta.anchorLon,
-          anchorLat:
-            !accurateEnough || gpsMeta.anchorLat === undefined || computedCourse !== null
-              ? lat
-              : gpsMeta.anchorLat,
-        };
-
-        setUserLocation(fix);
-        const resolvedHeading = recomputeAndSyncHeading();
-
-        if (mapRef.current) {
-          const curMapBearing = mapRef.current.getBearing();
-          if (!userMarkerRef.current) {
-            userMarkerRef.current = new maplibregl.Marker({
-              element: createUserMarkerElement(
-                userIconPrefRef.current,
-                resolvedHeading,
-                curMapBearing,
-                isNavigationActiveRef.current
-              ),
-              anchor: 'center',
-            })
-              .setLngLat([lon, lat])
-              .addTo(mapRef.current);
-          } else {
-            userMarkerRef.current.setLngLat([lon, lat]);
-            UserLocationIconService.renderMarkerElement(
-              userMarkerRef.current.getElement(),
-              userIconPrefRef.current,
-              resolvedHeading,
-              curMapBearing,
-              isNavigationActiveRef.current
-            );
-          }
-
-          const navTargetBearing = isNavigationActiveRef.current
-            ? navOrientationRef.current === 'heading-up'
-              ? resolvedHeading ?? curMapBearing
-              : 0
-            : undefined;
-
-          if (pendingLocateFlyRef.current) {
-            pendingLocateFlyRef.current = false;
-            if (navTargetBearing !== undefined) {
-              lastCameraBearingRef.current = { ts: performance.now(), bearing: navTargetBearing };
-            }
-            mapRef.current.flyTo({
-              center: [lon, lat],
-              zoom: Math.max(mapRef.current.getZoom(), isNavigationActiveRef.current ? 15.5 : 15),
-              ...(navTargetBearing !== undefined ? { bearing: navTargetBearing } : {}),
-              speed: 1.4,
-              essential: true,
-            });
-          } else if (isFollowingUserRef.current && !mapRef.current.isMoving()) {
-            if (navTargetBearing !== undefined) {
-              lastCameraBearingRef.current = { ts: performance.now(), bearing: navTargetBearing };
-            }
-            mapRef.current.easeTo({
-              center: [lon, lat],
-              ...(navTargetBearing !== undefined ? { bearing: navTargetBearing } : {}),
-              duration: 450,
-              essential: true,
-            });
-          }
-        }
+        const smoother = navSmootherRef.current;
+        if (!smoother) return;
+        const perfNow = performance.now();
 
         const currentActiveRoute = activeRouteRef.current;
-        if (currentActiveRoute) {
-          const check = RouteManager.checkNavigationDeviation(currentActiveRoute, lon, lat);
+        const routeFallback =
+          isNavigationActiveRef.current && currentActiveRoute
+            ? extractRouteTangentHeading(currentActiveRoute, fix.lon, fix.lat)
+            : null;
+        smoother.setRouteFallbackHeading(routeFallback);
+
+        const hadPreviousFix = userLocationRef.current !== null;
+        const ingest = smoother.ingestFix(fix, perfNow);
+        const latestFrame = smoother.getLatestFrame();
+
+        if (ingest.accepted || !hadPreviousFix) {
+          setUserLocation(fix);
+        }
+
+        if (pendingLocateFlyRef.current && mapRef.current) {
+          pendingLocateFlyRef.current = false;
+          const targetLon = latestFrame?.lon ?? ingest.kalmanLon;
+          const targetLat = latestFrame?.lat ?? ingest.kalmanLat;
+          const curMapBearing = mapRef.current.getBearing();
+          const flyHeading = latestFrame?.headingDeg ?? ingest.headingDeg;
+          const navTargetBearing = isNavigationActiveRef.current
+            ? navOrientationRef.current === 'heading-up'
+              ? flyHeading ?? curMapBearing
+              : 0
+            : undefined;
+          if (navTargetBearing !== undefined) {
+            lastCameraBearingRef.current = { ts: perfNow, bearing: navTargetBearing };
+          }
+          beginCameraTransition(1100);
+          mapRef.current.flyTo({
+            center: [targetLon, targetLat],
+            zoom: Math.max(mapRef.current.getZoom(), isNavigationActiveRef.current ? 15.5 : 15),
+            ...(navTargetBearing !== undefined ? { bearing: navTargetBearing } : {}),
+            speed: 1.4,
+            essential: true,
+          });
+        }
+
+        if (latestFrame) {
+          applySmoothedFrameToMap(latestFrame, perfNow);
+          scheduleSmoothLoop();
+        }
+
+        if (currentActiveRoute && (ingest.accepted || !hadPreviousFix)) {
+          const checkLon = ingest.kalmanLon;
+          const checkLat = ingest.kalmanLat;
+          const check = RouteManager.checkNavigationDeviation(
+            currentActiveRoute,
+            checkLon,
+            checkLat
+          );
           if (isNavigatingRouteRef.current) {
             setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
           }
@@ -678,8 +793,10 @@ export const App: React.FC = () => {
           }
         }
 
-        if (isRecordingTrackRef.current && !isRecordingPausedRef.current) {
-          const nextPt: [number, number] = [Number(lon.toFixed(6)), Number(lat.toFixed(6))];
+        if (isRecordingTrackRef.current && !isRecordingPausedRef.current && ingest.accepted) {
+          const recLon = ingest.kalmanLon;
+          const recLat = ingest.kalmanLat;
+          const nextPt: [number, number] = [Number(recLon.toFixed(6)), Number(recLat.toFixed(6))];
           setRecordedCoords((prev) => {
             if (prev.length > 0) {
               const last = prev[prev.length - 1];
@@ -692,7 +809,7 @@ export const App: React.FC = () => {
             return [...prev, nextPt];
           });
 
-          const ele = await ElevationService.getElevationAt(lon, lat, 11, true);
+          const ele = await ElevationService.getElevationAt(recLon, recLat, 11, true);
           if (ele !== null) {
             if (lastRecordedEleRef.current !== null && ele > lastRecordedEleRef.current) {
               setRecordedAscentMeters((a) => a + (ele - (lastRecordedEleRef.current ?? ele)));
@@ -705,11 +822,13 @@ export const App: React.FC = () => {
         if (pendingLocateFlyRef.current) {
           pendingLocateFlyRef.current = false;
           setIsFollowingUser(false);
+          isFollowingUserRef.current = false;
           if (err.isPermissionDenied) {
             showToast('אין הרשאת מיקום — אשר גישה ל-GPS בהגדרות הדפדפן/המכשיר');
           } else {
             const demoLon = 34.8134;
             const demoLat = 30.8281;
+            beginCameraTransition(1100);
             mapRef.current?.flyTo({ center: [demoLon, demoLat], zoom: 13.5, essential: true });
             showToast('מיקום GPS לא זמין כרגע — ממרכז לאזור עין עקב');
           }
@@ -719,32 +838,50 @@ export const App: React.FC = () => {
         enableHighAccuracy: true,
         maximumAge: 0,
         timeout: 10000,
-        minimumUpdateInterval: 1000,
+        minimumUpdateInterval: 500,
       }
     );
 
     return stopWatch;
-  }, [gpsWatchRestartSeq, recomputeAndSyncHeading, showToast]);
+  }, [
+    gpsWatchRestartSeq,
+    applySmoothedFrameToMap,
+    scheduleSmoothLoop,
+    beginCameraTransition,
+    showToast,
+  ]);
 
   // Continuous device compass stream so user icon & Heading-Up map turn smoothly even while stationary
   useEffect(() => {
     return NavigationHeadingService.subscribeCompassHeading((compassDeg) => {
       compassMetaRef.current = { heading: compassDeg, updatedAt: Date.now() };
-      const resolved = recomputeAndSyncHeading();
+      const perfNow = performance.now();
+      const smoother = navSmootherRef.current;
+      if (smoother) {
+        smoother.setCompassHeading(compassDeg, perfNow);
+        if (smoother.getLatestFrame()) {
+          scheduleSmoothLoop();
+          return;
+        }
+      }
+
+      const resolved = resolveCurrentHeading();
       if (
         resolved !== null &&
         isNavigationActiveRef.current &&
         navOrientationRef.current === 'heading-up' &&
         isFollowingUserRef.current &&
         mapRef.current &&
+        !cameraTransitionInFlightRef.current &&
+        !userZoomingRef.current &&
         !mapRef.current.isMoving()
       ) {
-        const now = performance.now();
         if (
-          now - lastCameraBearingRef.current.ts >= 180 &&
+          perfNow - lastCameraBearingRef.current.ts >= 180 &&
           Math.abs(shortestAngleDeltaDeg(lastCameraBearingRef.current.bearing, resolved)) >= 3
         ) {
-          lastCameraBearingRef.current = { ts: now, bearing: resolved };
+          lastCameraBearingRef.current = { ts: perfNow, bearing: resolved };
+          beginCameraTransition(220);
           const curLoc = userLocationRef.current;
           mapRef.current.easeTo({
             ...(curLoc ? { center: [curLoc.lon, curLoc.lat] } : {}),
@@ -755,13 +892,18 @@ export const App: React.FC = () => {
         }
       }
     });
-  }, [recomputeAndSyncHeading]);
+  }, [scheduleSmoothLoop, resolveCurrentHeading, beginCameraTransition]);
 
-  // Ensure live GPS puck is mounted and updated immediately whenever map, location, nav state, or icon changes
+  // Ensure live GPS puck is mounted and styled when map readiness, icon preference, or nav state changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !isMapReady || !userLocation) return;
-    const effectiveHeading = liveHeadingRef.current ?? userLocation.heading;
+    const latestFrame = navSmootherRef.current?.getLatestFrame();
+    const curLoc = userLocationRef.current;
+    if (!map || !isMapReady || (!latestFrame && !curLoc)) return;
+    const effectiveLon = latestFrame?.lon ?? curLoc!.lon;
+    const effectiveLat = latestFrame?.lat ?? curLoc!.lat;
+    const effectiveHeading =
+      latestFrame?.headingDeg ?? liveHeadingRef.current ?? curLoc?.heading ?? null;
     const curBearing = map.getBearing();
     if (!userMarkerRef.current) {
       userMarkerRef.current = new maplibregl.Marker({
@@ -773,10 +915,10 @@ export const App: React.FC = () => {
         ),
         anchor: 'center',
       })
-        .setLngLat([userLocation.lon, userLocation.lat])
+        .setLngLat([effectiveLon, effectiveLat])
         .addTo(map);
     } else {
-      userMarkerRef.current.setLngLat([userLocation.lon, userLocation.lat]);
+      userMarkerRef.current.setLngLat([effectiveLon, effectiveLat]);
       UserLocationIconService.renderMarkerElement(
         userMarkerRef.current.getElement(),
         userIconPref,
@@ -785,7 +927,7 @@ export const App: React.FC = () => {
         isNavigationActive
       );
     }
-  }, [isMapReady, userLocation, userIconPref, liveHeading, isNavigationActive]);
+  }, [isMapReady, userIconPref, isNavigationActive]);
 
   // Keep screen awake (prevent sleep/dimming) whenever the user is in active navigation
   useEffect(() => {
@@ -805,10 +947,12 @@ export const App: React.FC = () => {
     const wasActive = wasNavigationActiveRef.current;
     wasNavigationActiveRef.current = isNavigationActive;
 
-    const resolvedHeading = recomputeAndSyncHeading();
+    const latestFrame = navSmootherRef.current?.getLatestFrame();
+    const resolvedHeading = resolveCurrentHeading();
     if (isNavigationActive) {
       if (!wasActive) {
         setIsFollowingUser(true);
+        isFollowingUserRef.current = true;
       }
       if (isFollowingUserRef.current || !wasActive) {
         const targetBearing =
@@ -816,9 +960,14 @@ export const App: React.FC = () => {
             ? resolvedHeading ?? map.getBearing()
             : 0;
         lastCameraBearingRef.current = { ts: performance.now(), bearing: targetBearing };
-        const curLoc = userLocationRef.current;
+        const centerCoord: [number, number] | null = latestFrame
+          ? [latestFrame.lon, latestFrame.lat]
+          : userLocationRef.current
+            ? [userLocationRef.current.lon, userLocationRef.current.lat]
+            : null;
+        beginCameraTransition(450);
         map.easeTo({
-          ...(curLoc ? { center: [curLoc.lon, curLoc.lat], zoom: Math.max(map.getZoom(), 15.5) } : {}),
+          ...(centerCoord ? { center: centerCoord, zoom: Math.max(map.getZoom(), 15.5) } : {}),
           bearing: targetBearing,
           duration: 450,
           essential: true,
@@ -826,9 +975,10 @@ export const App: React.FC = () => {
       }
     } else if (wasActive) {
       lastCameraBearingRef.current = { ts: performance.now(), bearing: 0 };
+      beginCameraTransition(450);
       map.easeTo({ bearing: 0, duration: 450, essential: true });
     }
-  }, [isNavigationActive, navOrientation, isMapReady, recomputeAndSyncHeading]);
+  }, [isNavigationActive, navOrientation, isMapReady, resolveCurrentHeading, beginCameraTransition]);
 
   // Update Military Tactical UTM/ITM Grid GeoJSON on the map
   const updateTacticalGridOnMap = useCallback(
@@ -1210,9 +1360,6 @@ export const App: React.FC = () => {
           }
         }
 
-        const primaryPois = currentPois.filter((p) => !p.id.startsWith('or-') || Boolean(p.userNotes));
-        const offroadOverlayPois = currentPois.filter((p) => p.id.startsWith('or-') && !p.userNotes);
-
         const poiIconExpression: any = [
           'match',
           ['get', 'category'],
@@ -1266,6 +1413,8 @@ export const App: React.FC = () => {
             'flower',
             'offroad_poi',
             'info',
+            'offroad_photo',
+            'info',
             'viewpoint',
           ],
           'offroad',
@@ -1279,6 +1428,8 @@ export const App: React.FC = () => {
             'blocked_road',
             'offroad-blocked',
             'danger',
+            'offroad-danger',
+            'obstacle',
             'offroad-danger',
             'floods',
             'offroad-danger',
@@ -1353,92 +1504,38 @@ export const App: React.FC = () => {
           currentTheme === 'topo-dark' ? '#fbbf24' : '#404040',
         ];
 
-        // 1. Off-Road.io Community Overlay Layer (placed immediately below israel-pois-labels so Curated + OSM landmarks win collisions while Off-Road renders on top of OSM)
-        const offroadSig = `${offroadOverlayPois.length}|${offroadOverlayPois[0]?.id || ''}|${offroadOverlayPois[offroadOverlayPois.length - 1]?.id || ''}`;
-        const existingOffroadSrc = map.getSource('israel-offroad-pois-src') as maplibregl.GeoJSONSource;
-        if (existingOffroadSrc) {
-          if (!lastOffroadPoiSyncRef.current || lastOffroadPoiSyncRef.current.sig !== offroadSig) {
-            existingOffroadSrc.setData(PoiManager.toCompactMapGeoJSON(offroadOverlayPois));
-            lastOffroadPoiSyncRef.current = { sig: offroadSig };
-          }
-          if (map.getLayer('israel-offroad-pois-labels')) {
-            map.setFilter('israel-offroad-pois-labels', buildOffroadPoiLayerFilter(currentVis));
-          }
-        } else {
-          const offroadGeoJson = PoiManager.toCompactMapGeoJSON(offroadOverlayPois);
-          lastOffroadPoiSyncRef.current = { sig: offroadSig };
-          map.addSource('israel-offroad-pois-src', { type: 'geojson', data: offroadGeoJson });
-          map.addLayer(
-            {
-              id: 'israel-offroad-pois-labels',
-              type: 'symbol',
-              source: 'israel-offroad-pois-src',
-              minzoom: 15,
-              filter: buildOffroadPoiLayerFilter(currentVis),
-              layout: {
-                visibility: isOffroadCommunityActive(currentVis) ? 'visible' : 'none',
-                'symbol-sort-key': ['coalesce', ['get', 'priority'], 500],
-                'icon-image': poiIconExpression,
-                'icon-size': poiIconSizeExpression,
-                'icon-anchor': 'center',
-                'icon-allow-overlap': false,
-                'icon-ignore-placement': false,
-                'icon-padding': 6,
-                'text-field': ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
-                'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
-                'text-size': 13.5,
-                'text-offset': [0, 0.75],
-                'text-anchor': 'top',
-                'text-max-width': 9,
-                'text-allow-overlap': false,
-                'text-ignore-placement': false,
-                'text-optional': true,
-                'text-padding': 3,
-              },
-              paint: {
-                'text-color': poiTextColorExpression,
-                'text-halo-color': currentTheme === 'topo-dark' ? '#0b1015' : 'white',
-                'text-halo-width': 3,
-                'text-halo-blur': 1.5,
-              },
-            },
-            map.getLayer('israel-pois-labels') ? 'israel-pois-labels' : undefined
-          );
-        }
-
-        // 2. Primary Curated + OSM + User POIs Layer
-        const poiVisKey = `${currentVis.pois}|${currentVis.poiWater}|${currentVis.poiHeritage}|${currentVis.poiCampsites}|${currentVis.poiOffroad}|${currentVis.poiPeaks}|${currentVis.poiUser ?? true}`;
+        // Unified Outdoor POIs Layer (Curated + OSM + Off-Road.io + Imported + User merged into one categorized collection)
         const existingPoiSrc = map.getSource('israel-pois-src') as maplibregl.GeoJSONSource;
         if (existingPoiSrc) {
-          if (
-            !lastPoiSyncRef.current ||
-            lastPoiSyncRef.current.pois !== currentPois ||
-            lastPoiSyncRef.current.visKey !== poiVisKey
-          ) {
-            existingPoiSrc.setData(PoiManager.toGeoJSON(primaryPois, currentVis));
-            lastPoiSyncRef.current = { pois: currentPois, visKey: poiVisKey };
+          if (lastPoiSyncRef.current !== currentPois) {
+            existingPoiSrc.setData(PoiManager.toCompactMapGeoJSON(currentPois));
+            lastPoiSyncRef.current = currentPois;
+          }
+          if (map.getLayer('israel-pois-labels')) {
+            map.setFilter('israel-pois-labels', buildPoiLayerFilter(currentVis));
           }
         } else {
-          const poiGeoJson = PoiManager.toGeoJSON(primaryPois, currentVis);
-          lastPoiSyncRef.current = { pois: currentPois, visKey: poiVisKey };
+          const poiGeoJson = PoiManager.toCompactMapGeoJSON(currentPois);
+          lastPoiSyncRef.current = currentPois;
           map.addSource('israel-pois-src', { type: 'geojson', data: poiGeoJson });
           map.addLayer({
             id: 'israel-pois-labels',
             type: 'symbol',
             source: 'israel-pois-src',
-            minzoom: 15,
+            minzoom: 13,
+            filter: buildPoiLayerFilter(currentVis),
             layout: {
-              visibility: currentVis.pois ? 'visible' : 'none',
+              visibility: isMasterPoiActive(currentVis) ? 'visible' : 'none',
               'symbol-sort-key': ['coalesce', ['get', 'priority'], 500],
               'icon-image': poiIconExpression,
               'icon-size': poiIconSizeExpression,
               'icon-anchor': 'center',
               'icon-allow-overlap': false,
               'icon-ignore-placement': false,
-              'icon-padding': 6,
+              'icon-padding': ['interpolate', ['linear'], ['zoom'], 13, 8, 15, 6],
               'text-field': ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
               'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
-              'text-size': 14,
+              'text-size': ['interpolate', ['linear'], ['zoom'], 13, 11.5, 14, 12.8, 15, 14],
               'text-offset': [0, 0.75],
               'text-anchor': 'top',
               'text-max-width': 9,
@@ -1838,10 +1935,20 @@ export const App: React.FC = () => {
       );
     });
 
-    map.on('rotate', () => {
+    map.on('rotate', (ev: any) => {
       if (isCancelled) return;
       const currentBearing = map.getBearing();
-      setMapBearing(currentBearing);
+      const isNavFollowTick = Boolean(ev?.navFollowTick);
+      const perfNow = performance.now();
+      const prevUi = lastBearingUiUpdateRef.current;
+      if (
+        !isNavFollowTick ||
+        (perfNow - prevUi.ts >= 120 &&
+          Math.abs(shortestAngleDeltaDeg(prevUi.bearing, currentBearing)) >= 1.5)
+      ) {
+        lastBearingUiUpdateRef.current = { ts: perfNow, bearing: currentBearing };
+        setMapBearing(currentBearing);
+      }
       if (userMarkerRef.current) {
         UserLocationIconService.updateMarkerDirection(
           userMarkerRef.current.getElement(),
@@ -1857,6 +1964,7 @@ export const App: React.FC = () => {
       if (isCancelled) return;
       if (ev?.originalEvent) {
         pendingLocateFlyRef.current = false;
+        isFollowingUserRef.current = false;
         setIsFollowingUser(false);
       }
     });
@@ -1864,11 +1972,39 @@ export const App: React.FC = () => {
     map.on('dragstart', () => {
       if (isCancelled) return;
       pendingLocateFlyRef.current = false;
+      isFollowingUserRef.current = false;
       setIsFollowingUser(false);
     });
 
-    map.on('moveend', async () => {
+    map.on('zoomstart', (ev) => {
       if (isCancelled) return;
+      if (ev?.originalEvent) {
+        userZoomingRef.current = true;
+      }
+    });
+
+    map.on('zoomend', () => {
+      if (isCancelled) return;
+      userZoomingRef.current = false;
+    });
+
+    map.on('moveend', async (ev: any) => {
+      if (isCancelled) return;
+      const isNavFollowTick = Boolean(ev?.navFollowTick);
+      if (!isNavFollowTick) {
+        if (cameraTransitionTimerRef.current !== null) {
+          window.clearTimeout(cameraTransitionTimerRef.current);
+          cameraTransitionTimerRef.current = null;
+        }
+        cameraTransitionInFlightRef.current = false;
+      } else {
+        const perfNow = performance.now();
+        if (perfNow - lastNavFollowMoveEndTsRef.current < 650) {
+          return;
+        }
+        lastNavFollowMoveEndTsRef.current = perfNow;
+      }
+
       const c = map.getCenter();
       const lon = Number(c.lng.toFixed(4));
       const lat = Number(c.lat.toFixed(4));
@@ -1965,17 +2101,6 @@ export const App: React.FC = () => {
       }
     };
 
-    const handleOffroadPoiFeatureClick = (e: maplibregl.MapLayerMouseEvent) => {
-      if (isCancelled || isPlanningRouteRef.current) return;
-      if (
-        map.getLayer('israel-pois-labels') &&
-        map.queryRenderedFeatures(e.point, { layers: ['israel-pois-labels'] }).length > 0
-      ) {
-        return;
-      }
-      handlePoiFeatureClick(e);
-    };
-
     const handleMapPlanClick = (e: maplibregl.MapMouseEvent) => {
       if (isCancelled || !isPlanningRouteRef.current) return;
       const origDetail = (e.originalEvent as MouseEvent | undefined)?.detail ?? 1;
@@ -2012,7 +2137,6 @@ export const App: React.FC = () => {
     };
 
     map.on('click', 'israel-pois-labels', handlePoiFeatureClick);
-    map.on('click', 'israel-offroad-pois-labels', handleOffroadPoiFeatureClick);
     map.on('click', handleMapPlanClick);
     map.on('dblclick', handleMapPlanDblClick);
     map.on('mouseenter', 'israel-pois-labels', () => {
@@ -2021,14 +2145,6 @@ export const App: React.FC = () => {
       }
     });
     map.on('mouseleave', 'israel-pois-labels', () => {
-      map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
-    });
-    map.on('mouseenter', 'israel-offroad-pois-labels', () => {
-      if (!isPlanningRouteRef.current) {
-        map.getCanvas().style.cursor = 'pointer';
-      }
-    });
-    map.on('mouseleave', 'israel-offroad-pois-labels', () => {
       map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
     });
 
@@ -2066,7 +2182,6 @@ export const App: React.FC = () => {
       isStyleLoadedRef.current = false;
       mountedStyleKeyRef.current = '';
       lastPoiSyncRef.current = null;
-      lastOffroadPoiSyncRef.current = null;
       if (clickTimerRef.current) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
@@ -2084,11 +2199,18 @@ export const App: React.FC = () => {
     };
   }, [syncOverlaySourcesToMap, showToast]);
 
-  // Refresh tactical grid when panning/zooming
+  // Refresh tactical grid when panning/zooming (throttled during 60fps nav follow)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady) return;
-    const onMoveEnd = () => {
+    const onMoveEnd = (ev?: any) => {
+      if (ev?.navFollowTick) {
+        const perfNow = performance.now();
+        if (perfNow - lastNavFollowGridTsRef.current < 800) {
+          return;
+        }
+        lastNavFollowGridTsRef.current = perfNow;
+      }
       updateTacticalGridOnMap(map, visibility.tacticalGrid, theme);
     };
     map.on('moveend', onMoveEnd);
@@ -2113,7 +2235,6 @@ export const App: React.FC = () => {
     mountedStyleKeyRef.current = nextStyleKey;
     isStyleLoadedRef.current = false;
     lastPoiSyncRef.current = null;
-    lastOffroadPoiSyncRef.current = null;
 
     const newStyle = buildIsraelOutdoorStyle({
       osmProtocolUrl: effectiveOsmUrl,
@@ -2282,7 +2403,7 @@ export const App: React.FC = () => {
   const referenceCoord = userLocation ?? { lon: cursorCoords.lon, lat: cursorCoords.lat };
 
   const nearbyPois = useMemo(() => {
-    if (pois.length === 0) return [];
+    if (pois.length === 0 || !visibility.pois) return [];
     const cosLat = Math.cos((referenceCoord.lat * Math.PI) / 180);
     const maxCandidates = 40;
     const candidates: Array<{ poi: PoiRecord; approxDistSq: number }> = [];
@@ -2290,6 +2411,13 @@ export const App: React.FC = () => {
 
     for (let i = 0; i < pois.length; i++) {
       const p = pois[i];
+      if (p.category === 'water' && !visibility.poiWater) continue;
+      if (p.category === 'heritage' && !visibility.poiHeritage) continue;
+      if (p.category === 'campsite' && !visibility.poiCampsites) continue;
+      if (p.category === 'offroad' && !visibility.poiOffroad) continue;
+      if (p.category === 'peak' && !visibility.poiPeaks) continue;
+      if (p.category === 'user' && !(visibility.poiUser ?? true)) continue;
+
       const dLon = (p.lon - referenceCoord.lon) * cosLat;
       const dLat = p.lat - referenceCoord.lat;
       const distSq = dLon * dLon + dLat * dLat;
@@ -2318,59 +2446,80 @@ export const App: React.FC = () => {
           : a.distKm - b.distKm
       )
       .slice(0, 10);
-  }, [pois, referenceCoord.lon, referenceCoord.lat]);
+  }, [
+    pois,
+    referenceCoord.lon,
+    referenceCoord.lat,
+    visibility.pois,
+    visibility.poiWater,
+    visibility.poiHeritage,
+    visibility.poiCampsites,
+    visibility.poiOffroad,
+    visibility.poiPeaks,
+    visibility.poiUser,
+  ]);
 
-  const handleFlyTo = (lon: number, lat: number, zoom = 14) => {
-    mapRef.current?.flyTo({ center: [lon, lat], zoom, essential: true });
-  };
+  const handleFlyTo = useCallback(
+    (lon: number, lat: number, zoom = 14) => {
+      beginCameraTransition(1000);
+      mapRef.current?.flyTo({ center: [lon, lat], zoom, essential: true });
+    },
+    [beginCameraTransition]
+  );
 
-  const fitBoundsToRoutes = useCallback((targetRoutes: SavedRouteRecord[]) => {
-    const map = mapRef.current;
-    if (!map || targetRoutes.length === 0) return;
-    try {
-      const allFeatures = targetRoutes.flatMap((r) => r.geojson?.features || []);
-      if (allFeatures.length > 0) {
-        const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: allFeatures };
-        const [minX, minY, maxX, maxY] = turf.bbox(fc);
-        if (
-          Number.isFinite(minX) &&
-          Number.isFinite(minY) &&
-          Number.isFinite(maxX) &&
-          Number.isFinite(maxY)
-        ) {
-          if (Math.abs(maxX - minX) < 0.0005 && Math.abs(maxY - minY) < 0.0005) {
-            map.flyTo({
-              center: [(minX + maxX) / 2, (minY + maxY) / 2],
-              zoom: 15,
-              essential: true,
-            });
-          } else {
-            map.fitBounds(
-              [
-                [minX, minY],
-                [maxX, maxY],
-              ],
-              {
-                padding: isMobileRef.current
-                  ? { top: 115, bottom: 70, left: 40, right: 40 }
-                  : { top: 90, bottom: 90, left: 90, right: 430 },
-                maxZoom: 15,
-                duration: 750,
-              }
-            );
+  const fitBoundsToRoutes = useCallback(
+    (targetRoutes: SavedRouteRecord[]) => {
+      const map = mapRef.current;
+      if (!map || targetRoutes.length === 0) return;
+      try {
+        const allFeatures = targetRoutes.flatMap((r) => r.geojson?.features || []);
+        if (allFeatures.length > 0) {
+          const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: allFeatures };
+          const [minX, minY, maxX, maxY] = turf.bbox(fc);
+          if (
+            Number.isFinite(minX) &&
+            Number.isFinite(minY) &&
+            Number.isFinite(maxX) &&
+            Number.isFinite(maxY)
+          ) {
+            if (Math.abs(maxX - minX) < 0.0005 && Math.abs(maxY - minY) < 0.0005) {
+              beginCameraTransition(1000);
+              map.flyTo({
+                center: [(minX + maxX) / 2, (minY + maxY) / 2],
+                zoom: 15,
+                essential: true,
+              });
+            } else {
+              beginCameraTransition(750);
+              map.fitBounds(
+                [
+                  [minX, minY],
+                  [maxX, maxY],
+                ],
+                {
+                  padding: isMobileRef.current
+                    ? { top: 115, bottom: 70, left: 40, right: 40 }
+                    : { top: 90, bottom: 90, left: 90, right: 430 },
+                  maxZoom: 15,
+                  duration: 750,
+                }
+              );
+            }
+            return;
           }
-          return;
         }
+      } catch {
+        // Fall through to midpoint fallback
       }
-    } catch {
-      // Fall through to midpoint fallback
-    }
-    const pts = targetRoutes[0]?.elevationProfile || [];
-    if (pts.length > 0) {
-      const mid = pts[Math.floor(pts.length / 2)];
-      map.flyTo({ center: [mid.lon, mid.lat], zoom: 13.0, essential: true });
-    }
-  }, []);
+      const pts = targetRoutes[0]?.elevationProfile || [];
+      if (pts.length > 0) {
+        const mid = pts[Math.floor(pts.length / 2)];
+        beginCameraTransition(1000);
+        map.flyTo({ center: [mid.lon, mid.lat], zoom: 13.0, essential: true });
+      }
+    },
+    [beginCameraTransition]
+  );
 
   const handleFlyToRoute = useCallback(
     (route: SavedRouteRecord) => {
@@ -2419,6 +2568,7 @@ export const App: React.FC = () => {
         }
         if (latestPoi) {
           setSelectedPoi(latestPoi);
+          beginCameraTransition(1000);
           mapRef.current?.flyTo({
             center: [latestPoi.lon, latestPoi.lat],
             zoom: 15.2,
@@ -2428,7 +2578,7 @@ export const App: React.FC = () => {
         showToast(`יובאו ${poiCount} נקודות עניין למפה`);
       }
     },
-    [fitBoundsToRoutes, showToast]
+    [fitBoundsToRoutes, beginCameraTransition, showToast]
   );
 
   const handleHoverElevationChart = (
@@ -2462,17 +2612,22 @@ export const App: React.FC = () => {
 
   const handleLocateMe = () => {
     setIsFollowingUser(true);
+    isFollowingUserRef.current = true;
+    const latestFrame = navSmootherRef.current?.getLatestFrame();
     const currentLoc = userLocationRef.current;
-    if (currentLoc) {
+    if (latestFrame || currentLoc) {
       pendingLocateFlyRef.current = false;
       const map = mapRef.current;
+      const targetLon = latestFrame?.lon ?? currentLoc!.lon;
+      const targetLat = latestFrame?.lat ?? currentLoc!.lat;
       const targetBearing = isNavigationActiveRef.current
         ? navOrientationRef.current === 'heading-up'
-          ? liveHeadingRef.current ?? map?.getBearing() ?? 0
+          ? latestFrame?.headingDeg ?? liveHeadingRef.current ?? map?.getBearing() ?? 0
           : 0
         : undefined;
+      beginCameraTransition(1100);
       map?.flyTo({
-        center: [currentLoc.lon, currentLoc.lat],
+        center: [targetLon, targetLat],
         zoom: Math.max(map.getZoom() || 14, isNavigationActiveRef.current ? 15.5 : 15),
         ...(targetBearing !== undefined ? { bearing: targetBearing } : {}),
         essential: true,
@@ -2480,8 +2635,8 @@ export const App: React.FC = () => {
       if (activeRoute) {
         const check = RouteManager.checkNavigationDeviation(
           activeRoute,
-          currentLoc.lon,
-          currentLoc.lat
+          latestFrame?.kalmanLon ?? targetLon,
+          latestFrame?.kalmanLat ?? targetLat
         );
         setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
       }
@@ -2496,14 +2651,22 @@ export const App: React.FC = () => {
     NavigationHeadingService.setOrientationPreference(nextMode);
     setNavOrientation(nextMode);
     setIsFollowingUser(true);
+    isFollowingUserRef.current = true;
     void NavigationHeadingService.requestCompassPermissionIfNeeded();
-    const resolvedHeading = recomputeAndSyncHeading();
+    const latestFrame = navSmootherRef.current?.getLatestFrame();
+    const resolvedHeading = resolveCurrentHeading();
     const targetBearing = nextMode === 'heading-up' ? resolvedHeading ?? 0 : 0;
     lastCameraBearingRef.current = { ts: performance.now(), bearing: targetBearing };
     const map = mapRef.current;
     const currentLoc = userLocationRef.current;
+    const targetCoord: [number, number] | null = latestFrame
+      ? [latestFrame.lon, latestFrame.lat]
+      : currentLoc
+        ? [currentLoc.lon, currentLoc.lat]
+        : null;
+    beginCameraTransition(420);
     map?.easeTo({
-      ...(currentLoc ? { center: [currentLoc.lon, currentLoc.lat] } : {}),
+      ...(targetCoord ? { center: targetCoord } : {}),
       bearing: targetBearing,
       duration: 420,
       essential: true,
@@ -2562,6 +2725,7 @@ export const App: React.FC = () => {
   const handleToggle3D = () => {
     const next3d = !visibility.terrain3d;
     setVisibility((prev) => ({ ...prev, terrain3d: next3d }));
+    beginCameraTransition(700);
     mapRef.current?.easeTo({ pitch: next3d ? 60 : 0, duration: 700 });
   };
 
@@ -2572,6 +2736,7 @@ export const App: React.FC = () => {
       handleChangeNavOrientation(nextMode);
       return;
     }
+    beginCameraTransition(500);
     mapRef.current?.easeTo({ bearing: 0, pitch: visibility.terrain3d ? 60 : 0, duration: 500 });
   };
 
@@ -2649,14 +2814,22 @@ export const App: React.FC = () => {
     setIsNavigatingRoute(true);
     setIsFreeNavigation(false);
     setIsFollowingUser(true);
+    isFollowingUserRef.current = true;
     setRemainingDistKm(route.distanceKm);
-    const resolvedHeading = recomputeAndSyncHeading();
+    const latestFrame = navSmootherRef.current?.getLatestFrame();
+    const resolvedHeading = resolveCurrentHeading();
     const targetBearing =
       navOrientationRef.current === 'heading-up' ? resolvedHeading ?? 0 : 0;
     const currentLoc = userLocationRef.current;
-    if (currentLoc) {
+    const centerCoord: [number, number] | null = latestFrame
+      ? [latestFrame.lon, latestFrame.lat]
+      : currentLoc
+        ? [currentLoc.lon, currentLoc.lat]
+        : null;
+    if (centerCoord) {
+      beginCameraTransition(1000);
       mapRef.current?.flyTo({
-        center: [currentLoc.lon, currentLoc.lat],
+        center: centerCoord,
         zoom: 15.5,
         bearing: targetBearing,
         essential: true,
@@ -3111,9 +3284,12 @@ export const App: React.FC = () => {
 
   const handleStartOrResumeRecording = () => {
     if (!isRecordingTrack) {
-      const startPt: [number, number] = userLocation
-        ? [userLocation.lon, userLocation.lat]
-        : [Number(cursorCoords.lon.toFixed(5)), Number(cursorCoords.lat.toFixed(5))];
+      const latestFrame = navSmootherRef.current?.getLatestFrame();
+      const startPt: [number, number] = latestFrame
+        ? [Number(latestFrame.kalmanLon.toFixed(6)), Number(latestFrame.kalmanLat.toFixed(6))]
+        : userLocation
+          ? [userLocation.lon, userLocation.lat]
+          : [Number(cursorCoords.lon.toFixed(5)), Number(cursorCoords.lat.toFixed(5))];
       setRecordedCoords([startPt]);
       setRecordedDistanceKm(0);
       setRecordedAscentMeters(0);

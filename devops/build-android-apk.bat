@@ -21,6 +21,7 @@ if errorlevel 1 (
 
 if not exist "dist\data" mkdir "dist\data"
 if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
+if exist "data\Israel.offroad.pois.geojson" copy /Y "data\Israel.offroad.pois.geojson" "dist\data\Israel.offroad.pois.geojson" >nul
 if exist "data\Israel.search.idx" copy /Y "data\Israel.search.idx" "dist\data\Israel.search.idx" >nul
 
 if "%ANDROID_HOME%"=="" (

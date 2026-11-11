@@ -3,7 +3,7 @@ import { bundledDataUrl } from '../dataUrls';
 
 /**
  * Computes default deterministic display & collision sort priority for POIs.
- * Lower numbers win symbol placement at zoom >= 15 and sort higher on ties.
+ * Lower numbers win symbol placement at zoom >= 13 and sort higher on ties.
  */
 export function getPoiSortPriority(poi: Pick<PoiRecord, 'id' | 'category' | 'subcategory' | 'ele' | 'wikipedia' | 'userNotes' | 'priority'>): number {
   if (poi.category === 'user' || poi.id.startsWith('user-poi-') || poi.userNotes) {
@@ -75,81 +75,231 @@ function hydrateGeojsonFeature(
   };
 }
 
+const MERGE_DIR_MODIFIER_RE = /(עליון|תחתון|מערבי|מזרחי|צפוני|דרומי|גדול|קטן|\d+)$/;
+
+function normalizePoiNameForMerge(name: string): string {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[\u0591-\u05C7"'״׳`.,:;!?()[\]\-—–/\\]+/g, ' ')
+    .replace(/(^|\s)ה(?=[א-ת]{2,})/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function arePoiNamesEquivalentForMerge(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const minLen = Math.min(a.length, b.length);
+  if (minLen >= 6 && (a.includes(b) || b.includes(a))) {
+    const modA = a.match(MERGE_DIR_MODIFIER_RE)?.[1] || '';
+    const modB = b.match(MERGE_DIR_MODIFIER_RE)?.[1] || '';
+    if (modA !== modB) return false;
+    return true;
+  }
+  return false;
+}
+
+function mergeMatchingPoiMetadata(canonical: PoiRecord, community: PoiRecord): PoiRecord {
+  const nextSource = canonical.source.includes('Off-Road.io')
+    ? canonical.source
+    : `${canonical.source} + Off-Road.io`;
+
+  let nextDescHe = canonical.descHe || '';
+  if (!nextDescHe && community.descHe) {
+    nextDescHe = community.descHe;
+  } else if (
+    community.descHe &&
+    community.descHe.length <= 220 &&
+    normalizePoiNameForMerge(nextDescHe) !== normalizePoiNameForMerge(community.descHe) &&
+    !nextDescHe.includes(community.descHe) &&
+    !community.descHe.includes(nextDescHe)
+  ) {
+    nextDescHe = `${nextDescHe} • ${community.descHe}`;
+  }
+
+  const basePrio = getPoiSortPriority(canonical);
+  const commPrio = getPoiSortPriority(community);
+  const mergedPriority = canonical.id.startsWith('il-poi-') || canonical.category === 'user' || canonical.userNotes
+    ? canonical.priority
+    : Math.min(basePrio, commPrio);
+
+  return {
+    ...canonical,
+    waterStatus: canonical.waterStatus || community.waterStatus,
+    difficulty4x4: canonical.difficulty4x4 || community.difficulty4x4,
+    descHe: nextDescHe,
+    wikipedia: canonical.wikipedia || community.wikipedia,
+    externalUrl: canonical.externalUrl || community.externalUrl,
+    likes:
+      typeof community.likes === 'number' && community.likes > (canonical.likes ?? 0)
+        ? community.likes
+        : canonical.likes,
+    updatedAt:
+      community.updatedAt && (!canonical.updatedAt || community.updatedAt > canonical.updatedAt)
+        ? community.updatedAt
+        : canonical.updatedAt,
+    userNotes: canonical.userNotes || community.userNotes || '',
+    source: nextSource,
+    ...(typeof mergedPriority === 'number' ? { priority: mergedPriority } : {}),
+  };
+}
+
 /**
- * Manages the Israeli Outdoor Points of Interest (Springs, Caves, Ruins, Campsites, 4x4 Passes, Peaks)
- * harvested from OpenStreetMap / IsraelHiking / Off-Road into:
+ * Manages the unified Israeli Outdoor Points of Interest (Springs, Caves, Ruins, Campsites, 4x4 Passes, Peaks)
+ * merging OpenStreetMap / IsraelHiking with Off-Road.io community POIs into one categorized list:
  *   - data/Israel.pois.geojson (persisted in local IndexedDB)
- *   - data/Israel.offroad.pois.geojson (high-volume community overlay cached in memory; userNotes persisted to IndexedDB)
+ *   - data/Israel.offroad.pois.geojson (high-volume community POIs cached in memory; userNotes persisted to IndexedDB)
  */
 export class PoiManager {
   private static offroadPoisCache: PoiRecord[] = [];
 
   private static mergeWithOffroadCache(dbPois: PoiRecord[]): PoiRecord[] {
     if (PoiManager.offroadPoisCache.length === 0) {
-      dbPois.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b));
-      return dbPois;
+      const sorted = [...dbPois];
+      sorted.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b) || a.id.localeCompare(b.id));
+      return sorted;
     }
+
     const dbById = new Map<string, PoiRecord>();
+    const merged: PoiRecord[] = [];
+    const step = 0.001;
+    const canonicalGrid = new Map<string, Array<{ index: number; normName: string; poi: PoiRecord }>>();
+
     for (const p of dbPois) {
-      dbById.set(p.id, p);
+      const copy = { ...p };
+      const idx = merged.length;
+      merged.push(copy);
+      dbById.set(copy.id, copy);
+
+      if (copy.id.startsWith('osm-') || copy.id.startsWith('il-poi-')) {
+        const gk = `${Math.floor(copy.lon / step)},${Math.floor(copy.lat / step)}`;
+        let bucket = canonicalGrid.get(gk);
+        if (!bucket) {
+          bucket = [];
+          canonicalGrid.set(gk, bucket);
+        }
+        bucket.push({
+          index: idx,
+          normName: normalizePoiNameForMerge(copy.nameHe || copy.name),
+          poi: copy,
+        });
+      }
     }
-    const merged: PoiRecord[] = [...dbPois];
+
     for (const orPoi of PoiManager.offroadPoisCache) {
-      if (!dbById.has(orPoi.id)) {
+      if (dbById.has(orPoi.id)) {
+        continue;
+      }
+
+      const gx = Math.floor(orPoi.lon / step);
+      const gy = Math.floor(orPoi.lat / step);
+      const orNorm = normalizePoiNameForMerge(orPoi.nameHe || orPoi.name);
+      let matchedIndex = -1;
+
+      if (orNorm) {
+        for (let dx = -1; dx <= 1 && matchedIndex === -1; dx++) {
+          for (let dy = -1; dy <= 1 && matchedIndex === -1; dy++) {
+            const bucket = canonicalGrid.get(`${gx + dx},${gy + dy}`);
+            if (!bucket) continue;
+            for (const cand of bucket) {
+              const currentCanon = merged[cand.index];
+              if (currentCanon.category !== orPoi.category) continue;
+              const dMeters = Math.hypot(
+                (currentCanon.lon - orPoi.lon) * 95000,
+                (currentCanon.lat - orPoi.lat) * 111320
+              );
+              if (dMeters <= 85 && arePoiNamesEquivalentForMerge(cand.normName, orNorm)) {
+                matchedIndex = cand.index;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (matchedIndex !== -1) {
+        merged[matchedIndex] = mergeMatchingPoiMetadata(merged[matchedIndex], orPoi);
+      } else {
         merged.push(orPoi);
       }
     }
-    merged.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b));
+
+    merged.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b) || a.id.localeCompare(b.id));
     return merged;
   }
 
   static async initializePois(): Promise<PoiRecord[]> {
     try {
-      const [osmRes, offroadRes] = await Promise.all([
+      const [existingPois, osmRes, offroadRes] = await Promise.all([
+        db.pois.toArray(),
         fetch(bundledDataUrl('Israel.pois.geojson')),
         fetch(bundledDataUrl('Israel.offroad.pois.geojson')).catch(() => null),
       ]);
 
-      const existingPois = await db.pois.toArray();
+      const existingById = new Map<string, PoiRecord>();
       const existingNotes = new Map<string, string>();
       for (const p of existingPois) {
+        existingById.set(p.id, p);
         if (p.userNotes) existingNotes.set(p.id, p.userNotes);
       }
 
+      const [osmGeo, offroadGeo] = await Promise.all([
+        osmRes && osmRes.ok ? osmRes.json().catch(() => null) : Promise.resolve(null),
+        offroadRes && offroadRes.ok ? offroadRes.json().catch(() => null) : Promise.resolve(null),
+      ]);
+
       const osmNextIds = new Set<string>();
-      if (osmRes && osmRes.ok) {
-        const geojson = await osmRes.json();
-        if (Array.isArray(geojson.features) && geojson.features.length > 0) {
-          const records: PoiRecord[] = geojson.features.map((f: any, index: number) =>
-            hydrateGeojsonFeature(f, index, existingNotes, {
-              defaultSource: 'IsraelHiking / OSM',
-              basePriority: 100,
-            })
-          );
+      const osmSyncPromise = (async () => {
+        if (!Array.isArray(osmGeo?.features) || osmGeo.features.length === 0) return;
 
-          for (const r of records) osmNextIds.add(r.id);
-          const staleBundledIds = existingPois
-            .filter(
-              (p) =>
-                (p.id.startsWith('osm-') || p.id.startsWith('il-poi-')) &&
-                !osmNextIds.has(p.id) &&
-                !p.userNotes
-            )
-            .map((p) => p.id);
+        const records: PoiRecord[] = osmGeo.features.map((f: any, index: number) =>
+          hydrateGeojsonFeature(f, index, existingNotes, {
+            defaultSource: 'IsraelHiking / OSM',
+            basePriority: 100,
+          })
+        );
 
+        const changedOrMissing: PoiRecord[] = [];
+        for (const r of records) {
+          osmNextIds.add(r.id);
+          const prev = existingById.get(r.id);
+          if (
+            !prev ||
+            prev.nameHe !== r.nameHe ||
+            prev.category !== r.category ||
+            prev.subcategory !== r.subcategory ||
+            prev.priority !== r.priority ||
+            prev.descHe !== r.descHe ||
+            prev.lon !== r.lon ||
+            prev.lat !== r.lat
+          ) {
+            changedOrMissing.push(r);
+          }
+        }
+
+        const staleBundledIds = existingPois
+          .filter(
+            (p) =>
+              (p.id.startsWith('osm-') || p.id.startsWith('il-poi-')) &&
+              !osmNextIds.has(p.id) &&
+              !p.userNotes
+          )
+          .map((p) => p.id);
+
+        if (staleBundledIds.length > 0 || changedOrMissing.length > 0) {
           await db.transaction('rw', db.pois, async () => {
             if (staleBundledIds.length > 0) {
               await db.pois.bulkDelete(staleBundledIds);
             }
-            await db.pois.bulkPut(records);
+            if (changedOrMissing.length > 0) {
+              await db.pois.bulkPut(changedOrMissing);
+            }
           });
         }
-      }
+      })();
 
-      // Load separate Off-Road community overlay in memory (without bloating IndexedDB with 62k+ rows)
-      if (offroadRes && offroadRes.ok) {
+      if (offroadGeo) {
         try {
-          const offroadGeo = await offroadRes.json();
           const feats = Array.isArray(offroadGeo?.features) ? offroadGeo.features : [];
           const isOffroadCollection =
             String(offroadGeo?.metadata?.source || '').includes('Off-Road') ||
@@ -162,7 +312,6 @@ export class PoiManager {
                 defaultSource: 'Off-Road.io (קהילת השטח)',
                 basePriority: 220,
               });
-              if (osmNextIds.has(rec.id)) continue;
               parsedOffroad.push(rec);
             }
             PoiManager.offroadPoisCache = parsedOffroad;
@@ -170,6 +319,13 @@ export class PoiManager {
         } catch (orParseErr) {
           console.warn('[PoiManager] Off-Road GeoJSON parse skipped:', orParseErr);
         }
+      }
+
+      await osmSyncPromise;
+      if (osmNextIds.size > 0 && PoiManager.offroadPoisCache.length > 0) {
+        PoiManager.offroadPoisCache = PoiManager.offroadPoisCache.filter(
+          (p) => !osmNextIds.has(p.id)
+        );
       }
     } catch (err) {
       console.warn('[PoiManager] Offline mode — loading POIs from local IndexedDB cache:', err);

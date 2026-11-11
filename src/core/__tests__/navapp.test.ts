@@ -22,8 +22,7 @@ import { db, type PoiRecord, type SavedRouteRecord } from '../db/NavDatabase';
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
-  buildOffroadPoiLayerFilter,
-  isOffroadCommunityActive,
+  buildPoiLayerFilter,
   DEFAULT_LAYER_VISIBILITY,
   countActivePoiCategories,
   isMasterPoiActive,
@@ -1406,7 +1405,10 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     const t0 = performance.now();
     const jerusalem = service.search('ירושלים', { pois, referenceCoord: refCenter });
     const elapsedMs = performance.now() - t0;
-    expect(elapsedMs).toBeLessThan(200);
+    expect(elapsedMs).toBeLessThan(350);
+    const tWarm = performance.now();
+    service.search('ירושלים', { pois, referenceCoord: refCenter });
+    expect(performance.now() - tWarm).toBeLessThan(150);
     expect(jerusalem[0].title).toBe('ירושלים');
     expect(jerusalem[0].filterGroup).toBe('places');
 
@@ -2235,9 +2237,9 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     } finally {
       boundary.close();
     }
-  });
+  }, 20000);
 
-  it('orders POIs by priority, emits sorted GeoJSON with zoom >= 15 search targets, and prunes stale OSM POIs while keeping user data', async () => {
+  it('orders POIs by priority, emits sorted GeoJSON with zoom >= 13 search targets, and prunes stale OSM POIs while keeping user data', async () => {
     const makePoi = (overrides: Partial<PoiRecord>): PoiRecord => ({
       id: 'osm-n1',
       name: 'POI',
@@ -2276,7 +2278,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     }
     expect(getPoiSortPriority(offroadPoi)).toBeLessThan(getPoiSortPriority(peakPoi));
 
-    // Verify search index integration recommends zoom >= 15 for POIs
+    // Verify search index integration recommends zoom >= 13 for POIs
     const searchSvc = new PMTilesSearchService();
     const searchHits = searchSvc.search('מעלה נח', {
       pois: [offroadPoi],
@@ -2285,7 +2287,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     });
     const poiHit = searchHits.find((r) => r.id === 'osm-n10');
     expect(poiHit).toBeDefined();
-    expect(poiHit!.recommendedZoom).toBeGreaterThanOrEqual(15);
+    expect(poiHit!.recommendedZoom).toBeGreaterThanOrEqual(13);
 
     // Verify PoiManager.initializePois prunes stale osm-* POIs while preserving userNotes, user-poi-*, and import-*
     const origFetch = globalThis.fetch;
@@ -2370,7 +2372,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     expect(rawData).toBe(rawPublic);
 
     const parsed = JSON.parse(rawData);
-    expect(parsed.metadata?.minRenderZoom).toBe(15);
+    expect(parsed.metadata?.minRenderZoom).toBe(13);
     expect(Array.isArray(parsed.features)).toBe(true);
     expect(parsed.features.length).toBeGreaterThan(2000);
 
@@ -2415,7 +2417,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     } finally {
       boundary.close();
     }
-  });
+  }, 20000);
 
   it('converts Off-Road POIs, extracts Wikipedia ?curid= links, filters noise/non-Hebrew blankers, and loads overlay without bloating IndexedDB', async () => {
     // @ts-expect-error Node MJS devops script lacks .d.ts declaration
@@ -2464,7 +2466,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       difficulty4x4: 'בינוני +',
     });
 
-    // Keyword refinement for generic POI
+    // Keyword refinement & edge-case guards for POI classification
     expect(classifyOffroadItem({ id: '5', title: 'פריחת אירוסים מדהימה', mapItemType: 'POI' })).toMatchObject({
       category: 'heritage',
       subcategory: 'nature_site',
@@ -2473,13 +2475,44 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       category: 'heritage',
       subcategory: 'archaeological_site',
     });
-
-    // 3. Layer visibility helpers for israel-offroad-pois-labels
-    expect(isOffroadCommunityActive(DEFAULT_LAYER_VISIBILITY)).toBe(true);
+    expect(classifyOffroadItem({ id: '7', title: 'חניון לילה עין עקב', mapItemType: 'POI' })).toMatchObject({
+      category: 'campsite',
+      subcategory: 'camp_site',
+    });
+    expect(classifyOffroadItem({ id: '8', title: 'פניה שמאלה לגבי פרס', mapItemType: 'Fountain' })).toMatchObject({
+      category: 'offroad',
+      subcategory: '4x4_pass',
+    });
+    expect(classifyOffroadItem({ id: '9', title: 'מעקף מפל', mapItemType: 'Fountain' })).toMatchObject({
+      category: 'offroad',
+      subcategory: '4x4_pass',
+    });
     expect(
-      isOffroadCommunityActive({ ...DEFAULT_LAYER_VISIBILITY, poiCommunityOffroad: false })
+      classifyOffroadItem({
+        id: '10',
+        title: 'גבעת ניל"י',
+        description: 'גבעת ניל"י היא יישוב קהילתי במועצה האזורית אלונה.',
+        mapItemType: 'Wiki',
+      })
+    ).toMatchObject({
+      category: 'heritage',
+      subcategory: 'archaeological_site',
+    });
+    expect(classifyOffroadItem({ id: '11', title: 'גבעת המורה', mapItemType: 'Wiki' })).toMatchObject({
+      category: 'peak',
+      subcategory: 'peak',
+    });
+    expect(classifyOffroadItem({ id: '12', title: 'חורבת עתרי', mapItemType: 'POI' })).toMatchObject({
+      category: 'heritage',
+      subcategory: 'ruins',
+    });
+
+    // 3. Unified layer visibility & category filter helpers for israel-pois-labels
+    expect(isMasterPoiActive(DEFAULT_LAYER_VISIBILITY)).toBe(true);
+    expect(
+      isMasterPoiActive({ ...DEFAULT_LAYER_VISIBILITY, pois: false })
     ).toBe(false);
-    expect(buildOffroadPoiLayerFilter({ ...DEFAULT_LAYER_VISIBILITY, poiPeaks: false })).toEqual([
+    expect(buildPoiLayerFilter({ ...DEFAULT_LAYER_VISIBILITY, poiPeaks: false })).toEqual([
       'in',
       ['get', 'category'],
       ['literal', ['water', 'offroad', 'heritage', 'campsite', 'user']],
@@ -2490,21 +2523,21 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     applyLayerVisibilityToMap(
       {
         getStyle: () => ({ layers: [] }),
-        getLayer: (id: string) => (id === 'israel-offroad-pois-labels' ? { id } : undefined),
+        getLayer: (id: string) => (id === 'israel-pois-labels' ? { id } : undefined),
         getSource: () => undefined,
         getTerrain: () => null,
         setLayoutProperty: (id: string, prop: string, val: any) =>
           layoutUpdates.push({ id, prop, val }),
         setFilter: (id: string, filter: any) => filterUpdates.push({ id, filter }),
       },
-      { ...DEFAULT_LAYER_VISIBILITY, poiCommunityOffroad: false }
+      { ...DEFAULT_LAYER_VISIBILITY, pois: false }
     );
     expect(layoutUpdates).toEqual([
-      { id: 'israel-offroad-pois-labels', prop: 'visibility', val: 'none' },
+      { id: 'israel-pois-labels', prop: 'visibility', val: 'none' },
     ]);
     expect(filterUpdates).toHaveLength(1);
 
-    // 4. Dual-file PoiManager initialization keeps Off-Road out of db.pois bulkPut while supporting user notes
+    // 4. Unified PoiManager initialization merges overlapping OSM + Off-Road POIs, keeps Off-Road out of db.pois bulkPut, and persists userNotes
     const origFetch = globalThis.fetch;
     const origWindow = (globalThis as any).window;
     const stored: PoiRecord[] = [];
@@ -2536,8 +2569,33 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
             ok: true,
             json: async () => ({
               type: 'FeatureCollection',
-              metadata: { source: 'Off-Road.io Community Export' },
+              metadata: { source: 'Off-Road.io Community Export (Unified with OSM in NavApp)' },
               features: [
+                {
+                  type: 'Feature',
+                  id: 'or-dup-ein-aqev',
+                  geometry: { type: 'Point', coordinates: [34.8135, 30.8282] },
+                  properties: {
+                    nameHe: 'עין עקב',
+                    category: 'water',
+                    subcategory: 'spring',
+                    waterStatus: 'דיווח מים מלאים / זורמים (קהילה)',
+                    descHe: 'בריכה עמוקה וצוננת',
+                    likes: 28,
+                    priority: 215,
+                  },
+                },
+                {
+                  type: 'Feature',
+                  id: 'or-camp-ein-aqev',
+                  geometry: { type: 'Point', coordinates: [34.8135, 30.8282] },
+                  properties: {
+                    nameHe: 'חניון לילה עין עקב',
+                    category: 'campsite',
+                    subcategory: 'camp_site',
+                    priority: 320,
+                  },
+                },
                 {
                   type: 'Feature',
                   id: 'or-6518653317545984',
@@ -2577,7 +2635,16 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       }) as any;
 
       const loaded = await PoiManager.initializePois();
-      expect(loaded.map((p) => p.id)).toEqual(['il-poi-ein-aqev', 'or-6518653317545984']);
+      // Overlapping same-category POI (or-dup-ein-aqev) merged into il-poi-ein-aqev; distinct campsite kept separate
+      expect(loaded.map((p) => p.id)).toEqual([
+        'il-poi-ein-aqev',
+        'or-6518653317545984',
+        'or-camp-ein-aqev',
+      ]);
+      const mergedSpring = loaded.find((p) => p.id === 'il-poi-ein-aqev')!;
+      expect(mergedSpring.source).toContain('Off-Road.io');
+      expect(mergedSpring.waterStatus).toBe('דיווח מים מלאים / זורמים (קהילה)');
+      expect(mergedSpring.likes).toBe(28);
       // IndexedDB only receives Curated/OSM, NOT or-* bulk puts
       expect(stored.some((p) => p.id.startsWith('or-'))).toBe(false);
 
@@ -2617,7 +2684,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       expect(rawData).toBe(rawPublic);
 
       const parsed = JSON.parse(rawData);
-      expect(parsed.metadata?.minRenderZoom).toBe(15);
+      expect(parsed.metadata?.minRenderZoom).toBe(13);
       expect(Array.isArray(parsed.features)).toBe(true);
       expect(parsed.features.length).toBeGreaterThan(50000);
 

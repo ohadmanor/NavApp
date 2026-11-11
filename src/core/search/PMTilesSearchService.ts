@@ -574,11 +574,13 @@ export class PMTilesSearchService {
         if (!matchesPoiFilter(poi, filter)) continue;
         let cachedNorm = this.normalizedPoiCache.get(poi);
         if (!cachedNorm) {
-          cachedNorm = {
-            nHe: normalizeSearchText(poi.nameHe || poi.name),
-            nEn: normalizeSearchText(poi.nameEn),
-            nDesc: normalizeSearchText(poi.descHe || poi.descEn || poi.subcategory),
-          };
+          const rawHe = poi.nameHe || poi.name || '';
+          const rawEn = poi.nameEn || '';
+          const rawDesc = poi.descHe || poi.descEn || '';
+          const nHe = normalizeSearchText(rawHe);
+          const nEn = !rawEn ? '' : rawEn === rawHe ? nHe : normalizeSearchText(rawEn);
+          const nDesc = rawDesc ? normalizeSearchText(rawDesc) : poi.subcategory || '';
+          cachedNorm = { nHe, nEn, nDesc };
           this.normalizedPoiCache.set(poi, cachedNorm);
         }
         const { nHe, nEn, nDesc } = cachedNorm;

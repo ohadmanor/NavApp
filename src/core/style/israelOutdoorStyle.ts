@@ -21,7 +21,6 @@ export interface OutdoorLayerVisibility {
   poiOffroad: boolean;
   poiPeaks: boolean;
   poiUser: boolean;
-  poiCommunityOffroad?: boolean;
 }
 
 export type PoiLayerKey =
@@ -59,7 +58,6 @@ export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   poiOffroad: true,
   poiPeaks: true,
   poiUser: true,
-  poiCommunityOffroad: true,
 };
 
 export function countActivePoiCategories(visibility: OutdoorLayerVisibility): number {
@@ -70,11 +68,7 @@ export function isMasterPoiActive(visibility: OutdoorLayerVisibility): boolean {
   return visibility.pois && countActivePoiCategories(visibility) > 0;
 }
 
-export function isOffroadCommunityActive(visibility: OutdoorLayerVisibility): boolean {
-  return isMasterPoiActive(visibility) && (visibility.poiCommunityOffroad ?? true);
-}
-
-export function buildOffroadPoiLayerFilter(visibility: OutdoorLayerVisibility): any {
+export function buildPoiLayerFilter(visibility: OutdoorLayerVisibility): any {
   const activeCategories: string[] = [];
   if (visibility.poiWater) activeCategories.push('water');
   if (visibility.poiOffroad) activeCategories.push('offroad');
@@ -97,7 +91,6 @@ export function enableAllPoiVisibility(
     poiCampsites: true,
     poiPeaks: true,
     poiUser: true,
-    poiCommunityOffroad: true,
   };
 }
 
@@ -1150,23 +1143,15 @@ export function applyLayerVisibilityToMap(
     }
   }
 
-  if (map.getLayer('israel-offroad-pois-labels')) {
-    map.setLayoutProperty(
-      'israel-offroad-pois-labels',
-      'visibility',
-      isOffroadCommunityActive(visibility) ? 'visible' : 'none'
-    );
-    if (typeof map.setFilter === 'function') {
-      map.setFilter('israel-offroad-pois-labels', buildOffroadPoiLayerFilter(visibility));
-    }
-  }
-
   if (map.getLayer('israel-pois-labels')) {
     map.setLayoutProperty(
       'israel-pois-labels',
       'visibility',
       isMasterPoiActive(visibility) ? 'visible' : 'none'
     );
+    if (typeof map.setFilter === 'function') {
+      map.setFilter('israel-pois-labels', buildPoiLayerFilter(visibility));
+    }
   }
 
   try {
