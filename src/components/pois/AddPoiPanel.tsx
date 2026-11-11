@@ -50,7 +50,7 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         lon: centerCoords.lon,
         lat: centerCoords.lat,
         ele,
-        descHe: descHe.trim() || 'נקודת עניין שדווחה בשטח (אופליין)',
+        descHe: descHe.trim() || 'נקודת עניין שדווחה בשטח',
       });
       onCreated(created);
     } finally {
@@ -133,7 +133,7 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
       >
         <Check className="w-4 h-4" />
-        <span>{isSaving ? 'שומר...' : 'שמור נקודה במפה (אופליין)'}</span>
+        <span>{isSaving ? 'שומר...' : 'שמור נקודה במפה'}</span>
       </button>
     </form>
   );

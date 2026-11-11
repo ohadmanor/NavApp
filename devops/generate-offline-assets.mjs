@@ -359,8 +359,12 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  // Never intercept byte-range requests to large .pmtiles files
-  if (url.pathname.endsWith('.pmtiles') || event.request.headers.get('range')) {
+  // Never intercept byte-range requests to large .pmtiles files or cross-origin requests (e.g. Google Satellite tiles)
+  if (
+    url.pathname.endsWith('.pmtiles') ||
+    event.request.headers.get('range') ||
+    url.origin !== self.location.origin
+  ) {
     return;
   }
   // Network-first for updatable lightweight data files (POIs & search index) so updates propagate without losing offline fallback

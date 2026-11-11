@@ -18,6 +18,7 @@ import {
   Play,
   Map as MapIcon,
   Navigation,
+  Satellite,
   Sun,
   Moon,
   X,
@@ -1011,6 +1012,9 @@ export const App: React.FC = () => {
             type: 'line',
             source: 'tactical-grid-src',
             filter: ['==', ['get', 'kind'], 'minor-grid'],
+            layout: {
+              visibility: showGrid ? 'visible' : 'none',
+            },
             paint: {
               'line-color': currentTheme === 'topo-dark' ? '#64748b' : 'rgb(127, 127, 127)',
               'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.5, 11, 1],
@@ -1022,6 +1026,9 @@ export const App: React.FC = () => {
             type: 'line',
             source: 'tactical-grid-src',
             filter: ['==', ['get', 'kind'], 'major-grid'],
+            layout: {
+              visibility: showGrid ? 'visible' : 'none',
+            },
             paint: {
               'line-color': currentTheme === 'topo-dark' ? '#94a3b8' : 'rgb(127, 127, 127)',
               'line-width': 1.8,
@@ -1034,6 +1041,7 @@ export const App: React.FC = () => {
             source: 'tactical-grid-src',
             filter: ['==', ['get', 'kind'], 'major-grid'],
             layout: {
+              visibility: showGrid ? 'visible' : 'none',
               'symbol-placement': 'line',
               'symbol-spacing': 380,
               'text-field': ['get', 'label'],
@@ -1071,7 +1079,11 @@ export const App: React.FC = () => {
       try {
         if (!map.getStyle()) return;
 
-        updateTacticalGridOnMap(map, currentVis.tacticalGrid, currentTheme);
+        updateTacticalGridOnMap(
+          map,
+          currentVis.tacticalGrid && !currentVis.googleSatellite,
+          currentTheme
+        );
 
         const routeHighlightColor: any = [
           'case',
@@ -2211,13 +2223,17 @@ export const App: React.FC = () => {
         }
         lastNavFollowGridTsRef.current = perfNow;
       }
-      updateTacticalGridOnMap(map, visibility.tacticalGrid, theme);
+      updateTacticalGridOnMap(
+        map,
+        visibility.tacticalGrid && !visibility.googleSatellite,
+        theme
+      );
     };
     map.on('moveend', onMoveEnd);
     return () => {
       map.off('moveend', onMoveEnd);
     };
-  }, [isMapReady, visibility.tacticalGrid, theme, updateTacticalGridOnMap]);
+  }, [isMapReady, visibility.tacticalGrid, visibility.googleSatellite, theme, updateTacticalGridOnMap]);
 
   // Effect A: Rebuild style only when theme or PMTiles archive URL changes
   useEffect(() => {
@@ -4036,12 +4052,16 @@ export const App: React.FC = () => {
               >
                 <div
                   className={`absolute inset-0 flex items-center justify-center ${
-                    theme === 'topo-day'
-                      ? 'bg-gradient-to-br from-[#f4efe2] via-amber-200/70 to-emerald-200 text-amber-950'
-                      : 'bg-gradient-to-br from-slate-900 via-slate-800 to-sky-950 text-sky-300'
+                    visibility.googleSatellite
+                      ? 'bg-gradient-to-br from-slate-900 via-emerald-950 to-sky-900 text-sky-300'
+                      : theme === 'topo-day'
+                        ? 'bg-gradient-to-br from-[#f4efe2] via-amber-200/70 to-emerald-200 text-amber-950'
+                        : 'bg-gradient-to-br from-slate-900 via-slate-800 to-sky-950 text-sky-300'
                   }`}
                 >
-                  {theme === 'topo-day' ? (
+                  {visibility.googleSatellite ? (
+                    <Satellite className="w-5 h-5" />
+                  ) : theme === 'topo-day' ? (
                     <Sun className="w-5 h-5" />
                   ) : (
                     <Moon className="w-5 h-5" />

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Sun, Moon, Mountain, ChevronDown, X } from 'lucide-react';
+import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X } from 'lucide-react';
 import {
   countActivePoiCategories,
   enableAllPoiVisibility,
@@ -45,16 +45,21 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     });
   };
 
-  const terrainToggles: Array<{ key: keyof OutdoorLayerVisibility; label: string; badge: string }> = [
-    { key: 'contours', label: 'קווי גובה כל 10 מ׳ + ראשיים 50 מ׳', badge: 'DEM' },
-    { key: 'tacticalGrid', label: 'רשת קואורדינטות (ITM / UTM)', badge: 'Grid' },
-    { key: 'hillshade', label: 'הצללת תבליט הרים (Hillshade)', badge: 'Relief' },
-    { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing' },
-    { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (1-5)', badge: '4x4' },
-    { key: 'hikingTrails', label: 'שבילים מסומנים ונתיבי הליכה', badge: 'Trails' },
-    { key: 'cycleways', label: 'שבילי אופניים', badge: 'Cycle' },
-    { key: 'natureParks', label: 'גבולות שמורות טבע וגנים', badge: 'Parks' },
-    { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard' },
+  const terrainToggles: Array<{
+    key: keyof OutdoorLayerVisibility;
+    label: string;
+    badge: string;
+    hiddenOnSatellite: boolean;
+  }> = [
+    { key: 'contours', label: 'קווי גובה כל 10 מ׳ + ראשיים 50 מ׳', badge: 'DEM', hiddenOnSatellite: true },
+    { key: 'tacticalGrid', label: 'רשת קואורדינטות (ITM / UTM)', badge: 'Grid', hiddenOnSatellite: true },
+    { key: 'hillshade', label: 'הצללת תבליט הרים (Hillshade)', badge: 'Relief', hiddenOnSatellite: true },
+    { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing', hiddenOnSatellite: true },
+    { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (1-5)', badge: '4x4', hiddenOnSatellite: false },
+    { key: 'hikingTrails', label: 'שבילים מסומנים ונתיבי הליכה', badge: 'Trails', hiddenOnSatellite: false },
+    { key: 'cycleways', label: 'שבילי אופניים', badge: 'Cycle', hiddenOnSatellite: false },
+    { key: 'natureParks', label: 'גבולות שמורות טבע וגנים', badge: 'Parks', hiddenOnSatellite: true },
+    { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard', hiddenOnSatellite: true },
   ];
 
   const poiToggles: Array<{ key: PoiLayerKey; label: string; activeCls: string }> = [
@@ -134,17 +139,67 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
       {/* Navigation & Terrain Toggle Switches */}
       <div className="space-y-1.5">
         <div className={`text-xs font-bold ${t.muted}`}>שכבות ניווט ושטח</div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={visibility.googleSatellite}
+          onClick={() => toggle('googleSatellite')}
+          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
+            visibility.googleSatellite
+              ? 'border-sky-500 bg-sky-500/15'
+              : t.subCard
+          }`}
+        >
+          <span className="flex items-center gap-2 min-w-0 text-right">
+            <Satellite
+              className={`w-4 h-4 shrink-0 ${
+                visibility.googleSatellite ? 'text-sky-500' : t.muted
+              }`}
+            />
+            <span className="min-w-0">
+              <span className="font-bold block truncate">תצלום לוויין (Google Satellite)</span>
+              <span className={`text-[11px] block leading-tight ${t.muted}`}>
+                {visibility.googleSatellite
+                  ? 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) — שאר השכבות מוסתרות'
+                  : 'מוסיף תצלום לוויין ומציג דרכים, שבילים ונקודות עניין (POI) בלבד'}
+              </span>
+            </span>
+          </span>
+          <span className="flex items-center gap-2 shrink-0">
+            <span
+              className={`font-mono text-xs ${
+                visibility.googleSatellite ? 'text-sky-500 font-bold' : t.muted
+              }`}
+            >
+              SAT
+            </span>
+            <span
+              className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+                visibility.googleSatellite ? 'bg-sky-600 justify-start' : 'bg-slate-400/40 justify-end'
+              }`}
+            >
+              <span className="w-4 h-4 rounded-full bg-white shadow" />
+            </span>
+          </span>
+        </button>
+
         {terrainToggles.map((item) => {
           const isOn = visibility[item.key];
+          const isHiddenBySatellite = visibility.googleSatellite && item.hiddenOnSatellite;
           return (
             <button
               key={item.key}
               type="button"
               onClick={() => toggle(item.key)}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs transition-colors ${t.subCard}`}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs transition-colors ${t.subCard} ${
+                isHiddenBySatellite ? 'opacity-50' : ''
+              }`}
             >
               <span className="text-right font-medium">{item.label}</span>
               <span className="flex items-center gap-2 shrink-0">
+                {isHiddenBySatellite && (
+                  <span className={`text-[10px] ${t.muted}`}>מוסתר בלוויין</span>
+                )}
                 <span className={`font-mono text-xs ${t.muted}`}>{item.badge}</span>
                 <span
                   className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
@@ -161,7 +216,9 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
 
       {/* Master POI Layer Switch + Category Sub-Toggles */}
       <div className={`space-y-2 pt-2 border-t ${t.divider}`}>
-        <div className={`text-xs font-bold ${t.muted}`}>נקודות עניין במפה (POI)</div>
+        <div className="flex items-center justify-between">
+          <div className={`text-xs font-bold ${t.muted}`}>נקודות עניין במפה (POI)</div>
+        </div>
         <div className={`rounded-xl border overflow-hidden ${t.subCard}`}>
           <div className="flex items-center justify-between px-3 py-2 text-xs gap-2">
             <button

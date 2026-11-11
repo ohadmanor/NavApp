@@ -4,6 +4,7 @@ import { REMOTE_DATA_ORIGIN } from '../dataUrls';
 import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
 
 export interface OutdoorLayerVisibility {
+  googleSatellite: boolean;
   hillshade: boolean;
   terrain3d: boolean;
   contours: boolean;
@@ -40,7 +41,13 @@ export const POI_LAYER_KEYS: PoiLayerKey[] = [
   'poiUser',
 ];
 
+export const GOOGLE_SATELLITE_SOURCE_ID = 'google-satellite';
+export const GOOGLE_SATELLITE_LAYER_ID = 'google-satellite-layer';
+export const GOOGLE_SATELLITE_TILE_URL =
+  'https://mt0.google.com/vt/lyrs=s&hl=en&src=app&x={x}&y={y}&z={z}&s=Gal';
+
 export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
+  googleSatellite: false,
   hillshade: true,
   terrain3d: false,
   contours: true,
@@ -358,6 +365,61 @@ function buildTrackCasingColorExpr(allowSpniOnTracks: boolean): any {
 const rawLayerById = new Map<string, any>(
   (navappLayersRaw as any[]).map((l) => [l.id, l])
 );
+
+export const NON_HIGHWAY_TRANSPORTATION_LAYER_IDS = new Set<string>([
+  'area-pier',
+  'casing-pier',
+  'layer-1-rail-casing',
+  'layer-1-rail-dash-tunnel',
+  'rail-casing',
+  'rail-dash',
+  'layer1-box-rail',
+  'layer1-rail-casing',
+  'layer1-rail-dash',
+  'layer2-box-rail',
+  'layer2-rail-casing',
+  'layer2-rail-dash',
+  'cable_car',
+  'goods_conveyor-bridge',
+  'goods_conveyor',
+  'goods_conveyor-dash',
+]);
+
+export const HIGHWAY_LAYER_IDS = new Set<string>([
+  'trail-israel-lowzoom',
+  ...(navappLayersRaw as any[])
+    .filter(
+      (l) =>
+        (l['source-layer'] === 'transportation' ||
+          l['source-layer'] === 'transportation_name') &&
+        !NON_HIGHWAY_TRANSPORTATION_LAYER_IDS.has(l.id)
+    )
+    .map((l) => l.id as string),
+]);
+
+export const POI_STYLE_LAYER_IDS = new Set<string>(
+  (navappLayersRaw as any[])
+    .filter(
+      (l) =>
+        l['source-layer'] === 'poi' ||
+        l['source-layer'] === 'mountain_peak'
+    )
+    .map((l) => l.id as string)
+);
+
+const IHM_STYLE_LAYER_IDS = new Set<string>([
+  ...rawLayerById.keys(),
+  'trail-israel-lowzoom',
+  GOOGLE_SATELLITE_LAYER_ID,
+]);
+
+export function isHighwayStyleLayerId(layerId: string): boolean {
+  return HIGHWAY_LAYER_IDS.has(layerId);
+}
+
+export function isPoiStyleLayerId(layerId: string): boolean {
+  return POI_STYLE_LAYER_IDS.has(layerId);
+}
 
 const PATH_REGULAR_LAYER_IDS = new Set([
   'path-path',
@@ -827,6 +889,22 @@ function getVisibilityForIhmLayer(
   layerId: string,
   visibility: OutdoorLayerVisibility
 ): boolean | null {
+  if (layerId === GOOGLE_SATELLITE_LAYER_ID) {
+    return visibility.googleSatellite;
+  }
+
+  if (!IHM_STYLE_LAYER_IDS.has(layerId)) {
+    return null;
+  }
+
+  if (
+    visibility.googleSatellite &&
+    !HIGHWAY_LAYER_IDS.has(layerId) &&
+    !POI_STYLE_LAYER_IDS.has(layerId)
+  ) {
+    return false;
+  }
+
   if (layerId === 'Terrain') return visibility.hillshade;
   if (layerId.startsWith('contour-')) return visibility.contours;
   // Military boundary outline stays drawn in default red dashed; only red area fill toggles
@@ -925,7 +1003,7 @@ function getVisibilityForIhmLayer(
   if (layerId.startsWith('barrier-') || layerId.startsWith('power-')) {
     return visibility.fuelAndFlood;
   }
-  return null;
+  return true;
 }
 
 /**
@@ -957,6 +1035,13 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
   const effectiveDemUrl = demProtocolUrl || defaultDemUrl;
 
   const sources: StyleSpecification['sources'] = {
+    [GOOGLE_SATELLITE_SOURCE_ID]: {
+      type: 'raster',
+      tiles: [GOOGLE_SATELLITE_TILE_URL],
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: 20,
+    },
     'israel-osm': {
       type: 'vector',
       url: effectiveOsmUrl,
@@ -1029,11 +1114,27 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       if (isDark) {
         layer.paint = { 'background-color': '#0b1015' };
       }
+      const bgVis = getVisibilityForIhmLayer(layer.id, visibility);
+      if (bgVis !== null) {
+        layer.layout = {
+          ...(layer.layout || {}),
+          visibility: bgVis ? 'visible' : 'none',
+        } as any;
+      }
       layers.push(layer);
+      layers.push({
+        id: GOOGLE_SATELLITE_LAYER_ID,
+        type: 'raster',
+        source: GOOGLE_SATELLITE_SOURCE_ID,
+        layout: {
+          visibility: visibility.googleSatellite ? 'visible' : 'none',
+        },
+      });
       continue;
     }
 
     if (layer.id === 'trail-israel-secondary-' && SHVIL_ISRAEL_LOWZOOM_LINES.length > 0) {
+      const lowzoomVis = getVisibilityForIhmLayer('trail-israel-lowzoom', visibility);
       layers.push({
         id: 'trail-israel-lowzoom',
         type: 'line',
@@ -1043,7 +1144,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
-          visibility: visibility.hikingTrails ? 'visible' : 'none',
+          visibility: lowzoomVis !== false ? 'visible' : 'none',
         },
         paint: {
           'line-color': '#FFC264',
@@ -1133,12 +1234,13 @@ export function applyLayerVisibilityToMap(
     }
   }
 
+  const showTacticalGrid = visibility.tacticalGrid && !visibility.googleSatellite;
   for (const gridLayerId of ['tactical-grid-minor', 'tactical-grid-major', 'tactical-grid-labels']) {
     if (map.getLayer(gridLayerId)) {
       map.setLayoutProperty(
         gridLayerId,
         'visibility',
-        visibility.tacticalGrid ? 'visible' : 'none'
+        showTacticalGrid ? 'visible' : 'none'
       );
     }
   }

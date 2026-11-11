@@ -24,6 +24,14 @@ import {
   applyLayerVisibilityToMap,
   buildPoiLayerFilter,
   DEFAULT_LAYER_VISIBILITY,
+  GOOGLE_SATELLITE_LAYER_ID,
+  GOOGLE_SATELLITE_SOURCE_ID,
+  GOOGLE_SATELLITE_TILE_URL,
+  HIGHWAY_LAYER_IDS,
+  NON_HIGHWAY_TRANSPORTATION_LAYER_IDS,
+  POI_STYLE_LAYER_IDS,
+  isHighwayStyleLayerId,
+  isPoiStyleLayerId,
   countActivePoiCategories,
   isMasterPoiActive,
   toggleMasterPoiVisibility,
@@ -1193,6 +1201,233 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
       expect(Array.isArray(layer?.paint?.['line-dasharray'])).toBe(true);
       expect(layer.paint['line-dasharray'].length).toBeGreaterThanOrEqual(2);
       expect(layer?.layout?.['line-cap']).toBe('butt');
+    }
+  });
+
+  it('adds Google Satellite layer (default OFF) and draws highway and POI objects on top while hiding everything else when ON', () => {
+    const styleSpec = createRequire(import.meta.url)('@maplibre/maplibre-gl-style-spec');
+
+    // 1. Default visibility is OFF
+    expect(DEFAULT_LAYER_VISIBILITY.googleSatellite).toBe(false);
+
+    const defaultStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    });
+
+    const satSource = defaultStyle.sources[GOOGLE_SATELLITE_SOURCE_ID] as any;
+    expect(satSource).toBeDefined();
+    expect(satSource.type).toBe('raster');
+    expect(satSource.tiles).toEqual([GOOGLE_SATELLITE_TILE_URL]);
+    expect(satSource.tiles[0]).toBe(
+      'https://mt0.google.com/vt/lyrs=s&hl=en&src=app&x={x}&y={y}&z={z}&s=Gal'
+    );
+    expect(satSource.tileSize).toBe(256);
+
+    const defaultSatIdx = defaultStyle.layers.findIndex((l) => l.id === GOOGLE_SATELLITE_LAYER_ID);
+    const defaultBgIdx = defaultStyle.layers.findIndex((l) => l.id === 'background');
+    expect(defaultSatIdx).toBe(defaultBgIdx + 1);
+    expect((defaultStyle.layers[defaultSatIdx] as any).layout?.visibility).toBe('none');
+    expect(
+      (defaultStyle.layers.find((l) => l.id === 'area-residential') as any)?.layout?.visibility
+    ).toBe('visible');
+    expect((defaultStyle.layers.find((l) => l.id === 'Terrain') as any)?.layout?.visibility).toBe(
+      'visible'
+    );
+
+    // 2. When googleSatellite is ON: valid v8 style, satellite visible below all highways & POIs, everything else hidden
+    for (const theme of ['topo-day', 'topo-dark'] as const) {
+      const satStyle = buildIsraelOutdoorStyle({
+        osmProtocolUrl: 'pmtiles://israel-osm',
+        demProtocolUrl: 'pmtiles://israel-dem',
+        contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+        visibility: { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true, cycleways: true, terrain3d: true },
+        theme,
+      });
+
+      expect(styleSpec.validateStyleMin(satStyle)).toEqual([]);
+
+      const satLayerIdx = satStyle.layers.findIndex((l) => l.id === GOOGLE_SATELLITE_LAYER_ID);
+      expect(satLayerIdx).toBeGreaterThanOrEqual(1);
+      expect((satStyle.layers[satLayerIdx] as any).layout?.visibility).toBe('visible');
+
+      for (let i = 0; i < satStyle.layers.length; i++) {
+        const layer = satStyle.layers[i] as any;
+        if (layer.id === GOOGLE_SATELLITE_LAYER_ID) continue;
+
+        if (isHighwayStyleLayerId(layer.id) || isPoiStyleLayerId(layer.id)) {
+          expect(layer.layout?.visibility, `Expected highway/POI ${layer.id} visible`).toBe('visible');
+          expect(i, `Expected highway/POI ${layer.id} above satellite`).toBeGreaterThan(satLayerIdx);
+        } else {
+          expect(layer.layout?.visibility, `Expected non-highway/non-POI ${layer.id} hidden`).toBe(
+            'none'
+          );
+        }
+      }
+
+      for (const nonHwyTransId of NON_HIGHWAY_TRANSPORTATION_LAYER_IDS) {
+        const nonHwyLayer = satStyle.layers.find((l) => l.id === nonHwyTransId) as any;
+        expect(nonHwyLayer?.layout?.visibility, `Expected ${nonHwyTransId} hidden`).toBe('none');
+      }
+      expect(HIGHWAY_LAYER_IDS.size).toBeGreaterThanOrEqual(160);
+      expect(POI_STYLE_LAYER_IDS.size).toBe(23);
+    }
+
+    // Verify POI category and master switches continue filtering POIs when satellite is ON
+    const satNoPeaksStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true, poiPeaks: false },
+      theme: 'topo-day',
+    });
+    expect(
+      (satNoPeaksStyle.layers.find((l) => l.id === 'name-peak') as any)?.layout?.visibility
+    ).toBe('none');
+    expect(
+      (satNoPeaksStyle.layers.find((l) => l.id === 'name-water-point') as any)?.layout?.visibility
+    ).toBe('visible');
+
+    // Also verify default cycleways=false on satellite still draws base cycleway geometries while hiding purple overlay
+    const satDefaultCycleStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true },
+      theme: 'topo-day',
+    });
+    expect(
+      (satDefaultCycleStyle.layers.find((l) => l.id === 'path-cycleway') as any)?.layout?.visibility
+    ).toBe('visible');
+    expect(
+      (satDefaultCycleStyle.layers.find((l) => l.id === 'trail-line-cycleway-purple') as any)
+        ?.layout?.visibility
+    ).toBe('none');
+
+    // 3. In-place toggle ON -> OFF via applyLayerVisibilityToMap keeps highways & POIs visible on satellite, hides rest & grid, never hides user nav routes
+    const testLayerIds = [
+      'background',
+      GOOGLE_SATELLITE_LAYER_ID,
+      'Terrain',
+      'contour-line',
+      'area-residential',
+      'water-area',
+      'building',
+      'place-city',
+      'rail-dash',
+      'road-primary',
+      'road-minor',
+      'casing-primary',
+      'track-right',
+      'path-path',
+      'shield-primary',
+      'name-primary',
+      'name-peak',
+      'name-water-point',
+      'icon-viewpoint',
+      'icon-camp_site',
+      'tactical-grid-minor',
+      'tactical-grid-major',
+      'tactical-grid-labels',
+      'israel-pois-labels',
+      'active-route-line',
+      'saved-routes-line',
+    ];
+    const currentVisState = new Map<string, string>();
+    const appliedFilters: any[] = [];
+    const mockMap = {
+      getStyle: () => ({ layers: testLayerIds.map((id) => ({ id })) }),
+      getLayer: (id: string) => (testLayerIds.includes(id) ? { id } : undefined),
+      getSource: () => undefined,
+      getTerrain: () => null,
+      setTerrain: () => {},
+      setLayoutProperty: (id: string, prop: string, val: string) => {
+        if (prop === 'visibility') currentVisState.set(id, val);
+      },
+      setFilter: (_id: string, filter: any) => {
+        appliedFilters.push(filter);
+      },
+    };
+
+    applyLayerVisibilityToMap(mockMap, { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true });
+    expect(currentVisState.get(GOOGLE_SATELLITE_LAYER_ID)).toBe('visible');
+    for (const onSatId of [
+      'road-primary',
+      'road-minor',
+      'casing-primary',
+      'track-right',
+      'path-path',
+      'shield-primary',
+      'name-primary',
+      'name-peak',
+      'name-water-point',
+      'icon-viewpoint',
+      'icon-camp_site',
+      'israel-pois-labels',
+    ]) {
+      expect(currentVisState.get(onSatId), `Expected ${onSatId} visible on satellite`).toBe('visible');
+    }
+    for (const hiddenId of [
+      'background',
+      'Terrain',
+      'contour-line',
+      'area-residential',
+      'water-area',
+      'building',
+      'place-city',
+      'rail-dash',
+      'tactical-grid-minor',
+      'tactical-grid-major',
+      'tactical-grid-labels',
+    ]) {
+      expect(currentVisState.get(hiddenId), `Expected ${hiddenId} hidden on satellite`).toBe('none');
+    }
+    expect(appliedFilters.length).toBeGreaterThan(0);
+    expect(currentVisState.has('active-route-line')).toBe(false);
+    expect(currentVisState.has('saved-routes-line')).toBe(false);
+
+    // Disabling POIs while Satellite is ON hides POIs on the ortho map without hiding highways
+    currentVisState.clear();
+    applyLayerVisibilityToMap(mockMap, {
+      ...DEFAULT_LAYER_VISIBILITY,
+      googleSatellite: true,
+      pois: false,
+    });
+    expect(currentVisState.get('road-primary')).toBe('visible');
+    expect(currentVisState.get('name-peak')).toBe('none');
+    expect(currentVisState.get('name-water-point')).toBe('none');
+    expect(currentVisState.get('icon-viewpoint')).toBe('none');
+    expect(currentVisState.get('icon-camp_site')).toBe('none');
+    expect(currentVisState.get('israel-pois-labels')).toBe('none');
+
+    // Toggling Satellite back OFF restores all non-highway layers, tactical grid, and POIs
+    currentVisState.clear();
+    applyLayerVisibilityToMap(mockMap, DEFAULT_LAYER_VISIBILITY);
+    expect(currentVisState.get(GOOGLE_SATELLITE_LAYER_ID)).toBe('none');
+    for (const restoredId of [
+      'background',
+      'Terrain',
+      'contour-line',
+      'area-residential',
+      'water-area',
+      'building',
+      'place-city',
+      'rail-dash',
+      'name-peak',
+      'name-water-point',
+      'icon-viewpoint',
+      'icon-camp_site',
+      'tactical-grid-minor',
+      'tactical-grid-major',
+      'tactical-grid-labels',
+      'israel-pois-labels',
+    ]) {
+      expect(currentVisState.get(restoredId), `Expected ${restoredId} restored when satellite OFF`).toBe(
+        'visible'
+      );
     }
   });
 
