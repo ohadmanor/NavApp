@@ -29,15 +29,19 @@ function makeFix(
   lat: number,
   opts?: Partial<Omit<LiveGpsFix, 'lon' | 'lat'>>
 ): LiveGpsFix {
-  return {
+  const fix: LiveGpsFix = {
     lon,
     lat,
-    accuracy: opts?.accuracy ?? 6,
-    altitude: opts?.altitude ?? 400,
-    heading: opts?.heading ?? 0,
-    speed: opts?.speed ?? 0,
+    accuracy: opts && 'accuracy' in opts ? (opts.accuracy ?? null) : 6,
+    altitude: opts && 'altitude' in opts ? (opts.altitude ?? null) : 400,
+    heading: opts && 'heading' in opts ? (opts.heading ?? null) : 0,
+    speed: opts && 'speed' in opts ? (opts.speed ?? null) : 0,
     timestamp: opts?.timestamp ?? 1_700_000_000_000,
   };
+  if (opts && 'fixAgeMs' in opts && opts.fixAgeMs !== undefined) {
+    fix.fixAgeMs = opts.fixAgeMs;
+  }
+  return fix;
 }
 
 class LocalFilePMTilesSource implements Source {
@@ -623,6 +627,330 @@ describe('GpsNavigationSmoother (Kalman + 60fps Prediction + Map-Matching)', () 
       // Kalman coordinate remains un-snapped (~9m off road), while display coordinate pulled cleanly onto road
       const dispFromRaw = haversineMeters(frame.kalmanLon, frame.kalmanLat, frame.lon, frame.lat);
       expect(dispFromRaw).toBeGreaterThan(4);
+    } finally {
+      src.close();
+    }
+  });
+
+  it('progresses continuously across tile seams and split ways sharing featureId at > 100 km/h (30 m/s)', async () => {
+    const baseLon = 34.91;
+    const baseLat = 31.90;
+    const [, lat150] = metersToGeoDelta(baseLat, 0, 150);
+    const [, lat350] = metersToGeoDelta(baseLat, 0, 350);
+
+    // Two clipped segments carrying the exact same OSM featureId (highway split within/across tiles)
+    const graphSpy = vi.spyOn(TileRoadGraphBuilder.prototype, 'getDecodedTileWays').mockResolvedValue([
+      {
+        featureId: '27326071',
+        props: { class: 'motorway', oneway: 1, name: 'כביש 6' },
+        layer: 0,
+        points: [
+          { gx: 0, gy: 0, lon: baseLon, lat: baseLat, isClipped: false },
+          { gx: 0, gy: 1, lon: baseLon, lat: baseLat + lat150, isClipped: true },
+        ],
+      },
+      {
+        featureId: '27326071',
+        props: { class: 'motorway', oneway: 1, name: 'כביש 6' },
+        layer: 0,
+        points: [
+          { gx: 0, gy: 2, lon: baseLon, lat: baseLat + lat150, isClipped: true },
+          { gx: 0, gy: 3, lon: baseLon, lat: baseLat + lat350, isClipped: false },
+        ],
+      },
+    ]);
+
+    try {
+      const smoother = new GpsNavigationSmoother({
+        enableRoadNetworkMatching: true,
+        planningMode: '4x4',
+      });
+      await smoother.getRoadNetworkCache().ensureNear(baseLon, baseLat);
+
+      const baseTs = 1_700_000_000_000;
+      const frames: Array<{ lat: number; lon: number }> = [];
+
+      // Drive 0m -> 300m at 30 m/s (108 km/h), stepping at 60fps across the 150m piece boundary
+      for (let sec = 0; sec <= 9; sec++) {
+        const [, dy] = metersToGeoDelta(baseLat, 0, sec * 30);
+        const res = smoother.ingestFix(
+          makeFix(baseLon, baseLat + dy, {
+            speed: 30,
+            heading: 0,
+            accuracy: 6,
+            timestamp: baseTs + sec * 1000,
+          }),
+          sec * 1000
+        );
+        expect(res.accepted).toBe(true);
+
+        if (sec < 9) {
+          for (let ms = 16; ms < 1000; ms += 16) {
+            const f = smoother.step(sec * 1000 + ms)!;
+            frames.push({ lon: f.lon, lat: f.lat });
+          }
+        }
+      }
+
+      expect(frames.length).toBeGreaterThan(500);
+      for (let i = 1; i < frames.length; i++) {
+        const stepMeters = haversineMeters(
+          frames[i - 1].lon,
+          frames[i - 1].lat,
+          frames[i].lon,
+          frames[i].lat
+        );
+        // Must NEVER stall (0m) or snap backwards across the 150m split boundary
+        expect(frames[i].lat).toBeGreaterThanOrEqual(frames[i - 1].lat);
+        expect(stepMeters).toBeGreaterThan(0.2);
+        expect(stepMeters).toBeLessThan(1.2);
+      }
+      const endMeters = haversineMeters(
+        baseLon,
+        baseLat,
+        frames[frames.length - 1].lon,
+        frames[frames.length - 1].lat
+      );
+      expect(endMeters).toBeGreaterThan(260);
+    } finally {
+      graphSpy.mockRestore();
+    }
+  });
+
+  it('releases endpoint hysteresis cleanly at sequential way joints (W1 -> W2 curve) and ignores opposite one-way lanes', async () => {
+    const baseLon = 34.81;
+    const baseLat = 32.07;
+    const [, lat100] = metersToGeoDelta(baseLat, 0, 100);
+    const [east140, north140] = metersToGeoDelta(baseLat, 140, 140);
+    const [oppLonOff, oppLat300] = metersToGeoDelta(baseLat, 20, 300);
+
+    const graphSpy = vi.spyOn(TileRoadGraphBuilder.prototype, 'getDecodedTileWays').mockResolvedValue([
+      {
+        featureId: 'w1-northbound',
+        props: { class: 'motorway', oneway: 1, name: 'איילון צפון 1' },
+        layer: 0,
+        points: [
+          { gx: 0, gy: 0, lon: baseLon, lat: baseLat, isClipped: false },
+          { gx: 0, gy: 1, lon: baseLon, lat: baseLat + lat100, isClipped: false },
+        ],
+      },
+      {
+        featureId: 'w2-curve-ne',
+        props: { class: 'motorway', oneway: 1, name: 'איילון צפון 2' },
+        layer: 0,
+        points: [
+          { gx: 0, gy: 1, lon: baseLon, lat: baseLat + lat100, isClipped: false },
+          {
+            gx: 1,
+            gy: 2,
+            lon: baseLon + east140,
+            lat: baseLat + lat100 + north140,
+            isClipped: false,
+          },
+        ],
+      },
+      {
+        featureId: 'w-opposite-southbound',
+        props: { class: 'motorway', oneway: 1, name: 'איילון דרום' },
+        layer: 0,
+        points: [
+          { gx: 2, gy: 3, lon: baseLon + oppLonOff, lat: baseLat + oppLat300, isClipped: false },
+          { gx: 2, gy: 0, lon: baseLon + oppLonOff, lat: baseLat, isClipped: false },
+        ],
+      },
+    ]);
+
+    try {
+      const smoother = new GpsNavigationSmoother({
+        enableRoadNetworkMatching: true,
+        sameWayHysteresisMeters: 12,
+        planningMode: '4x4',
+      });
+      await smoother.getRoadNetworkCache().ensureNear(baseLon, baseLat);
+
+      // Drive North on W1 (25 m/s = 90 km/h) with slight East GPS drift (+11m -> closer to southbound lane!)
+      for (let s = 0; s <= 3; s++) {
+        const [dLon, dLat] = metersToGeoDelta(baseLat, 11, s * 25);
+        smoother.ingestFix(
+          makeFix(baseLon + dLon, baseLat + dLat, {
+            speed: 25,
+            heading: 0,
+            accuracy: 7,
+            timestamp: s * 1000,
+          }),
+          s * 1000
+        );
+      }
+      const northFrame = smoother.step(3100)!;
+      expect(northFrame.matchedRoadLabel).not.toBeNull();
+      // Even at 11m East (9m from opposing southbound vs 11m from northbound), one-way check rejects southbound!
+      expect(northFrame.lon).toBeLessThan(baseLon + oppLonOff * 0.45);
+
+      // Cross the joint y=100m onto curving NE leg W2 (45° heading, 25 m/s)
+      const [neDx, neDy] = metersToGeoDelta(baseLat, 45 / Math.SQRT2, 100 + 45 / Math.SQRT2);
+      smoother.ingestFix(
+        makeFix(baseLon + neDx, baseLat + neDy, {
+          speed: 25,
+          heading: 45,
+          accuracy: 6,
+          timestamp: 4000,
+        }),
+        4000
+      );
+
+      let curveFrame = smoother.step(4016)!;
+      for (let t = 4032; t <= 4700; t += 16) {
+        curveFrame = smoother.step(t)!;
+      }
+      // Must smoothly follow the NE curve of W2 instead of being dragged along W1's straight North tangent
+      expect(curveFrame.isSnapped).toBe(true);
+      expect(curveFrame.lon).toBeGreaterThan(baseLon + oppLonOff * 0.8);
+      expect(curveFrame.headingDeg!).toBeGreaterThan(20);
+    } finally {
+      graphSpy.mockRestore();
+    }
+  });
+
+  it('handles bursted Android GPS delivery, fixAgeMs compensation, and dropped frames at > 100 km/h', () => {
+    const smoother = new GpsNavigationSmoother({ enableRoadNetworkMatching: false });
+    const baseLon = 34.8134;
+    const baseLat = 30.8281;
+    const baseTs = 1_700_000_000_000;
+
+    // 1. Seed fix at t=0, fixAgeMs=400 -> predicts 0.4s * 30 = +12m ahead immediately!
+    const seedRes = smoother.ingestFix(
+      makeFix(baseLon, baseLat, {
+        speed: 30,
+        heading: 0,
+        accuracy: 6,
+        timestamp: baseTs,
+        fixAgeMs: 400,
+      }),
+      1000
+    );
+    expect(seedRes.accepted).toBe(true);
+    const seedFrame = smoother.getLatestFrame()!;
+    const leadMeters = haversineMeters(baseLon, baseLat, seedFrame.lon, seedFrame.lat);
+    expect(leadMeters).toBeGreaterThan(10);
+    expect(leadMeters).toBeLessThan(14);
+
+    // 2. Bursted delivery after 3s stall: fixes for t=2s (+60m), t=3s (+90m), t=4s (+120m) arrive 8ms apart
+    const [, dy2] = metersToGeoDelta(baseLat, 0, 60);
+    const [, dy3] = metersToGeoDelta(baseLat, 0, 90);
+    const [, dy4] = metersToGeoDelta(baseLat, 0, 120);
+
+    const b1 = smoother.ingestFix(
+      makeFix(baseLon, baseLat + dy2, { speed: 30, heading: 0, timestamp: baseTs + 2000 }),
+      5000
+    );
+    const b2 = smoother.ingestFix(
+      makeFix(baseLon, baseLat + dy3, { speed: 30, heading: 0, timestamp: baseTs + 3000 }),
+      5008
+    );
+    const b3 = smoother.ingestFix(
+      makeFix(baseLon, baseLat + dy4, { speed: 30, heading: 0, timestamp: baseTs + 4000 }),
+      5016
+    );
+    expect(b1.accepted).toBe(true);
+    expect(b2.accepted).toBe(true);
+    expect(b3.accepted).toBe(true);
+    expect(b3.speedMps).toBeGreaterThan(26);
+    expect(haversineMeters(baseLon, baseLat + dy4, b3.kalmanLon, b3.kalmanLat)).toBeLessThan(6);
+
+    // Display smoothly converges onto burst-updated Kalman state without teleporting or going backwards
+    let prevDist = haversineMeters(baseLon, baseLat, smoother.getLatestFrame()!.lon, smoother.getLatestFrame()!.lat);
+    let settledFrame = smoother.getLatestFrame()!;
+    for (let t = 5032; t <= 5896; t += 16) {
+      settledFrame = smoother.step(t)!;
+      const dist = haversineMeters(baseLon, baseLat, settledFrame.lon, settledFrame.lat);
+      expect(dist).toBeGreaterThanOrEqual(prevDist - 0.01);
+      prevDist = dist;
+    }
+    const kalmanAtSettled = haversineMeters(baseLon, baseLat, settledFrame.kalmanLon, settledFrame.kalmanLat);
+    expect(Math.abs(prevDist - kalmanAtSettled)).toBeLessThan(2.0);
+
+    // 3. Dropped frame (250ms gap at 30 m/s): must advance full ~7.5m via bounded feedforward without lagging behind pred
+    const fDrop = smoother.step(6146)!;
+    const kalmanAtDrop = haversineMeters(baseLon, baseLat, fDrop.kalmanLon, fDrop.kalmanLat);
+    const actualDist = haversineMeters(baseLon, baseLat, fDrop.lon, fDrop.lat);
+    expect(actualDist - prevDist).toBeGreaterThan(6.5);
+    expect(Math.abs(actualDist - kalmanAtDrop)).toBeLessThan(1.5);
+  });
+
+  it('derives accurate velocity and dead-reckoning when speed and heading are omitted at 72 km/h', () => {
+    const smoother = new GpsNavigationSmoother({ enableRoadNetworkMatching: false });
+    const baseLon = 34.8134;
+    const baseLat = 30.8281;
+    const baseTs = 1_700_000_000_000;
+
+    for (let sec = 0; sec <= 3; sec++) {
+      const [dx, dy] = metersToGeoDelta(baseLat, sec * 12, sec * 16); // hypot(12, 16) = 20 m/s
+      const res = smoother.ingestFix(
+        makeFix(baseLon + dx, baseLat + dy, {
+          speed: null,
+          heading: null,
+          accuracy: 6,
+          timestamp: baseTs + sec * 1000,
+        }),
+        sec * 1000
+      );
+      expect(res.accepted).toBe(true);
+    }
+
+    const predicted = smoother.step(3600)!;
+    expect(predicted.isStationary).toBe(false);
+    expect(predicted.speedMps).toBeGreaterThan(17);
+    expect(predicted.speedMps).toBeLessThan(23);
+    // Expected azimuth atan2(12, 16) ~= 36.87 deg
+    expect(Math.abs(shortestAngleDeltaDeg(predicted.headingDeg!, 36.87))).toBeLessThan(5);
+    const totalDist = haversineMeters(baseLon, baseLat, predicted.lon, predicted.lat);
+    expect(totalDist).toBeGreaterThan(68);
+  });
+
+  it('benchmarks spatially indexed 60fps road matching on dense real Ayalon tile (9775/6649)', async () => {
+    const pmtilesPath = path.resolve(process.cwd(), 'data/Israel.osm.pmtiles');
+    if (!fs.existsSync(pmtilesPath)) {
+      return;
+    }
+
+    const src = new LocalFilePMTilesSource(pmtilesPath);
+    const archive = new PMTiles(src);
+    const fetcher = async (z: number, x: number, y: number) => {
+      const tile = await archive.getZxy(z, x, y);
+      return tile?.data;
+    };
+
+    try {
+      const ayalonLon = 34.791;
+      const ayalonLat = 32.072;
+      const smoother = new GpsNavigationSmoother({
+        enableRoadNetworkMatching: true,
+        fetchTileData: fetcher,
+        planningMode: '4x4',
+      });
+
+      const polys = await smoother
+        .getRoadNetworkCache()
+        .ensureNear(ayalonLon, ayalonLat, 30, 0);
+      expect(polys.length).toBeGreaterThan(500);
+
+      smoother.ingestFix(
+        makeFix(ayalonLon, ayalonLat, {
+          speed: 30,
+          heading: 15,
+          accuracy: 7,
+          timestamp: 1_700_000_000_000,
+        }),
+        0
+      );
+
+      const t0 = performance.now();
+      for (let t = 16; t <= 1920; t += 16) {
+        smoother.step(t);
+      }
+      const elapsedMs = performance.now() - t0;
+      // 120 60fps frames across 2,000+ polylines must complete far under 1 frame budget total
+      expect(elapsedMs).toBeLessThan(150);
     } finally {
       src.close();
     }

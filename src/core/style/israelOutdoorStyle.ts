@@ -914,8 +914,12 @@ function getVisibilityForIhmLayer(
   if (layerId === 'boundary-military') {
     return true;
   }
-  if (layerId === 'boundary-park-casing' || layerId === 'boundary-park' || layerId === 'name-park') {
+  // Nature reserve / park boundary stays visible from z12+; toggle removes fill background, casing, and labels
+  if (layerId === 'area-park' || layerId === 'boundary-park-casing' || layerId === 'name-park') {
     return visibility.natureParks;
+  }
+  if (layerId === 'boundary-park') {
+    return true;
   }
   // Base tracks, paths, cycleways, steps & casings remain visible in default color; switches toggle overlay colors only
   if (

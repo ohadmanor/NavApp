@@ -1,5 +1,5 @@
-import { Capacitor } from '@capacitor/core';
-import { Geolocation } from '@capacitor/geolocation';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Geolocation, type Position } from '@capacitor/geolocation';
 
 export interface LiveGpsFix {
   lon: number;
@@ -9,7 +9,27 @@ export interface LiveGpsFix {
   heading: number | null;
   speed: number | null;
   timestamp: number;
+  fixAgeMs?: number;
 }
+
+export interface NativeGpsPosition extends Position {
+  fixAgeMs?: number | null;
+}
+
+export interface NativeGpsPlugin {
+  checkPermissions(): Promise<{ location?: string; coarseLocation?: string }>;
+  requestPermissions(options?: {
+    permissions?: Array<'location' | 'coarseLocation'>;
+  }): Promise<{ location?: string; coarseLocation?: string }>;
+  getCurrentPosition(options?: LiveGpsWatchOptions): Promise<NativeGpsPosition>;
+  watchPosition(
+    options: LiveGpsWatchOptions,
+    callback: (position: NativeGpsPosition | null, err?: any) => void
+  ): Promise<string>;
+  clearWatch(options: { id: string }): Promise<void>;
+}
+
+export const NativeGps = registerPlugin<NativeGpsPlugin>('NativeGps');
 
 export interface LiveGpsError {
   code?: number;
@@ -28,11 +48,12 @@ const DEFAULT_WATCH_OPTIONS: Required<LiveGpsWatchOptions> = {
   enableHighAccuracy: true,
   maximumAge: 0,
   timeout: 10000,
-  minimumUpdateInterval: 1000,
+  minimumUpdateInterval: 500,
 };
 
 export function normalizeGpsPosition(raw: {
   timestamp?: number;
+  fixAgeMs?: number | null;
   coords?: {
     longitude?: number;
     latitude?: number;
@@ -69,7 +90,7 @@ export function normalizeGpsPosition(raw: {
       ? raw.coords.speed
       : null;
 
-  return {
+  const out: LiveGpsFix = {
     lon,
     lat,
     accuracy,
@@ -81,6 +102,16 @@ export function normalizeGpsPosition(raw: {
         ? raw.timestamp
         : Date.now(),
   };
+
+  if (
+    typeof raw.fixAgeMs === 'number' &&
+    Number.isFinite(raw.fixAgeMs) &&
+    raw.fixAgeMs >= 0
+  ) {
+    out.fixAgeMs = raw.fixAgeMs;
+  }
+
+  return out;
 }
 
 function toLiveGpsError(err: unknown): LiveGpsError {
@@ -89,9 +120,20 @@ function toLiveGpsError(err: unknown): LiveGpsError {
     typeof (err as any)?.message === 'string' && (err as any).message.trim()
       ? (err as any).message
       : 'Location unavailable';
+  const errCode = String((err as any)?.code || '').toUpperCase();
   const isPermissionDenied =
-    code === 1 || /denied|permission/i.test(message);
+    code === 1 || errCode === 'OS-PLUG-GLOC-0003' || /denied|permission/i.test(message);
   return { code, message, isPermissionDenied };
+}
+
+function isPluginUnavailableError(err: unknown): boolean {
+  const errCode = String((err as any)?.code || '').toUpperCase();
+  const message = String((err as any)?.message || '');
+  return (
+    errCode === 'UNIMPLEMENTED' ||
+    errCode === 'UNAVAILABLE' ||
+    /not implemented|not available/i.test(message)
+  );
 }
 
 export class LiveGpsService {
@@ -112,9 +154,14 @@ export class LiveGpsService {
     let disposed = false;
     let browserWatchId: number | null = null;
     let coarseWatchId: number | null = null;
-    let nativeWatchId: string | null = null;
-    let nativeCoarseWatchId: string | null = null;
+    let nativeWatchHandle: { provider: NativeGpsPlugin; id: string } | null = null;
+    let nativeCoarseHandle: { provider: NativeGpsPlugin; id: string } | null = null;
     let hasPrimaryFix = false;
+
+    const clearNativeHandle = (handle: { provider: NativeGpsPlugin; id: string } | null) => {
+      if (!handle) return;
+      void handle.provider.clearWatch({ id: handle.id }).catch(() => {});
+    };
 
     const startBrowserWatch = () => {
       if (disposed) return;
@@ -186,28 +233,44 @@ export class LiveGpsService {
 
     if (Capacitor.isNativePlatform()) {
       (async () => {
-        try {
-          const perm = await Geolocation.checkPermissions();
-          if (disposed) return;
+        const isAndroid =
+          typeof Capacitor.getPlatform === 'function' && Capacitor.getPlatform() === 'android';
+        const capPlugins = (Capacitor as any).Plugins as
+          | Record<string, NativeGpsPlugin | undefined>
+          | undefined;
+        const nativeGpsProvider = capPlugins?.NativeGps ?? NativeGps;
+        const geoProvider = (capPlugins?.Geolocation ?? Geolocation) as NativeGpsPlugin;
+        const nativePluginReady =
+          isAndroid &&
+          (typeof Capacitor.isPluginAvailable !== 'function' ||
+            Capacitor.isPluginAvailable('NativeGps'));
+
+        const runWithProvider = async (
+          provider: NativeGpsPlugin,
+          useShortAndroidWatchTimeout: boolean
+        ): Promise<boolean> => {
+          const perm = await provider.checkPermissions();
+          if (disposed) return true;
           if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
-            const req = await Geolocation.requestPermissions();
-            if (disposed) return;
+            const req = await provider.requestPermissions();
+            if (disposed) return true;
             if (req.location !== 'granted' && req.coarseLocation !== 'granted') {
               onError?.({
                 code: 1,
                 message: 'Location permission denied',
                 isPermissionDenied: true,
               });
-              return;
+              return true;
             }
           }
 
           // Fast native coarse/cached seed so position icon renders immediately indoors
-          void Geolocation.getCurrentPosition({
-            enableHighAccuracy: false,
-            maximumAge: 120000,
-            timeout: 5000,
-          })
+          void provider
+            .getCurrentPosition({
+              enableHighAccuracy: false,
+              maximumAge: 120000,
+              timeout: 5000,
+            })
             .then((pos) => {
               if (disposed || hasPrimaryFix) return;
               const fix = normalizeGpsPosition(pos);
@@ -215,40 +278,54 @@ export class LiveGpsService {
             })
             .catch(() => {});
 
-          const id = await Geolocation.watchPosition(
+          // Note: @capacitor/geolocation (iongeolocation-android-1.0.0) uses `options.timeout` as
+          // FusedLocationProvider's active `intervalMillis`. Pass the high-rate update interval on
+          // Android so fallback watches never degrade to 10-second polling.
+          const watchIntervalMs = Math.max(
+            500,
+            Math.min(resolvedOptions.minimumUpdateInterval, 1000)
+          );
+          const nativeWatchTimeoutMs = useShortAndroidWatchTimeout
+            ? watchIntervalMs
+            : resolvedOptions.timeout;
+
+          const id = await provider.watchPosition(
             {
               enableHighAccuracy: resolvedOptions.enableHighAccuracy,
               maximumAge: resolvedOptions.maximumAge,
-              timeout: resolvedOptions.timeout,
+              timeout: nativeWatchTimeoutMs,
               minimumUpdateInterval: resolvedOptions.minimumUpdateInterval,
             },
             (pos, err) => {
               if (disposed) return;
               if (err) {
                 const liveErr = toLiveGpsError(err);
-                if (!liveErr.isPermissionDenied && !hasPrimaryFix && nativeCoarseWatchId === null) {
-                  void Geolocation.watchPosition(
-                    {
-                      enableHighAccuracy: false,
-                      maximumAge: 15000,
-                      timeout: 15000,
-                      minimumUpdateInterval: resolvedOptions.minimumUpdateInterval,
-                    },
-                    (coarsePos, coarseErr) => {
-                      if (disposed || hasPrimaryFix) return;
-                      if (coarseErr) {
-                        onError?.(toLiveGpsError(coarseErr));
-                        return;
+                if (!liveErr.isPermissionDenied && !hasPrimaryFix && nativeCoarseHandle === null) {
+                  void provider
+                    .watchPosition(
+                      {
+                        enableHighAccuracy: false,
+                        maximumAge: 15000,
+                        timeout: useShortAndroidWatchTimeout
+                          ? Math.max(1000, watchIntervalMs)
+                          : 15000,
+                        minimumUpdateInterval: resolvedOptions.minimumUpdateInterval,
+                      },
+                      (coarsePos, coarseErr) => {
+                        if (disposed || hasPrimaryFix) return;
+                        if (coarseErr) {
+                          onError?.(toLiveGpsError(coarseErr));
+                          return;
+                        }
+                        const fix = normalizeGpsPosition(coarsePos);
+                        if (fix) onFix(fix);
                       }
-                      const fix = normalizeGpsPosition(coarsePos);
-                      if (fix) onFix(fix);
-                    }
-                  )
+                    )
                     .then((cid) => {
                       if (disposed || hasPrimaryFix) {
-                        void Geolocation.clearWatch({ id: cid }).catch(() => {});
+                        clearNativeHandle({ provider, id: cid });
                       } else {
-                        nativeCoarseWatchId = cid;
+                        nativeCoarseHandle = { provider, id: cid };
                       }
                     })
                     .catch(() => {
@@ -260,10 +337,10 @@ export class LiveGpsService {
                 return;
               }
               hasPrimaryFix = true;
-              if (nativeCoarseWatchId !== null) {
-                const cidToClear = nativeCoarseWatchId;
-                nativeCoarseWatchId = null;
-                void Geolocation.clearWatch({ id: cidToClear }).catch(() => {});
+              if (nativeCoarseHandle !== null) {
+                const handleToClear = nativeCoarseHandle;
+                nativeCoarseHandle = null;
+                clearNativeHandle(handleToClear);
               }
               const fix = normalizeGpsPosition(pos);
               if (fix) onFix(fix);
@@ -271,10 +348,31 @@ export class LiveGpsService {
           );
 
           if (disposed) {
-            void Geolocation.clearWatch({ id });
+            clearNativeHandle({ provider, id });
           } else {
-            nativeWatchId = id;
+            nativeWatchHandle = { provider, id };
           }
+          return true;
+        };
+
+        if (nativePluginReady) {
+          try {
+            await runWithProvider(nativeGpsProvider, false);
+            return;
+          } catch (nativeErr) {
+            if (disposed) return;
+            if (!isPluginUnavailableError(nativeErr)) {
+              const liveErr = toLiveGpsError(nativeErr);
+              if (liveErr.isPermissionDenied) {
+                onError?.(liveErr);
+                return;
+              }
+            }
+          }
+        }
+
+        try {
+          await runWithProvider(geoProvider, isAndroid);
         } catch {
           if (!disposed) {
             startBrowserWatch();
@@ -295,15 +393,15 @@ export class LiveGpsService {
         navigator.geolocation.clearWatch(coarseWatchId);
         coarseWatchId = null;
       }
-      if (nativeWatchId !== null) {
-        const idToClear = nativeWatchId;
-        nativeWatchId = null;
-        void Geolocation.clearWatch({ id: idToClear }).catch(() => {});
+      if (nativeWatchHandle !== null) {
+        const handleToClear = nativeWatchHandle;
+        nativeWatchHandle = null;
+        clearNativeHandle(handleToClear);
       }
-      if (nativeCoarseWatchId !== null) {
-        const cidToClear = nativeCoarseWatchId;
-        nativeCoarseWatchId = null;
-        void Geolocation.clearWatch({ id: cidToClear }).catch(() => {});
+      if (nativeCoarseHandle !== null) {
+        const handleToClear = nativeCoarseHandle;
+        nativeCoarseHandle = null;
+        clearNativeHandle(handleToClear);
       }
     };
   }

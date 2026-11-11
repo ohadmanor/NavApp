@@ -73,6 +73,7 @@ interface PolylineChunk {
 
 export interface SnapPolyline {
   id: string;
+  wayKey?: string;
   source: 'route' | 'road';
   coords: Array<[number, number]>;
   cumMeters: Float64Array;
@@ -84,6 +85,8 @@ export interface SnapPolyline {
   chunks: PolylineChunk[];
   priorityBiasMeters: number;
   roadLabel: string;
+  forwardAllowed?: boolean;
+  reverseAllowed?: boolean;
 }
 
 interface AxisKalmanState {
@@ -104,6 +107,8 @@ interface CandidateMatch {
   segBearingDeg: number;
   orientedBearingDeg: number;
   directionSign: 1 | -1;
+  dirAlignErrDeg: number | null;
+  clampedAtEnd: boolean;
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -126,7 +131,12 @@ export function buildSnapPolyline(
   source: 'route' | 'road',
   coords: Array<[number, number]>,
   roadLabel: string,
-  priorityBiasMeters: number
+  priorityBiasMeters: number,
+  options?: {
+    wayKey?: string;
+    forwardAllowed?: boolean;
+    reverseAllowed?: boolean;
+  }
 ): SnapPolyline | null {
   if (!coords || coords.length < 2) return null;
 
@@ -196,6 +206,7 @@ export function buildSnapPolyline(
 
   return {
     id,
+    wayKey: options?.wayKey ?? id,
     source,
     coords: clean,
     cumMeters,
@@ -207,6 +218,8 @@ export function buildSnapPolyline(
     chunks,
     priorityBiasMeters,
     roadLabel,
+    forwardAllowed: options?.forwardAllowed ?? true,
+    reverseAllowed: options?.reverseAllowed ?? true,
   };
 }
 
@@ -230,12 +243,22 @@ function projectLonLatOntoPolyline(
     return null;
   }
 
+  const fwdOk = poly.forwardAllowed !== false;
+  const revOk = poly.reverseAllowed !== false;
+  if (!fwdOk && !revOk) {
+    return null;
+  }
+
   let bestMetric = Infinity;
   let bestDist = Infinity;
   let bestProjLon = lon;
   let bestProjLat = lat;
   let bestAlong = 0;
   let bestBearing = 0;
+  let bestSegIdx = 0;
+  let bestRawT = 0;
+  let bestDirAlignErr: number | null = null;
+  let bestDirSign: 1 | -1 = fwdOk ? 1 : -1;
 
   for (const chunk of poly.chunks) {
     if (
@@ -257,18 +280,35 @@ function projectLonLatOntoPolyline(
       const abLenSq = abx * abx + aby * aby;
       if (abLenSq < 1e-6) continue;
 
-      const t = clamp((apx * abx + apy * aby) / abLenSq, 0, 1);
+      const rawT = (apx * abx + apy * aby) / abLenSq;
+      const t = clamp(rawT, 0, 1);
       const projX = t * abx;
       const projY = t * aby;
       const dist = Math.hypot(apx - projX, apy - projY);
       if (dist > searchRadiusMeters) continue;
 
       const segBearing = normalizeHeadingDeg(Math.atan2(abx, aby) * RAD_TO_DEG);
+      let segAlignErr: number | null = null;
+      let segDirSign: 1 | -1 = fwdOk ? 1 : -1;
       let alignPenalty = 0;
-      if (weightAlignment && travelHeadingDeg !== null) {
-        const rawDiff = Math.abs(shortestAngleDeltaDeg(travelHeadingDeg, segBearing));
-        const alignErr = Math.min(rawDiff, 180 - rawDiff);
-        alignPenalty = (alignErr / 45) * 14;
+
+      if (travelHeadingDeg !== null) {
+        const fwdErr = fwdOk
+          ? Math.abs(shortestAngleDeltaDeg(travelHeadingDeg, segBearing))
+          : Infinity;
+        const revErr = revOk
+          ? Math.abs(shortestAngleDeltaDeg(travelHeadingDeg, normalizeHeadingDeg(segBearing + 180)))
+          : Infinity;
+        if (fwdErr <= revErr) {
+          segAlignErr = fwdErr;
+          segDirSign = 1;
+        } else {
+          segAlignErr = revErr;
+          segDirSign = -1;
+        }
+        if (weightAlignment) {
+          alignPenalty = Number.isFinite(segAlignErr) ? (segAlignErr / 45) * 14 : 80;
+        }
       }
 
       const metric = dist + alignPenalty;
@@ -280,21 +320,23 @@ function projectLonLatOntoPolyline(
         const segLen = poly.cumMeters[i + 1] - poly.cumMeters[i];
         bestAlong = poly.cumMeters[i] + t * segLen;
         bestBearing = segBearing;
+        bestSegIdx = i;
+        bestRawT = rawT;
+        bestDirAlignErr = segAlignErr;
+        bestDirSign = segDirSign;
       }
     }
   }
 
   if (!Number.isFinite(bestDist)) return null;
 
-  let orientedBearingDeg = bestBearing;
-  let directionSign: 1 | -1 = 1;
-  if (travelHeadingDeg !== null) {
-    const fwdDiff = Math.abs(shortestAngleDeltaDeg(travelHeadingDeg, bestBearing));
-    if (fwdDiff > 90) {
-      orientedBearingDeg = normalizeHeadingDeg(bestBearing + 180);
-      directionSign = -1;
-    }
-  }
+  const orientedBearingDeg =
+    bestDirSign === 1 ? bestBearing : normalizeHeadingDeg(bestBearing + 180);
+  const lastSegIdx = poly.coords.length - 2;
+  const clampedAtEnd =
+    travelHeadingDeg !== null &&
+    ((bestDirSign === 1 && bestSegIdx === lastSegIdx && bestRawT >= 0.999) ||
+      (bestDirSign === -1 && bestSegIdx === 0 && bestRawT <= 0.001));
 
   return {
     poly,
@@ -305,7 +347,9 @@ function projectLonLatOntoPolyline(
     projLat: bestProjLat,
     segBearingDeg: bestBearing,
     orientedBearingDeg,
-    directionSign,
+    directionSign: bestDirSign,
+    dirAlignErrDeg: bestDirAlignErr,
+    clampedAtEnd,
   };
 }
 
@@ -356,7 +400,7 @@ function createInitialAxis(p: number, v = 0, sigmaPos = 10): AxisKalmanState {
   };
 }
 
-function predictAxis(state: AxisKalmanState, dtSec: number, sigmaAccel = 2.4): void {
+function predictAxis(state: AxisKalmanState, dtSec: number, sigmaAccel = 3.2): void {
   if (dtSec <= 0) return;
   const dt = Math.min(dtSec, 6);
   const dt2 = dt * dt;
@@ -437,14 +481,20 @@ function integrateDecayFactor(
   return { effDtSec, decayFactor };
 }
 
+const GRID_LON_DEG = 0.0012; // ~110m at Israel latitude
+const GRID_LAT_DEG = 0.0011; // ~122m
+const EMPTY_POLYS: SnapPolyline[] = [];
+
 /**
  * Loads decoded vector tile ways around the current GPS coordinate asynchronously
- * and exposes lightweight SnapPolylines for synchronous 60fps map-matching.
+ * and exposes spatially-indexed SnapPolylines for synchronous 60fps map-matching.
  */
 export class RoadSnapNetworkCache {
   private graphBuilder: TileRoadGraphBuilder;
   private activeTileKey = '';
   private cachedPolylines: SnapPolyline[] = [];
+  private gridCells = new Map<string, SnapPolyline[]>();
+  private widePolylines: SnapPolyline[] = [];
   private loadingTileKey = '';
   private mode: PlanningMode = '4x4';
 
@@ -463,6 +513,8 @@ export class RoadSnapNetworkCache {
       this.mode = mode;
       this.activeTileKey = '';
       this.cachedPolylines = [];
+      this.gridCells.clear();
+      this.widePolylines = [];
     }
   }
 
@@ -470,6 +522,8 @@ export class RoadSnapNetworkCache {
     this.activeTileKey = '';
     this.loadingTileKey = '';
     this.cachedPolylines = [];
+    this.gridCells.clear();
+    this.widePolylines = [];
     this.graphBuilder.clearCache();
   }
 
@@ -477,11 +531,89 @@ export class RoadSnapNetworkCache {
     return this.cachedPolylines;
   }
 
+  getPolylinesNear(
+    minLon: number,
+    minLat: number,
+    maxLon: number,
+    maxLat: number
+  ): SnapPolyline[] {
+    if (this.gridCells.size === 0 && this.widePolylines.length === 0) {
+      return this.cachedPolylines;
+    }
+    const minCx = Math.floor(minLon / GRID_LON_DEG);
+    const maxCx = Math.floor(maxLon / GRID_LON_DEG);
+    const minCy = Math.floor(minLat / GRID_LAT_DEG);
+    const maxCy = Math.floor(maxLat / GRID_LAT_DEG);
+
+    if (minCx === maxCx && minCy === maxCy && this.widePolylines.length === 0) {
+      return this.gridCells.get(`${minCx},${minCy}`) ?? EMPTY_POLYS;
+    }
+    if ((maxCx - minCx + 1) * (maxCy - minCy + 1) > 25) {
+      return this.cachedPolylines;
+    }
+
+    const seen = new Set<SnapPolyline>();
+    const out: SnapPolyline[] = [];
+    for (let i = 0; i < this.widePolylines.length; i++) {
+      const p = this.widePolylines[i];
+      seen.add(p);
+      out.push(p);
+    }
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const bucket = this.gridCells.get(`${cx},${cy}`);
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const p = bucket[i];
+          if (!seen.has(p)) {
+            seen.add(p);
+            out.push(p);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  private rebuildSpatialGrid(polys: SnapPolyline[]): void {
+    const nextGrid = new Map<string, SnapPolyline[]>();
+    const nextWide: SnapPolyline[] = [];
+    for (let i = 0; i < polys.length; i++) {
+      const poly = polys[i];
+      const minCx = Math.floor(poly.minLon / GRID_LON_DEG);
+      const maxCx = Math.floor(poly.maxLon / GRID_LON_DEG);
+      const minCy = Math.floor(poly.minLat / GRID_LAT_DEG);
+      const maxCy = Math.floor(poly.maxLat / GRID_LAT_DEG);
+      if ((maxCx - minCx + 1) * (maxCy - minCy + 1) > 64) {
+        nextWide.push(poly);
+        continue;
+      }
+      for (let cx = minCx; cx <= maxCx; cx++) {
+        for (let cy = minCy; cy <= maxCy; cy++) {
+          const cellKey = `${cx},${cy}`;
+          let bucket = nextGrid.get(cellKey);
+          if (!bucket) {
+            bucket = [];
+            nextGrid.set(cellKey, bucket);
+          }
+          bucket.push(poly);
+        }
+      }
+    }
+    this.gridCells = nextGrid;
+    this.widePolylines = nextWide;
+  }
+
   /**
    * Ensures road/trail polylines for the z14 tile containing (lon, lat) — plus adjacent border
-   * tiles when within ~180m of a tile seam — are decoded and cached for map-matching.
+   * tiles and speed-based ahead lookahead tile — are decoded and spatially indexed for map-matching.
    */
-  async ensureNear(lon: number, lat: number): Promise<SnapPolyline[]> {
+  async ensureNear(
+    lon: number,
+    lat: number,
+    speedMps = 0,
+    headingDeg: number | null = null
+  ): Promise<SnapPolyline[]> {
     if (!Number.isFinite(lon) || !Number.isFinite(lat)) return this.cachedPolylines;
 
     const center = lonLatToTile(lon, lat, ROUTING_TILE_ZOOM);
@@ -491,7 +623,7 @@ export class RoadSnapNetworkCache {
     const yFrac =
       ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n - center.ty;
 
-    const borderFrac = 0.09; // ~190m at Israel latitude
+    const borderFrac = 0.14; // ~300m at Israel latitude
     const dxList = [0];
     const dyList = [0];
     if (xFrac < borderFrac && center.tx > 0) dxList.push(-1);
@@ -500,11 +632,31 @@ export class RoadSnapNetworkCache {
     if (yFrac > 1 - borderFrac && center.ty < n - 1) dyList.push(1);
 
     const tileCoords: Array<{ tx: number; ty: number }> = [];
+    const seenTiles = new Set<string>();
+    const addTile = (tx: number, ty: number) => {
+      const tk = `${tx},${ty}`;
+      if (!seenTiles.has(tk)) {
+        seenTiles.add(tk);
+        tileCoords.push({ tx, ty });
+      }
+    };
+
     for (const dx of dxList) {
       for (const dy of dyList) {
-        tileCoords.push({ tx: center.tx + dx, ty: center.ty + dy });
+        addTile(center.tx + dx, center.ty + dy);
       }
     }
+
+    if (speedMps >= 10 && headingDeg !== null && Number.isFinite(headingDeg)) {
+      const lookaheadMeters = clamp(speedMps * 12, 200, 550);
+      const mLon = metersPerDegLonAt(lat);
+      const rad = headingDeg * DEG_TO_RAD;
+      const aheadLon = lon + (lookaheadMeters * Math.sin(rad)) / mLon;
+      const aheadLat = lat + (lookaheadMeters * Math.cos(rad)) / METERS_PER_DEG_LAT;
+      const aheadTile = lonLatToTile(aheadLon, aheadLat, ROUTING_TILE_ZOOM);
+      addTile(aheadTile.tx, aheadTile.ty);
+    }
+
     const key =
       `${this.mode}:` +
       tileCoords
@@ -526,15 +678,18 @@ export class RoadSnapNetworkCache {
       }
 
       const nextPolys: SnapPolyline[] = [];
-      for (const ways of waysArrays) {
-        for (const way of ways) {
-          const poly = this.wayToSnapPolyline(way);
+      for (let tileIdx = 0; tileIdx < waysArrays.length; tileIdx++) {
+        const tc = tileCoords[tileIdx];
+        const ways = waysArrays[tileIdx];
+        for (let seq = 0; seq < ways.length; seq++) {
+          const poly = this.wayToSnapPolyline(ways[seq], tc.tx, tc.ty, seq);
           if (poly) nextPolys.push(poly);
         }
       }
 
       this.activeTileKey = key;
       this.cachedPolylines = nextPolys;
+      this.rebuildSpatialGrid(nextPolys);
       return this.cachedPolylines;
     } catch {
       return this.cachedPolylines;
@@ -545,7 +700,12 @@ export class RoadSnapNetworkCache {
     }
   }
 
-  private wayToSnapPolyline(way: DecodedWay): SnapPolyline | null {
+  private wayToSnapPolyline(
+    way: DecodedWay,
+    tx: number,
+    ty: number,
+    seq: number
+  ): SnapPolyline | null {
     if (!way.points || way.points.length < 2) return null;
     const access = evaluateEdgeAccess(way.props, this.mode);
     const cls = typeof way.props.class === 'string' ? way.props.class.trim().toLowerCase() : '';
@@ -553,6 +713,9 @@ export class RoadSnapNetworkCache {
       typeof way.props.subclass === 'string' ? way.props.subclass.trim().toLowerCase() : '';
 
     let biasMeters = 0;
+    let forwardAllowed = access.forwardAllowed;
+    let reverseAllowed = access.reverseAllowed;
+
     if (access.allowed) {
       biasMeters = cls === 'path' ? 4 : 0;
     } else if (
@@ -565,13 +728,21 @@ export class RoadSnapNetworkCache {
     ) {
       // Allow rough off-road trails/paths during free-driving, but prefer adjacent drivable tracks/roads
       biasMeters = 5;
+      forwardAllowed = true;
+      reverseAllowed = true;
     } else {
       return null;
     }
 
     const coords = way.points.map((pt) => [pt.lon, pt.lat] as [number, number]);
     const roadLabel = access.roadLabel || (cls === 'path' ? 'שביל שטח' : 'דרך');
-    return buildSnapPolyline(`way:${way.featureId}`, 'road', coords, roadLabel, biasMeters);
+    const uniqueId = `way:${tx},${ty}:${seq}:${way.featureId}`;
+    const wayKey = way.featureId ? `fid:${way.featureId}` : uniqueId;
+    return buildSnapPolyline(uniqueId, 'road', coords, roadLabel, biasMeters, {
+      wayKey,
+      forwardAllowed,
+      reverseAllowed,
+    });
   }
 }
 
@@ -613,10 +784,11 @@ export class GpsNavigationSmoother {
   private routePolylines: SnapPolyline[] = [];
 
   // Map-matching & smooth display state
-  private matchedPolyId: string | null = null;
-  private anchorPolyId: string | null = null;
+  private matchedPolyRef: SnapPolyline | null = null;
+  private matchedWayKey: string | null = null;
+  private anchorPolyRef: SnapPolyline | null = null;
   private anchorAlongMeters = 0;
-  private anchorClockMs = 0;
+  private anchorInitEffDtSec = 0;
   private anchorDirectionSign: 1 | -1 = 1;
   private snapBlend = 0;
 
@@ -636,8 +808,8 @@ export class GpsNavigationSmoother {
       maxImpliedSpeedMps: options?.maxImpliedSpeedMps ?? 65,
       stationarySpeedThresholdMps: options?.stationarySpeedThresholdMps ?? 0.7,
       minMovingHeadingSpeedMps: options?.minMovingHeadingSpeedMps ?? 1.3,
-      fullPredictDurationSec: options?.fullPredictDurationSec ?? 1.15,
-      maxPredictDurationSec: options?.maxPredictDurationSec ?? 2.3,
+      fullPredictDurationSec: options?.fullPredictDurationSec ?? 1.4,
+      maxPredictDurationSec: options?.maxPredictDurationSec ?? 2.8,
       positionBlendTauSec: options?.positionBlendTauSec ?? 0.26,
       headingBlendTauSec: options?.headingBlendTauSec ?? 0.16,
       snapBlendTauSec: options?.snapBlendTauSec ?? 0.35,
@@ -666,8 +838,10 @@ export class GpsNavigationSmoother {
     this.lastFixRawSpeed = null;
     this.pendingSpike = null;
     this.isStationary = false;
-    this.matchedPolyId = null;
-    this.anchorPolyId = null;
+    this.matchedPolyRef = null;
+    this.matchedWayKey = null;
+    this.anchorPolyRef = null;
+    this.anchorInitEffDtSec = 0;
     this.snapBlend = 0;
     this.hasDisplayInit = false;
     this.dispHeadingDeg = null;
@@ -766,14 +940,21 @@ export class GpsNavigationSmoother {
     ];
   }
 
-  private initializeOrigin(lon: number, lat: number, clockMs: number, fix: LiveGpsFix): void {
+  private initializeOrigin(
+    lon: number,
+    lat: number,
+    fixClockMs: number,
+    stepClockMs: number,
+    fix: LiveGpsFix
+  ): void {
     this.hasOrigin = true;
     this.originLon = lon;
     this.originLat = lat;
     this.metersPerDegLon = metersPerDegLonAt(lat);
 
-    const sigmaPos = clamp(fix.accuracy ?? 10, 4, 45);
-    const speed = fix.speed !== null && fix.speed >= this.opts.stationarySpeedThresholdMps ? fix.speed : 0;
+    const sigmaPos = clamp((fix.accuracy ?? 10) * 0.72, 3.5, 28);
+    const speed =
+      fix.speed !== null && fix.speed >= this.opts.stationarySpeedThresholdMps ? fix.speed : 0;
     const vx =
       speed > 0 && fix.heading !== null ? speed * Math.sin(fix.heading * DEG_TO_RAD) : 0;
     const vy =
@@ -784,7 +965,7 @@ export class GpsNavigationSmoother {
     this.stationaryAnchorX = 0;
     this.stationaryAnchorY = 0;
     this.isStationary = speed === 0;
-    this.lastFixClockMs = clockMs;
+    this.lastFixClockMs = fixClockMs;
     this.lastFixTimestamp = fix.timestamp;
     this.lastFixAccuracy = fix.accuracy;
     this.lastFixRawHeading = fix.heading;
@@ -792,12 +973,14 @@ export class GpsNavigationSmoother {
     this.lastRawLon = lon;
     this.lastRawLat = lat;
     this.pendingSpike = null;
-    this.matchedPolyId = null;
-    this.anchorPolyId = null;
+    this.matchedPolyRef = null;
+    this.matchedWayKey = null;
+    this.anchorPolyRef = null;
+    this.anchorInitEffDtSec = 0;
     this.snapBlend = 0;
     this.hasDisplayInit = false;
     this.hasStepClock = true;
-    this.lastStepClockMs = clockMs;
+    this.lastStepClockMs = stepClockMs;
   }
 
   /**
@@ -819,13 +1002,26 @@ export class GpsNavigationSmoother {
       };
     }
 
+    const boundedFixAgeMs =
+      typeof fix.fixAgeMs === 'number' && Number.isFinite(fix.fixAgeMs) && fix.fixAgeMs >= 0
+        ? clamp(fix.fixAgeMs, 0, 1500)
+        : 0;
+    const effFixClockMs = nowMs - boundedFixAgeMs;
+
+    const prefetchHeading =
+      fix.heading ??
+      (this.axisX && this.axisY && this.getKalmanSpeedMps() >= this.opts.minMovingHeadingSpeedMps
+        ? normalizeHeadingDeg(Math.atan2(this.axisX.v, this.axisY.v) * RAD_TO_DEG)
+        : this.dispHeadingDeg);
+    const prefetchSpeed = Math.max(fix.speed ?? 0, this.getKalmanSpeedMps());
+
     if (this.opts.enableRoadNetworkMatching) {
-      void this.roadNetwork.ensureNear(lon, lat);
+      void this.roadNetwork.ensureNear(lon, lat, prefetchSpeed, prefetchHeading);
     }
 
     // First valid fix always seeds immediately
     if (!this.hasOrigin || !this.axisX || !this.axisY) {
-      this.initializeOrigin(lon, lat, nowMs, fix);
+      this.initializeOrigin(lon, lat, effFixClockMs, nowMs, fix);
       const frame = this.step(nowMs);
       return {
         accepted: true,
@@ -852,15 +1048,20 @@ export class GpsNavigationSmoother {
     }
 
     const [measX, measY] = this.toLocal(lon, lat);
-    const fixAgeGapSec = Math.max(0.05, (clockDeltaMs > 0 ? clockDeltaMs : tsDeltaMs) / 1000);
-    const timeSinceGoodFixSec = Math.max(0, (nowMs - this.lastFixClockMs) / 1000);
+    const effClockDeltaMs = Math.max(0, effFixClockMs - this.lastFixClockMs);
+    // Prefer true GNSS timestamp deltas (20ms..60s) so bursted / GC-delayed deliveries are
+    // never misclassified as teleport spikes or under-predicted in Kalman.
+    const rawDtMs =
+      tsDeltaMs >= 20 && tsDeltaMs <= 60000 ? tsDeltaMs : effClockDeltaMs;
+    const fixAgeGapSec = Math.max(0.05, rawDtMs / 1000);
+    const timeSinceGoodFixSec = Math.max(0, effClockDeltaMs / 1000);
 
     // Replace indoor coarse seed cleanly when an accurate primary GPS fix arrives
     const prevWasCoarse = this.lastFixAccuracy !== null && this.lastFixAccuracy > 60;
     const curIsAccurate = fix.accuracy !== null && fix.accuracy <= 50;
     if (prevWasCoarse && curIsAccurate) {
       this.hasDisplayInit = false;
-      this.initializeOrigin(lon, lat, nowMs, fix);
+      this.initializeOrigin(lon, lat, effFixClockMs, nowMs, fix);
       const frame = this.step(nowMs);
       return {
         accepted: true,
@@ -897,7 +1098,7 @@ export class GpsNavigationSmoother {
         Math.hypot(lon - this.pendingSpike.fix.lon, lat - this.pendingSpike.fix.lat) < 0.01
       ) {
         this.hasDisplayInit = false;
-        this.initializeOrigin(lon, lat, nowMs, fix);
+        this.initializeOrigin(lon, lat, effFixClockMs, nowMs, fix);
         const frame = this.step(nowMs);
         return {
           accepted: true,
@@ -927,22 +1128,28 @@ export class GpsNavigationSmoother {
     ) {
       if (this.pendingSpike) {
         const [psx, psy] = this.toLocal(this.pendingSpike.fix.lon, this.pendingSpike.fix.lat);
-        const confirmDt = Math.max(0.1, (nowMs - this.pendingSpike.clockMs) / 1000);
+        const pendingTsGap = (fix.timestamp - this.pendingSpike.fix.timestamp) / 1000;
+        const confirmDt =
+          pendingTsGap >= 0.05 && pendingTsGap <= 60
+            ? pendingTsGap
+            : Math.max(0.1, (nowMs - this.pendingSpike.clockMs) / 1000);
         const confirmSpeed = Math.hypot(measX - psx, measY - psy) / confirmDt;
         if (confirmSpeed <= this.opts.maxImpliedSpeedMps) {
           // Two consistent fixes confirmed real relocation (e.g. tunnel exit)
           this.pendingSpike = null;
-          this.axisX = createInitialAxis(measX, 0, clamp(fix.accuracy ?? 10, 4, 45));
-          this.axisY = createInitialAxis(measY, 0, clamp(fix.accuracy ?? 10, 4, 45));
+          const sigmaInit = clamp((fix.accuracy ?? 10) * 0.72, 3.5, 28);
+          this.axisX = createInitialAxis(measX, 0, sigmaInit);
+          this.axisY = createInitialAxis(measY, 0, sigmaInit);
           this.stationaryAnchorX = measX;
           this.stationaryAnchorY = measY;
-          this.lastFixClockMs = nowMs;
+          this.lastFixClockMs = Math.max(this.lastFixClockMs, effFixClockMs);
           this.lastFixTimestamp = fix.timestamp;
           this.lastFixAccuracy = fix.accuracy;
           this.lastFixRawHeading = fix.heading;
           this.lastFixRawSpeed = fix.speed;
           this.lastRawLon = lon;
           this.lastRawLat = lat;
+          this.anchorPolyRef = null;
           const frame = this.step(nowMs);
           return {
             accepted: true,
@@ -966,13 +1173,51 @@ export class GpsNavigationSmoother {
     }
     this.pendingSpike = null;
 
+    // Derive fallback velocity/heading from accurate consecutive fixes when browser/device omits them
+    const [prevRawX, prevRawY] = this.toLocal(this.lastRawLon, this.lastRawLat);
+    const rawDx = measX - prevRawX;
+    const rawDy = measY - prevRawY;
+    const rawStepDist = Math.hypot(rawDx, rawDy);
+
+    let effSpeed = fix.speed;
+    let effHeading = fix.heading;
+    let usingDerivedVel = false;
+
+    const derivDtSec = rawDtMs / 1000;
+    const bothAccurate =
+      (fix.accuracy ?? 10) <= 25 && (this.lastFixAccuracy ?? 10) <= 25;
+    const minMoveDist = Math.max(
+      4.5,
+      ((fix.accuracy ?? 8) + (this.lastFixAccuracy ?? 8)) * 0.4
+    );
+    if (
+      (effSpeed === null || effHeading === null) &&
+      bothAccurate &&
+      derivDtSec >= 0.35 &&
+      derivDtSec <= 6.0 &&
+      rawStepDist >= minMoveDist
+    ) {
+      const derivedSpeed = rawStepDist / derivDtSec;
+      if (derivedSpeed <= this.opts.maxImpliedSpeedMps) {
+        const derivedHeading = normalizeHeadingDeg(Math.atan2(rawDx, rawDy) * RAD_TO_DEG);
+        if (effSpeed === null) {
+          effSpeed = derivedSpeed;
+          usingDerivedVel = true;
+        }
+        if (effHeading === null) {
+          effHeading = derivedHeading;
+          usingDerivedVel = true;
+        }
+      }
+    }
+
     // Stationary deadzone check to prevent drift/spiderwebs while stopped
     const distFromAnchor = Math.hypot(measX - this.stationaryAnchorX, measY - this.stationaryAnchorY);
     const deadzoneRadius = clamp((fix.accuracy ?? 8) * 0.85, 5, 14);
     const reportedStationary =
-      fix.speed !== null && fix.speed < this.opts.stationarySpeedThresholdMps;
+      effSpeed !== null && effSpeed < this.opts.stationarySpeedThresholdMps;
 
-    const dtSec = clamp((nowMs - this.lastFixClockMs) / 1000, 0.02, 10);
+    const dtSec = clamp(rawDtMs / 1000, 0.02, 10);
 
     // If resuming after a long GPS dropout (> 6s), reset covariance so fresh fix pulls fast
     if (dtSec > 6) {
@@ -982,7 +1227,7 @@ export class GpsNavigationSmoother {
       this.axisY.p11 = Math.max(this.axisY.p11, 25);
     }
 
-    // 1. Predict Kalman state from last fix to nowMs
+    // 1. Predict Kalman state from last fix time to current fix time
     predictAxis(this.axisX, dtSec);
     predictAxis(this.axisY, dtSec);
 
@@ -998,19 +1243,21 @@ export class GpsNavigationSmoother {
       this.stationaryAnchorX = measX;
       this.stationaryAnchorY = measY;
 
-      const sigmaPos = clamp(fix.accuracy ?? 10, 4, 45);
+      const sigmaPos = clamp((fix.accuracy ?? 10) * 0.72, 3.5, 28);
       const rPos = sigmaPos * sigmaPos;
       updateAxisPosition(this.axisX, measX, rPos);
       updateAxisPosition(this.axisY, measY, rPos);
 
-      if (fix.speed !== null) {
-        if (fix.speed < this.opts.stationarySpeedThresholdMps) {
+      if (effSpeed !== null) {
+        if (effSpeed < this.opts.stationarySpeedThresholdMps) {
           updateAxisVelocity(this.axisX, 0, 0.6);
           updateAxisVelocity(this.axisY, 0, 0.6);
-        } else if (fix.heading !== null) {
-          const measVx = fix.speed * Math.sin(fix.heading * DEG_TO_RAD);
-          const measVy = fix.speed * Math.cos(fix.heading * DEG_TO_RAD);
-          const sigmaVel = Math.max(1.5, fix.speed * 0.16);
+        } else if (effHeading !== null) {
+          const measVx = effSpeed * Math.sin(effHeading * DEG_TO_RAD);
+          const measVy = effSpeed * Math.cos(effHeading * DEG_TO_RAD);
+          const sigmaVel = usingDerivedVel
+            ? clamp(1.8 + effSpeed * 0.14, 2.0, 5.0)
+            : clamp(0.8 + effSpeed * 0.06, 1.0, 2.8);
           const rVel = sigmaVel * sigmaVel;
           updateAxisVelocity(this.axisX, measVx, rVel);
           updateAxisVelocity(this.axisY, measVy, rVel);
@@ -1018,16 +1265,16 @@ export class GpsNavigationSmoother {
       }
     }
 
-    this.lastFixClockMs = nowMs;
+    this.lastFixClockMs = Math.max(this.lastFixClockMs, effFixClockMs);
     this.lastFixTimestamp = fix.timestamp;
     this.lastFixAccuracy = fix.accuracy;
-    this.lastFixRawHeading = fix.heading;
-    this.lastFixRawSpeed = fix.speed;
+    this.lastFixRawHeading = effHeading;
+    this.lastFixRawSpeed = effSpeed;
     this.lastRawLon = lon;
     this.lastRawLat = lat;
 
     // Anchor road progression at the new Kalman state
-    this.anchorPolyId = null;
+    this.anchorPolyRef = null;
 
     const frame = this.step(nowMs);
     const kGeo = this.getKalmanGeo();
@@ -1067,56 +1314,79 @@ export class GpsNavigationSmoother {
     const searchMarginLat = (searchRadiusMeters + 10) / METERS_PER_DEG_LAT;
     const searchMarginLon = (searchRadiusMeters + 10) / this.metersPerDegLon;
 
-    const candidates: SnapPolyline[] = [];
-    for (const p of this.routePolylines) candidates.push(p);
-    if (this.opts.enableRoadNetworkMatching) {
-      for (const p of this.roadNetwork.getPolylines()) candidates.push(p);
-    }
-    if (candidates.length === 0) return null;
+    const roadCandidates = this.opts.enableRoadNetworkMatching
+      ? this.roadNetwork.getPolylinesNear(
+          lon - searchMarginLon,
+          lat - searchMarginLat,
+          lon + searchMarginLon,
+          lat + searchMarginLat
+        )
+      : EMPTY_POLYS;
+    if (this.routePolylines.length === 0 && roadCandidates.length === 0) return null;
 
     let best: CandidateMatch | null = null;
     const weightAlignment =
       travelHeadingDeg !== null && speedMps >= this.opts.minMovingHeadingSpeedMps;
-    for (const poly of candidates) {
-      const hit = projectLonLatOntoPolyline(
-        lon,
-        lat,
-        poly,
-        travelHeadingDeg,
-        weightAlignment,
-        this.metersPerDegLon,
-        searchMarginLon,
-        searchMarginLat,
-        searchRadiusMeters
-      );
-      if (!hit || hit.distMeters > searchRadiusMeters) continue;
 
-      const isCurrentlyMatched = Boolean(this.matchedPolyId && poly.id === this.matchedPolyId);
-      let alignPenalty = 0;
-      if (travelHeadingDeg !== null && speedMps >= this.opts.minMovingHeadingSpeedMps) {
-        const rawDiff = Math.abs(shortestAngleDeltaDeg(travelHeadingDeg, hit.segBearingDeg));
-        const alignErr = Math.min(rawDiff, 180 - rawDiff);
-        if (!isCurrentlyMatched && speedMps >= 3.0 && alignErr > 55) {
-          continue; // Do not snap onto perpendicular cross-roads while driving
+    const evaluateList = (list: SnapPolyline[]) => {
+      for (let i = 0; i < list.length; i++) {
+        const poly = list[i];
+        const hit = projectLonLatOntoPolyline(
+          lon,
+          lat,
+          poly,
+          travelHeadingDeg,
+          weightAlignment,
+          this.metersPerDegLon,
+          searchMarginLon,
+          searchMarginLat,
+          searchRadiusMeters
+        );
+        if (!hit || hit.distMeters > searchRadiusMeters) continue;
+
+        const polyWayKey = poly.wayKey ?? poly.id;
+        const isSameLogicalWay =
+          this.matchedPolyRef === poly ||
+          Boolean(this.matchedWayKey && polyWayKey === this.matchedWayKey);
+
+        let alignPenalty = 0;
+        if (weightAlignment && hit.dirAlignErrDeg !== null) {
+          const alignErr = hit.dirAlignErrDeg;
+          const isBidirectional = poly.forwardAllowed !== false && poly.reverseAllowed !== false;
+          // Reject opposing one-way carriageways (alignErr ~ 180) and perpendicular crossroads while driving
+          if (!isBidirectional && alignErr > 95) {
+            continue;
+          }
+          if (!isSameLogicalWay && speedMps >= 3.0 && alignErr > 55) {
+            continue;
+          }
+          alignPenalty = (Math.min(alignErr, 180) / 45) * 14;
         }
-        alignPenalty = (alignErr / 45) * 14;
+
+        // Release endpoint stickiness at sequential OSM way joints / tile seams
+        const hysteresisBonus = isSameLogicalWay
+          ? hit.clampedAtEnd
+            ? poly.source === 'route'
+              ? 4
+              : 2
+            : this.opts.sameWayHysteresisMeters
+          : 0;
+
+        // Active route bonus only when aligned reasonably with route direction
+        const sourceBias =
+          poly.source === 'route' && alignPenalty > 14 ? 0 : poly.priorityBiasMeters;
+
+        const score = Math.max(0, hit.distMeters + alignPenalty + sourceBias - hysteresisBonus);
+        hit.scoreMeters = score;
+
+        if (!best || hit.scoreMeters < best.scoreMeters) {
+          best = hit;
+        }
       }
+    };
 
-      const hysteresisBonus = isCurrentlyMatched ? this.opts.sameWayHysteresisMeters : 0;
-
-      // Active route bonus only when aligned reasonably with route direction
-      const sourceBias =
-        poly.source === 'route' && alignPenalty > 14
-          ? 0
-          : poly.priorityBiasMeters;
-
-      const score = Math.max(0, hit.distMeters + alignPenalty + sourceBias - hysteresisBonus);
-      hit.scoreMeters = score;
-
-      if (!best || hit.scoreMeters < best.scoreMeters) {
-        best = hit;
-      }
-    }
+    evaluateList(this.routePolylines);
+    evaluateList(roadCandidates);
 
     return best;
   }
@@ -1156,9 +1426,11 @@ export class GpsNavigationSmoother {
 
     const match = this.findBestRoadMatch(predLon, predLat, travelHeading, baseSpeed);
     if (match) {
-      this.matchedPolyId = match.poly.id;
+      this.matchedPolyRef = match.poly;
+      this.matchedWayKey = match.poly.wayKey ?? match.poly.id;
     } else if (this.snapBlend < 0.05) {
-      this.matchedPolyId = null;
+      this.matchedPolyRef = null;
+      this.matchedWayKey = null;
     }
 
     // Soft snap blend (prevents hard threshold jumps when leaving or entering a trail)
@@ -1187,23 +1459,18 @@ export class GpsNavigationSmoother {
     let roadTangentBearing: number | null = null;
 
     if (match && this.snapBlend > 0.01) {
-      // Anchor along-polyline progress so curves are followed smoothly between 1Hz fixes
-      if (this.anchorPolyId !== match.poly.id) {
-        this.anchorPolyId = match.poly.id;
-        this.anchorClockMs = nowMs;
+      // Anchor along-polyline progress by object identity & synchronized effDtSec
+      if (this.anchorPolyRef !== match.poly) {
+        this.anchorPolyRef = match.poly;
+        this.anchorInitEffDtSec = effDtSec;
         this.anchorAlongMeters = match.alongMeters;
         this.anchorDirectionSign = match.directionSign;
       }
 
-      const anchorSinceSec = Math.max(0, (nowMs - this.anchorClockMs) / 1000);
-      const anchorInteg = integrateDecayFactor(
-        anchorSinceSec,
-        this.opts.fullPredictDurationSec,
-        this.opts.maxPredictDurationSec
-      );
+      const anchorDeltaEffSec = Math.max(0, effDtSec - this.anchorInitEffDtSec);
       const desiredAlong =
         this.anchorAlongMeters +
-        (this.isStationary ? 0 : baseSpeed * anchorInteg.effDtSec * this.anchorDirectionSign);
+        (this.isStationary ? 0 : baseSpeed * anchorDeltaEffSec * this.anchorDirectionSign);
 
       let roadLon: number;
       let roadLat: number;
@@ -1246,9 +1513,11 @@ export class GpsNavigationSmoother {
       const roadVy = instSpeed * Math.cos(roadBearing * DEG_TO_RAD);
       targetVx = targetVx + (roadVx - targetVx) * this.snapBlend;
       targetVy = targetVy + (roadVy - targetVy) * this.snapBlend;
+    } else {
+      this.anchorPolyRef = null;
     }
 
-    // Advance display position with feedforward velocity + critically-smooth residual convergence
+    // Advance display position with bounded feedforward velocity + critically-smooth residual convergence
     if (!this.hasDisplayInit) {
       this.dispX = targetX;
       this.dispY = targetY;
@@ -1262,10 +1531,9 @@ export class GpsNavigationSmoother {
         this.lastConvergenceGapMeters = 0;
       } else {
         if (rawDtSec > 0) {
-          if (rawDtSec <= 0.12) {
-            this.dispX += targetVx * rawDtSec;
-            this.dispY += targetVy * rawDtSec;
-          }
+          const ffDt = Math.min(rawDtSec, 0.45);
+          this.dispX += targetVx * ffDt;
+          this.dispY += targetVy * ffDt;
           const errX = targetX - this.dispX;
           const errY = targetY - this.dispY;
           const errMag = Math.hypot(errX, errY);

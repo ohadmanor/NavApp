@@ -154,6 +154,27 @@
     }
   },
   {
+    "id": "area-park",
+    "type": "fill",
+    "metadata": {
+      "IHM:overlay": true
+    },
+    "source": "israel-osm",
+    "source-layer": "park",
+    "minzoom": 13,
+    "filter": [
+      "in",
+      "class",
+      "national_park",
+      "nature_reserve",
+      "protected_area"
+    ],
+    "paint": {
+      "fill-color": "#00d188",
+      "fill-opacity": 0.15
+    }
+  },
+  {
     "id": "area-military",
     "type": "fill",
     "metadata": {
@@ -5337,7 +5358,8 @@
       "in",
       "class",
       "national_park",
-      "nature_reserve"
+      "nature_reserve",
+      "protected_area"
     ],
     "layout": {
       "line-join": "round"
@@ -5358,12 +5380,13 @@
     },
     "source": "israel-osm",
     "source-layer": "park",
-    "minzoom": 9,
+    "minzoom": 12,
     "filter": [
       "in",
       "class",
       "national_park",
-      "nature_reserve"
+      "nature_reserve",
+      "protected_area"
     ],
     "paint": {
       "line-width": 2,
@@ -25700,7 +25723,7 @@
     },
     "source": "israel-osm",
     "source-layer": "park",
-    "minzoom": 9,
+    "minzoom": 12,
     "filter": [
       "in",
       "class",

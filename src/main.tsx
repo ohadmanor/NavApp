@@ -3,9 +3,10 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
-// Register Offline-First PWA Service Worker in production; unregister stale SWs in dev
+// Register Offline-First PWA Service Worker in production web; unregister stale SWs in dev or native Capacitor
 if ('serviceWorker' in navigator) {
-  if (import.meta.env.PROD) {
+  const isCapacitorNative = !!(window as any).Capacitor?.isNativePlatform?.();
+  if (import.meta.env.PROD && !isCapacitorNative) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch((err) => {
         console.warn('Service worker registration skipped:', err);

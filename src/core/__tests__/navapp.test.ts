@@ -54,8 +54,13 @@ import {
   getEmptyTerrariumTileBlob,
   wrapManagerWithSafeContourBuffers,
 } from '../pmtiles/PMTilesRegistry';
+import { Capacitor } from '@capacitor/core';
 import { RouteManager } from '../navigation/RouteManager';
-import { LiveGpsService, normalizeGpsPosition, type LiveGpsFix } from '../navigation/LiveGpsService';
+import {
+  LiveGpsService,
+  normalizeGpsPosition,
+  type LiveGpsFix,
+} from '../navigation/LiveGpsService';
 import { ScreenWakeLockService } from '../navigation/ScreenWakeLockService';
 import {
   BUILT_IN_USER_ICONS,
@@ -102,6 +107,8 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(layerIds).toContain('contour-label-10m');
     expect(layerIds).toContain('area-military');
     expect(layerIds).toContain('boundary-military');
+    expect(layerIds).toContain('area-park');
+    expect(layerIds).toContain('boundary-park-casing');
     expect(layerIds).toContain('boundary-park');
     expect(layerIds).toContain('name-park');
     expect(layerIds).toContain('track-right-grade5');
@@ -999,10 +1006,11 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(evalPaint(noCycleStyle, 'path-path', { class: 'path', subclass: 'path', bicycle: 'designated', mtb_scale: '2' })).toBe('#AA8166');
     expect(evalPaint(noCycleStyle, 'path-path', { class: 'path', subclass: 'path', colour: 'red', bicycle: 'designated' })).toBe('#FF0000');
 
-    // 2. Turning ALL 4 switches OFF keeps every base path, track, cycleway, and firing boundary visible in default colors
+    // 2. Turning ALL switches OFF keeps every base path, track, cycleway, firing boundary, and park boundary visible
     const allColorSwitchesOff = {
       ...DEFAULT_LAYER_VISIBILITY,
       militaryZones: false,
+      natureParks: false,
       offroad4x4: false,
       hikingTrails: false,
       cycleways: false,
@@ -1018,6 +1026,28 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     // Firing zone keeps red dashed boundary, hides only area fill
     expect((offStyle.layers.find((l) => l.id === 'boundary-military') as any)?.layout?.visibility).toBe('visible');
     expect((offStyle.layers.find((l) => l.id === 'area-military') as any)?.layout?.visibility).toBe('none');
+
+    // Nature reserve keeps polygon boundary from z12+, hides background fill, casing, and labels when natureParks=false
+    const onAreaPark = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: DEFAULT_LAYER_VISIBILITY,
+      theme: 'topo-day',
+    }).layers.find((l) => l.id === 'area-park') as any;
+    expect(onAreaPark?.minzoom).toBe(13);
+    expect(onAreaPark?.paint?.['fill-color']).toBe('#00d188');
+    expect(onAreaPark?.paint?.['fill-opacity']).toBe(0.15);
+    expect(onAreaPark?.layout?.visibility).toBe('visible');
+
+    const offBoundaryPark = offStyle.layers.find((l) => l.id === 'boundary-park') as any;
+    const offNamePark = offStyle.layers.find((l) => l.id === 'name-park') as any;
+    expect(offBoundaryPark?.minzoom).toBe(12);
+    expect(offNamePark?.minzoom).toBe(12);
+    expect(offBoundaryPark?.layout?.visibility).toBe('visible');
+    expect((offStyle.layers.find((l) => l.id === 'area-park') as any)?.layout?.visibility).toBe('none');
+    expect((offStyle.layers.find((l) => l.id === 'boundary-park-casing') as any)?.layout?.visibility).toBe('none');
+    expect(offNamePark?.layout?.visibility).toBe('none');
 
     // Trail color overlays hide; base geometry layers remain visible
     for (const overlayId of [
@@ -1092,6 +1122,10 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     const watchedIds = [
       'area-military',
       'boundary-military',
+      'area-park',
+      'boundary-park-casing',
+      'boundary-park',
+      'name-park',
       'trail-line-cycleway-purple',
       'trail-line-track',
       'path-cycleway',
@@ -1116,6 +1150,10 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(layoutUpdates).toEqual([
       { id: 'area-military', val: 'none' },
       { id: 'boundary-military', val: 'visible' },
+      { id: 'area-park', val: 'none' },
+      { id: 'boundary-park-casing', val: 'none' },
+      { id: 'boundary-park', val: 'visible' },
+      { id: 'name-park', val: 'none' },
       { id: 'trail-line-cycleway-purple', val: 'none' },
       { id: 'trail-line-track', val: 'none' },
       { id: 'path-cycleway', val: 'visible' },
@@ -1904,6 +1942,121 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
         configurable: true,
         value: origNavigator,
       });
+    }
+  });
+
+  it('prefers NativeGps on Android native with fixAgeMs and uses short active interval if falling back to Geolocation', async () => {
+    expect(
+      normalizeGpsPosition({
+        timestamp: 1700000000000,
+        fixAgeMs: 240,
+        coords: {
+          longitude: 34.91,
+          latitude: 31.90,
+          accuracy: 5,
+          altitude: 120,
+          heading: 180,
+          speed: 29.5,
+        },
+      })
+    ).toEqual({
+      lon: 34.91,
+      lat: 31.90,
+      accuracy: 5,
+      altitude: 120,
+      heading: 180,
+      speed: 29.5,
+      timestamp: 1700000000000,
+      fixAgeMs: 240,
+    });
+
+    const isNativeSpy = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true);
+    const platformSpy = vi.spyOn(Capacitor, 'getPlatform').mockReturnValue('android');
+    const availSpy = vi.spyOn(Capacitor, 'isPluginAvailable').mockReturnValue(true);
+    const capPlugins = (Capacitor as any).Plugins as Record<string, any>;
+    const origNativeGps = capPlugins.NativeGps;
+    const origGeo = capPlugins.Geolocation;
+
+    try {
+      // 1. Primary path: NativeGps is used directly with 500ms interval and fixAgeMs preserved
+      const nativeWatchSpy = vi.fn(async (_opts: any, cb: any) => {
+        cb({
+          timestamp: 5000,
+          fixAgeMs: 165,
+          coords: { longitude: 34.91, latitude: 31.91, accuracy: 4, speed: 30, heading: 0 },
+        });
+        return 'native-watch-1';
+      });
+      const nativeClearSpy = vi.fn(async () => {});
+      capPlugins.NativeGps = {
+        checkPermissions: vi.fn(async () => ({ location: 'granted' })),
+        requestPermissions: vi.fn(async () => ({ location: 'granted' })),
+        getCurrentPosition: vi.fn(async () => {
+          throw new Error('no seed');
+        }),
+        watchPosition: nativeWatchSpy,
+        clearWatch: nativeClearSpy,
+      };
+      capPlugins.Geolocation = {
+        checkPermissions: vi.fn(async () => ({ location: 'granted' })),
+        watchPosition: vi.fn(async () => 'geo-should-not-run'),
+        clearWatch: vi.fn(async () => {}),
+      };
+
+      const fixes1: LiveGpsFix[] = [];
+      const stop1 = LiveGpsService.startContinuousWatch((f) => fixes1.push(f), undefined, {
+        timeout: 10000,
+        minimumUpdateInterval: 500,
+      });
+      await vi.waitFor(() => expect(fixes1).toHaveLength(1));
+      expect(nativeWatchSpy).toHaveBeenCalledTimes(1);
+      expect(fixes1[0]).toMatchObject({ speed: 30, fixAgeMs: 165 });
+      stop1();
+      await vi.waitFor(() => expect(nativeClearSpy).toHaveBeenCalledWith({ id: 'native-watch-1' }));
+
+      // 2. Fallback path: NativeGps UNIMPLEMENTED -> Geolocation receives short timeout (500ms, NOT 10000ms)
+      const geoWatchSpy = vi.fn(async (_opts: any, cb: any) => {
+        cb({
+          timestamp: 6000,
+          coords: { longitude: 34.92, latitude: 31.92, accuracy: 6, speed: 25, heading: 10 },
+        });
+        return 'geo-watch-2';
+      });
+      const geoClearSpy = vi.fn(async () => {});
+      capPlugins.NativeGps = {
+        checkPermissions: vi.fn(async () => {
+          throw { code: 'UNIMPLEMENTED', message: 'not implemented' };
+        }),
+      };
+      capPlugins.Geolocation = {
+        checkPermissions: vi.fn(async () => ({ location: 'granted' })),
+        requestPermissions: vi.fn(async () => ({ location: 'granted' })),
+        getCurrentPosition: vi.fn(async () => {
+          throw new Error('no seed');
+        }),
+        watchPosition: geoWatchSpy,
+        clearWatch: geoClearSpy,
+      };
+
+      const fixes2: LiveGpsFix[] = [];
+      const stop2 = LiveGpsService.startContinuousWatch((f) => fixes2.push(f), undefined, {
+        timeout: 10000,
+        minimumUpdateInterval: 500,
+      });
+      await vi.waitFor(() => expect(fixes2).toHaveLength(1));
+      expect(geoWatchSpy).toHaveBeenCalledTimes(1);
+      expect(geoWatchSpy.mock.calls[0][0]).toMatchObject({
+        timeout: 500,
+        minimumUpdateInterval: 500,
+      });
+      stop2();
+      await vi.waitFor(() => expect(geoClearSpy).toHaveBeenCalledWith({ id: 'geo-watch-2' }));
+    } finally {
+      capPlugins.NativeGps = origNativeGps;
+      capPlugins.Geolocation = origGeo;
+      isNativeSpy.mockRestore();
+      platformSpy.mockRestore();
+      availSpy.mockRestore();
     }
   });
 

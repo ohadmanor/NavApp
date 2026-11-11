@@ -10,6 +10,8 @@ echo   Working Directory: %CD%
 echo ============================================================================
 
 echo [1/5] Generating offline assets, PMTiles search index, and building production web bundle...
+if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
+if exist "android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" del /F /Q "android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 call node devops\build-pmtiles-search-index.mjs --if-present --if-stale
 call node devops\generate-offline-assets.mjs
 call npm.cmd run build

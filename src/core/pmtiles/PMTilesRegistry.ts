@@ -12,6 +12,7 @@ import {
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
 import { pmtilesUrl, REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN, isNativePlatform } from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
+import { NativeOfflineStorage } from './NativeOfflineStorage';
 import { CachedFetchSource } from './CachedFetchSource';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
 import { registerOfflineRtlTextPlugin } from '../style/hebrewBidiProcessor';
@@ -114,6 +115,8 @@ export class PMTilesRegistry {
   private autoDownloadQueue: Array<'israel-osm' | 'israel-dem'> = [];
   private isAutoDownloading = false;
   private forcedDownloads = new Set<string>();
+  private migrationQueue: Promise<void> = Promise.resolve();
+  private migratingArchives = new Set<string>();
   private defaultInitPromise: Promise<{
     dem: MountedArchiveInfo | null;
     osm: MountedArchiveInfo | null;
@@ -246,9 +249,10 @@ export class PMTilesRegistry {
 
   /**
    * Resolves a PMTiles archive:
-   * 1. Checks local development/preview server (/data/{fileName}) and device storage (OPFS).
-   *    If OPFS holds an older/different size copy than local /data/{fileName}, mounts the fresh local server copy.
-   * 2. Otherwise mounts OPFS offline copy (and checks Firebase for updates on updatable OSM archives).
+   * 1. On native Android: prefers shared native file storage (`filesDir/maps/{fileName}`)
+   *    accessible to both the Capacitor WebView and Android Auto CarAppService; migrates
+   *    any legacy OPFS copy into native storage once and deletes the OPFS duplicate.
+   * 2. On Web: checks local development/preview server (/data/{fileName}) and device storage (OPFS).
    * 3. If not found locally, connects to Firebase (REMOTE_DATA_ORIGIN).
    */
   async resolveArchive(
@@ -257,6 +261,42 @@ export class PMTilesRegistry {
     isConstant: boolean
   ): Promise<MountedArchiveInfo | null> {
     this.initProtocols();
+
+    if (NativeOfflineStorage.isAndroidNative()) {
+      const [nativeStatus, opfsFile] = await Promise.all([
+        NativeOfflineStorage.getArchiveStatus(),
+        OpfsStorageAdapter.getStoredFile(fileName).catch(() => null),
+      ]);
+      const fileStatus = nativeStatus?.files?.[fileName];
+      if (fileStatus?.exists && fileStatus.valid && fileStatus.sizeBytes > 0) {
+        if (opfsFile) {
+          void OpfsStorageAdapter.removeFile(fileName).catch(() => {});
+        }
+        console.log(`[PMTilesRegistry] Found ${fileName} in native Android storage. Mounting...`);
+        const mounted = await this.mountNativeArchive(
+          id,
+          fileName,
+          fileStatus.nativeUrl,
+          isConstant,
+          fileStatus.sizeBytes,
+          fileStatus.localPath
+        );
+        if (!isConstant) {
+          void this.checkForRemoteUpdate(id, fileName, fileStatus.sizeBytes);
+        }
+        return mounted;
+      }
+
+      if (opfsFile && opfsFile.size > 0) {
+        console.log(`[PMTilesRegistry] Found legacy OPFS ${fileName}. Mounting and scheduling native migration...`);
+        const mounted = await this.mountFromFile(id, fileName, opfsFile, isConstant, 'opfs');
+        this.scheduleOpfsToNativeMigration(id, fileName, opfsFile, isConstant);
+        if (!isConstant) {
+          void this.checkForRemoteUpdate(id, fileName, opfsFile.size);
+        }
+        return mounted;
+      }
+    }
 
     const [opfsFile, localServer] = await Promise.all([
       OpfsStorageAdapter.getStoredFile(fileName).catch((err) => {
@@ -414,6 +454,13 @@ export class PMTilesRegistry {
     const failKey = `pmtiles-dl-fail:${fileName}`;
 
     try {
+      if (NativeOfflineStorage.isAndroidNative()) {
+        const nativeStatus = await NativeOfflineStorage.getArchiveStatus();
+        const fileStatus = nativeStatus?.files?.[fileName];
+        if (fileStatus?.exists && fileStatus.valid && fileStatus.sizeBytes > 0 && !forced) {
+          return;
+        }
+      }
       const existing = await OpfsStorageAdapter.getStoredFile(fileName);
       if (existing && existing.size > 0 && !forced) return;
 
@@ -465,6 +512,68 @@ export class PMTilesRegistry {
     }
 
     return this.defaultInitPromise;
+  }
+
+  private scheduleOpfsToNativeMigration(
+    id: 'israel-dem' | 'israel-osm',
+    fileName: string,
+    opfsFile: File,
+    isConstant: boolean
+  ): void {
+    if (this.migratingArchives.has(fileName)) return;
+    this.migratingArchives.add(fileName);
+    this.migrationQueue = this.migrationQueue
+      .then(async () => {
+        try {
+          console.log(`[PMTilesRegistry] Migrating ${fileName} from OPFS to shared Android storage...`);
+          const saved = await NativeOfflineStorage.saveBlobChunked(
+            fileName,
+            opfsFile,
+            (loaded, total) => this.notifyDownloadProgress(fileName, loaded, total)
+          );
+          if (saved?.exists && saved.valid && saved.sizeBytes > 0) {
+            const migrated = await this.mountNativeArchive(
+              id,
+              fileName,
+              saved.nativeUrl,
+              isConstant,
+              saved.sizeBytes,
+              saved.localPath,
+              saved.lastModifiedMs
+            );
+            await OpfsStorageAdapter.removeFile(fileName).catch(() => {});
+            console.log(`[PMTilesRegistry] Migrated ${fileName} to native storage (${saved.localPath}).`);
+            this.notifyArchiveUpdated(id, migrated);
+          }
+        } catch (err) {
+          console.warn(`[PMTilesRegistry] OPFS->Native migration warning for ${fileName}:`, err);
+        } finally {
+          this.migratingArchives.delete(fileName);
+        }
+      });
+  }
+
+  async mountNativeArchive(
+    id: 'israel-dem' | 'israel-osm',
+    fileName: string,
+    nativeUrl: string,
+    isConstant: boolean,
+    knownSizeBytes = 0,
+    localPath?: string,
+    versionTag?: number
+  ): Promise<MountedArchiveInfo> {
+    this.initProtocols();
+    const versionedUrl = `${nativeUrl}?v=${versionTag || Date.now()}`;
+    const source = new FetchSource(versionedUrl);
+    return this.registerArchiveSource(
+      id,
+      fileName,
+      source,
+      'native-file',
+      localPath || nativeUrl,
+      knownSizeBytes,
+      isConstant
+    );
   }
 
   async mountFromUrl(
@@ -519,7 +628,7 @@ export class PMTilesRegistry {
 
   /**
    * Downloads Israel.dem.pmtiles or Israel.osm.pmtiles from the local /data server (in dev) or
-   * hosted Firebase site into the device's persistent storage (OPFS) on user request, then mounts
+   * hosted Firebase site into native Android storage (or browser OPFS on Web), then mounts
    * the local copy so the map works 100% offline.
    */
   async downloadOfflineArchive(
@@ -527,10 +636,38 @@ export class PMTilesRegistry {
     onProgress?: (loaded: number, total: number) => void,
     signal?: AbortSignal
   ): Promise<MountedArchiveInfo> {
+    const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
+    const isConstant = id === 'israel-dem';
+
+    if (NativeOfflineStorage.isAndroidNative()) {
+      const remote = await this.probeRemote(fileName);
+      if (!remote) {
+        throw new Error(`Archive ${fileName} is not available on Firebase Hosting (404/missing).`);
+      }
+      const saved = await NativeOfflineStorage.downloadArchive(
+        fileName,
+        remote.url,
+        remote.size,
+        onProgress,
+        signal
+      );
+      this.writeMeta(fileName, { size: remote.size || saved.sizeBytes, etag: remote.etag });
+      await OpfsStorageAdapter.removeFile(fileName).catch(() => {});
+      await CachedFetchSource.clear();
+      return this.mountNativeArchive(
+        id,
+        fileName,
+        saved.nativeUrl,
+        isConstant,
+        saved.sizeBytes,
+        saved.localPath,
+        saved.lastModifiedMs
+      );
+    }
+
     if (!OpfsStorageAdapter.isSupported()) {
       throw new Error('Offline storage (OPFS) is not supported on this device/browser.');
     }
-    const fileName = id === 'israel-dem' ? 'Israel.dem.pmtiles' : 'Israel.osm.pmtiles';
     const local = await this.probeLocalServer(fileName);
     const remote = local ? null : await this.probeRemote(fileName);
     if (!local && !remote) {
@@ -549,7 +686,7 @@ export class PMTilesRegistry {
     );
     this.writeMeta(fileName, { size: expectedSize || file.size, etag });
     await CachedFetchSource.clear(); // streamed ranges of the old file are obsolete
-    return this.mountFromFile(id, fileName, file, id === 'israel-dem', 'opfs');
+    return this.mountFromFile(id, fileName, file, isConstant, 'opfs');
   }
 
   async replaceOsmArchive(
@@ -557,6 +694,47 @@ export class PMTilesRegistry {
     onProgress?: (loaded: number, total: number) => void
   ): Promise<MountedArchiveInfo> {
     await CachedFetchSource.clear();
+    if (NativeOfflineStorage.isAndroidNative()) {
+      if (newSource.kind === 'file') {
+        if (newSource.persistToOpfs) {
+          const saved = await NativeOfflineStorage.saveBlobChunked(
+            'Israel.osm.pmtiles',
+            newSource.file,
+            onProgress
+          );
+          await OpfsStorageAdapter.removeFile('Israel.osm.pmtiles').catch(() => {});
+          this.writeMeta('Israel.osm.pmtiles', { size: saved.sizeBytes });
+          return this.mountNativeArchive(
+            'israel-osm',
+            'Israel.osm.pmtiles',
+            saved.nativeUrl,
+            false,
+            saved.sizeBytes,
+            saved.localPath,
+            saved.lastModifiedMs
+          );
+        }
+        return await this.mountFromFile('israel-osm', 'Israel.osm.pmtiles', newSource.file, false, 'user-file');
+      }
+      const saved = await NativeOfflineStorage.downloadArchive(
+        'Israel.osm.pmtiles',
+        newSource.url,
+        0,
+        onProgress
+      );
+      await OpfsStorageAdapter.removeFile('Israel.osm.pmtiles').catch(() => {});
+      this.writeMeta('Israel.osm.pmtiles', { size: saved.sizeBytes });
+      return this.mountNativeArchive(
+        'israel-osm',
+        'Israel.osm.pmtiles',
+        saved.nativeUrl,
+        false,
+        saved.sizeBytes,
+        saved.localPath,
+        saved.lastModifiedMs
+      );
+    }
+
     if (newSource.kind === 'file') {
       let targetFile = newSource.file;
       let storageKind: 'opfs' | 'user-file' = 'user-file';
@@ -582,6 +760,33 @@ export class PMTilesRegistry {
       }
       return await this.mountFromUrl('israel-osm', 'Israel.osm.pmtiles', newSource.url, false);
     }
+  }
+
+  async mountLocalDemArchive(
+    file: File,
+    onProgress?: (loaded: number, total: number) => void
+  ): Promise<MountedArchiveInfo> {
+    if (NativeOfflineStorage.isAndroidNative()) {
+      const saved = await NativeOfflineStorage.saveBlobChunked('Israel.dem.pmtiles', file, onProgress);
+      await OpfsStorageAdapter.removeFile('Israel.dem.pmtiles').catch(() => {});
+      return this.mountNativeArchive(
+        'israel-dem',
+        'Israel.dem.pmtiles',
+        saved.nativeUrl,
+        true,
+        saved.sizeBytes,
+        saved.localPath,
+        saved.lastModifiedMs
+      );
+    }
+    return this.mountFromFile('israel-dem', 'Israel.dem.pmtiles', file, true, 'user-file');
+  }
+
+  async removeOfflineArchive(fileName: string): Promise<void> {
+    await Promise.all([
+      NativeOfflineStorage.removeArchive(fileName).catch(() => {}),
+      OpfsStorageAdapter.removeFile(fileName).catch(() => {}),
+    ]);
   }
 
   private async registerArchiveSource(

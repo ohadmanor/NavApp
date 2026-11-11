@@ -18,6 +18,7 @@ import {
 import type { MountedArchiveInfo } from '../../core/pmtiles/PMTilesRegistry';
 import { pmtilesRegistry } from '../../core/pmtiles/PMTilesRegistry';
 import { OpfsStorageAdapter } from '../../core/pmtiles/OpfsStorageAdapter';
+import { NativeOfflineStorage } from '../../core/pmtiles/NativeOfflineStorage';
 import { CommunityPoiImporter } from '../../core/pois/CommunityPoiImporter';
 import { RouteManager } from '../../core/navigation/RouteManager';
 import type { SavedRouteRecord } from '../../core/db/NavDatabase';
@@ -113,19 +114,32 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
   const handleDownloadOffline = async (id: 'israel-dem' | 'israel-osm') => {
     if (downloading) return;
-    if (!OpfsStorageAdapter.isSupported()) {
+    const isAndroidNative = NativeOfflineStorage.isAndroidNative();
+    if (!isAndroidNative && !OpfsStorageAdapter.isSupported()) {
       setStatusMessage('שגיאה: אחסון אופליין (OPFS) אינו נתמך במכשיר / בדפדפן זה.');
       return;
     }
     const needed = ARCHIVE_SIZES[id];
-    const est = await OpfsStorageAdapter.getStorageEstimate();
-    if (est.quota > 0 && est.quota - est.usage < needed * 1.05) {
-      setStatusMessage(
-        `אין מספיק מקום אחסון פנוי: נדרש ${formatSize(needed)}, פנוי ${formatSize(
-          Math.max(0, est.quota - est.usage)
-        )}.`
-      );
-      return;
+    if (isAndroidNative) {
+      const nativeStatus = await NativeOfflineStorage.getArchiveStatus();
+      if (nativeStatus && nativeStatus.freeBytes > 0 && nativeStatus.freeBytes < needed * 1.05) {
+        setStatusMessage(
+          `אין מספיק מקום אחסון פנוי במכשיר: נדרש ${formatSize(needed)}, פנוי ${formatSize(
+            nativeStatus.freeBytes
+          )}.`
+        );
+        return;
+      }
+    } else {
+      const est = await OpfsStorageAdapter.getStorageEstimate();
+      if (est.quota > 0 && est.quota - est.usage < needed * 1.05) {
+        setStatusMessage(
+          `אין מספיק מקום אחסון פנוי: נדרש ${formatSize(needed)}, פנוי ${formatSize(
+            Math.max(0, est.quota - est.usage)
+          )}.`
+        );
+        return;
+      }
     }
 
     const controller = new AbortController();
@@ -163,7 +177,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     if (!window.confirm(`למחוק את העותק המקומי של ${ARCHIVE_FILES[id]}? המפה תחזור להזרמה מקוונת.`)) {
       return;
     }
-    await OpfsStorageAdapter.removeFile(ARCHIVE_FILES[id]);
+    await pmtilesRegistry.removeOfflineArchive(ARCHIVE_FILES[id]);
     window.location.reload();
   };
 
@@ -201,12 +215,11 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     setIsBusy(true);
     setStatusMessage(`טוען קובץ גבהים מקומי (${file.name})...`);
     try {
-      const updatedDem = await pmtilesRegistry.mountFromFile(
-        'israel-dem',
-        'Israel.dem.pmtiles',
+      const updatedDem = await pmtilesRegistry.mountLocalDemArchive(
         file,
-        true,
-        'user-file'
+        (loaded, total) => {
+          if (total > 0) setProgressPct(Math.round((loaded / total) * 100));
+        }
       );
       onArchivesUpdated(updatedDem, osmInfo);
       setStatusMessage(`✓ קובץ Israel.dem.pmtiles חובר בהצלחה מהמכשיר!`);
@@ -214,6 +227,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
       setStatusMessage(`שגיאה בטעינת DEM: ${err.message}`);
     } finally {
       setIsBusy(false);
+      setProgressPct(null);
     }
   };
 
@@ -414,8 +428,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 <div className={`text-xs space-y-0.5 ${t.muted}`}>
                   <div>
                     {isDem
-                      ? `קבוע ומוגן • זום z${info.record.minZoom}–z${info.record.maxZoom}`
-                      : `${info.record.storageKind === 'opfs' ? 'שמור ב-OPFS' : info.record.storageKind === 'local-server' ? 'מקור: /data מקומי' : 'מקור: ענן Firebase'} • עודכן: ${info.record.createdUtc.slice(0, 10)}`}
+                      ? `${info.record.storageKind === 'native-file' ? 'שמור במכשיר (Android + Auto) • ' : 'קבוע ומוגן • '}זום z${info.record.minZoom}–z${info.record.maxZoom}`
+                      : `${info.record.storageKind === 'native-file' ? 'שמור במכשיר (Android + Auto)' : info.record.storageKind === 'opfs' ? 'שמור ב-OPFS' : info.record.storageKind === 'local-server' ? 'מקור: /data מקומי' : 'מקור: ענן Firebase'} • עודכן: ${info.record.createdUtc.slice(0, 10)}`}
                   </div>
                   {!isDem && info.hasTrailColorSchema !== undefined && (
                     <div

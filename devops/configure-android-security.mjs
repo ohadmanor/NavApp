@@ -74,6 +74,14 @@ function configureNetworkSecurityXml() {
 `;
   fs.writeFileSync(path.join(xmlDir, 'network_security_config.xml'), netSecXml, 'utf-8');
   console.log('[Android Security] Configured res/xml/network_security_config.xml');
+
+  const automotiveDescXml = `<?xml version="1.0" encoding="utf-8"?>
+<automotiveApp>
+    <uses name="template" />
+</automotiveApp>
+`;
+  fs.writeFileSync(path.join(xmlDir, 'automotive_app_desc.xml'), automotiveDescXml, 'utf-8');
+  console.log('[Android Security] Configured res/xml/automotive_app_desc.xml');
 }
 
 function configureAndroidManifest() {
@@ -91,24 +99,70 @@ function configureAndroidManifest() {
   }
 
   // Add Outdoor GPS & Offline Storage Permissions before </manifest>
+  const hasInternet = xml.includes('android.permission.INTERNET');
   const permissionsBlock = `
-    <!-- NavApp Outdoor GPS & Offline PMTiles Permissions -->
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- NavApp Outdoor GPS & Offline PMTiles Permissions -->${hasInternet ? '' : '\n    <uses-permission android:name="android.permission.INTERNET" />'}
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 `;
 
   if (!xml.includes('ACCESS_FINE_LOCATION')) {
     xml = xml.replace('</manifest>', `${permissionsBlock}\n</manifest>`);
+  } else if (!xml.includes('android.permission.POST_NOTIFICATIONS')) {
+    xml = xml.replace(
+      '</manifest>',
+      `    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n\n</manifest>`
+    );
+  }
+
+  // Add Android Auto Car App Library permissions & service metadata
+  const carPermissionsBlock = `
+    <!-- Android Auto Car App Library (Navigation) -->
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+    <uses-permission android:name="androidx.car.app.MAP_TEMPLATES" />
+`;
+
+  if (!xml.includes('androidx.car.app.ACCESS_SURFACE')) {
+    xml = xml.replace('</manifest>', `${carPermissionsBlock}\n</manifest>`);
+  }
+
+  const carAppApplicationBlock = `
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
+
+        <service
+            android:name=".car.NavCarAppService"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.NAVIGATION" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".car.CarNavigationForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+`;
+
+  if (!xml.includes('.car.NavCarAppService')) {
+    xml = xml.replace('</application>', `${carAppApplicationBlock}\n    </application>`);
   }
 
   fs.writeFileSync(manifestPath, xml, 'utf-8');
-  console.log('[Android Security] Updated AndroidManifest.xml with GPS & Network Security Config');
+  console.log('[Android Security] Updated AndroidManifest.xml with GPS, Android Auto & Network Security Config');
 }
 
 function configureGradleSigning() {

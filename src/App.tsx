@@ -37,6 +37,7 @@ import {
 } from './core/style/israelOutdoorStyle';
 import { PoiManager, getPoiSortPriority } from './core/pois/PoiManager';
 import { RouteManager } from './core/navigation/RouteManager';
+import { carSyncService } from './core/car/CarSyncService';
 import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsService';
 import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
 import {
@@ -2327,6 +2328,18 @@ export const App: React.FC = () => {
     syncOverlaySourcesToMap,
   ]);
 
+  // Mirror routes, user POIs, theme, layer visibility, and active navigation status for Android Auto
+  useEffect(() => {
+    carSyncService.scheduleSync({
+      activeRoute,
+      routes,
+      pois,
+      isNavigationActive: isNavigatingRoute || isFreeNavigation,
+      theme,
+      visibility,
+    });
+  }, [activeRoute, routes, pois, isNavigatingRoute, isFreeNavigation, theme, visibility]);
+
   // Initialize unified PMTiles full-map search index & keep synced with active OSM archive
   useEffect(() => {
     const unsubStatus = pmtilesSearchService.subscribeStatus((st) => {
@@ -2417,10 +2430,17 @@ export const App: React.FC = () => {
 
   // Nearest POIs for Mobile Planning Peek Strip
   const referenceCoord = userLocation ?? { lon: cursorCoords.lon, lat: cursorCoords.lat };
+  const isNearbyStripVisible =
+    isMobile &&
+    mobileDisplayMode === 'planning' &&
+    mobileTab === 'explore' &&
+    !mobilePlanningOverlay;
+  const nearbyRefLon = Math.round(referenceCoord.lon * 1000) / 1000;
+  const nearbyRefLat = Math.round(referenceCoord.lat * 1000) / 1000;
 
   const nearbyPois = useMemo(() => {
-    if (pois.length === 0 || !visibility.pois) return [];
-    const cosLat = Math.cos((referenceCoord.lat * Math.PI) / 180);
+    if (!isNearbyStripVisible || pois.length === 0 || !visibility.pois) return [];
+    const cosLat = Math.cos((nearbyRefLat * Math.PI) / 180);
     const maxCandidates = 40;
     const candidates: Array<{ poi: PoiRecord; approxDistSq: number }> = [];
     let worstDistSq = Infinity;
@@ -2434,8 +2454,8 @@ export const App: React.FC = () => {
       if (p.category === 'peak' && !visibility.poiPeaks) continue;
       if (p.category === 'user' && !(visibility.poiUser ?? true)) continue;
 
-      const dLon = (p.lon - referenceCoord.lon) * cosLat;
-      const dLat = p.lat - referenceCoord.lat;
+      const dLon = (p.lon - nearbyRefLon) * cosLat;
+      const dLat = p.lat - nearbyRefLat;
       const distSq = dLon * dLon + dLat * dLat;
       if (candidates.length < maxCandidates) {
         candidates.push({ poi: p, approxDistSq: distSq });
@@ -2450,7 +2470,7 @@ export const App: React.FC = () => {
       }
     }
 
-    const refPt = turf.point([referenceCoord.lon, referenceCoord.lat]);
+    const refPt = turf.point([nearbyRefLon, nearbyRefLat]);
     return candidates
       .map(({ poi }) => ({
         poi,
@@ -2463,9 +2483,10 @@ export const App: React.FC = () => {
       )
       .slice(0, 10);
   }, [
+    isNearbyStripVisible,
     pois,
-    referenceCoord.lon,
-    referenceCoord.lat,
+    nearbyRefLon,
+    nearbyRefLat,
     visibility.pois,
     visibility.poiWater,
     visibility.poiHeritage,
@@ -2808,7 +2829,10 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSelectRoute = async (route: SavedRouteRecord | null) => {
+  const handleSelectRoute = async (
+    route: SavedRouteRecord | null,
+    options?: { flyTo?: boolean }
+  ) => {
     if (!route) {
       handleHoverElevationChart(null);
       setActiveRoute(null);
@@ -2821,35 +2845,41 @@ export const App: React.FC = () => {
     const refreshed = await RouteManager.refreshRouteElevationsFromDem(route);
     setActiveRoute(refreshed);
     setRoutes((prev) => prev.map((r) => (r.id === refreshed.id ? refreshed : r)));
-    handleFlyToRoute(refreshed);
+    if (options?.flyTo !== false) {
+      handleFlyToRoute(refreshed);
+    }
   };
 
   const handleStartRouteNavigation = async (route: SavedRouteRecord) => {
     void NavigationHeadingService.requestCompassPermissionIfNeeded();
-    await handleSelectRoute(route);
+    const wasAlreadyNavigating = isNavigationActiveRef.current;
+    await handleSelectRoute(route, { flyTo: false });
     setIsNavigatingRoute(true);
     setIsFreeNavigation(false);
     setIsFollowingUser(true);
     isFollowingUserRef.current = true;
     setRemainingDistKm(route.distanceKm);
-    const latestFrame = navSmootherRef.current?.getLatestFrame();
-    const resolvedHeading = resolveCurrentHeading();
-    const targetBearing =
-      navOrientationRef.current === 'heading-up' ? resolvedHeading ?? 0 : 0;
-    const currentLoc = userLocationRef.current;
-    const centerCoord: [number, number] | null = latestFrame
-      ? [latestFrame.lon, latestFrame.lat]
-      : currentLoc
-        ? [currentLoc.lon, currentLoc.lat]
-        : null;
-    if (centerCoord) {
-      beginCameraTransition(1000);
-      mapRef.current?.flyTo({
-        center: centerCoord,
-        zoom: 15.5,
-        bearing: targetBearing,
-        essential: true,
-      });
+    if (wasAlreadyNavigating) {
+      const latestFrame = navSmootherRef.current?.getLatestFrame();
+      const resolvedHeading = resolveCurrentHeading();
+      const targetBearing =
+        navOrientationRef.current === 'heading-up' ? resolvedHeading ?? 0 : 0;
+      const currentLoc = userLocationRef.current;
+      const centerCoord: [number, number] | null = latestFrame
+        ? [latestFrame.lon, latestFrame.lat]
+        : currentLoc
+          ? [currentLoc.lon, currentLoc.lat]
+          : null;
+      if (centerCoord) {
+        beginCameraTransition(450);
+        mapRef.current?.easeTo({
+          center: centerCoord,
+          zoom: Math.max(mapRef.current.getZoom() || 15.5, 15.5),
+          bearing: targetBearing,
+          duration: 450,
+          essential: true,
+        });
+      }
     }
     if (isMobile) {
       setMobileDisplayMode('navigating');

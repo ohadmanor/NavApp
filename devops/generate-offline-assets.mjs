@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateCarStyleAssets } from './build-car-styles.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -413,3 +414,5 @@ self.addEventListener('fetch', (event) => {
 fs.writeFileSync(path.join(PUBLIC_DIR, 'sw.js'), swCode, 'utf-8');
 
 console.log('[Offline Assets] Generated manifest.webmanifest, rtl-text-plugin.js, and sw.js in public/');
+
+await generateCarStyleAssets();

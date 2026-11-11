@@ -34,7 +34,7 @@ In MapLibre GL JS:
 | **Cemeteries** | `landuse` (`class: cemetery`) | **z11** *(layer minzoom: z4)* | **z0** | **z11** |
 | **Military Zones / Firing Areas** | `landuse` (`class: military`) | **z11** *(layer minzoom: z4)* | **z9.5** | **z11** |
 | **Administrative Areas A, B & H1** | `boundary` / `admin_area` | **z0** | **z0** | **z0** |
-| **Nature Reserves & National Parks** | `park` | **z11** | **z9** *(boundary)* | **z11** |
+| **Nature Reserves & National Parks** | `park` | **z11** | **z13** *(fill)* | **z13** |
 | **Piers & Docks** | `transportation` (`class: pier`) | **z13** *(layer minzoom: z4)* | **z0** | **z13** |
 | **Breakwaters** | `landuse` (`class: breakwater`) | **z11** *(layer minzoom: z4)* | **z0** | **z11** |
 | **Helipads & Aprons** | `aeroway` (`class: helipad, apron`) | **z11** | **z15** | **z15** |
@@ -48,7 +48,7 @@ In MapLibre GL JS:
 | :--- | :--- | :---: | :---: | :---: |
 | **International Borders & Ceasefire Lines** | `boundary` (`admin_level: 2`, Green Line, Golan) | **z0** | **z0** *(dash pattern at z8)* | **z0** |
 | **Area A / B Boundary Lines** | `boundary` (`Area A, Area B, Area H1`) | **z0** | **z0** | **z0** |
-| **Nature Reserve / Park Boundaries** | `park` (`class: national_park, nature_reserve`) | **z11** | **z9** *(casing at z13)* | **z11** |
+| **Nature Reserve / Park Boundaries** | `park` (`class: national_park, nature_reserve, protected_area`) | **z11** | **z12** *(casing & fill at z13)* | **z12** *(z13 fill/casing)* |
 | **Motorways / Freeways** | `transportation` (`class: motorway`) | **z4** | **z5** *(casing at z6)* | **z5** |
 | **Trunk Highways** | `transportation` (`class: trunk`) | **z4** | **z5** *(casing at z7)* | **z5** |
 | **Primary Roads** | `transportation` (`class: primary`) | **z4** | **z10** | **z10** |
@@ -90,7 +90,7 @@ In MapLibre GL JS:
 | **Minor & Service Road Names** | `transportation_name` (`minor, service`) | **z14** *(layer minzoom: z8)* | **z15** | **z15** |
 | **Track & Path Names** | `transportation_name` (`track, path`) | **z13 / z14** *(layer minzoom: z8)* | **z0** | **z13 / z14** |
 | **Regional & Local Trail Labels** | `transportation_name` (`network: rwn, lwn`) | **z8** | **z13** | **z13** |
-| **Nature Park / Reserve Names** | `park` | **z11** | **z9** | **z11** |
+| **Nature Park / Reserve Names** | `park` | **z11** | **z12** | **z12** |
 | **River & Waterway Names** | `waterway` | **z8** | **z0** | **z8** |
 | **Lake & Sea Names** | `water_name` | **z14** | **z0** | **z14** |
 | **Water Springs, Cisterns & Pools** | `poi` (`subclass: spring, cistern, pond`) | **z12** | **z11.5** | **z12** |
