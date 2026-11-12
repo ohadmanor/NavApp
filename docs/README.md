@@ -6,12 +6,17 @@
 
 ## 1. Folder Structure (`C:\dev\NavApp`)
 
-- **[`docs/`](./)** — All project documentation and architecture diagrams:
+- **[`docs/`](./)** — All project documentation, implementation plans, and architecture diagrams:
   - [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) — Full architectural & implementation blueprint.
+  - [`decoupled-storage-implementation-plan.md`](./decoupled-storage-implementation-plan.md) — Decoupling code deployments (`deploy-firebase.bat`) from Firebase map data storage.
   - [`route-planning-implementation-plan.md`](./route-planning-implementation-plan.md) — Client-side route planning (4x4, Foot, Bicycle) & Firebase `planing_tracks` sync design.
+  - [`route-planning-v2-implementation-plan.md`](./route-planning-v2-implementation-plan.md) — Route Planning v2 (scalable 100s+ route library, map visibility rules, My/Shared split, and user-to-user sharing).
+  - [`poi-refactoring-prds.md`](./poi-refactoring-prds.md) — Product Requirements Documents (PRDs) for strict 6-category POI taxonomy, text-integrated classifier, and POI edit/delete lifecycle.
+  - [`poi-refactoring-implementation-plan.md`](./poi-refactoring-implementation-plan.md) — Implementation plan for POI refactoring across Web, Search, Cloud Sync, and Android Auto.
   - [`architecture-diagram.html`](./architecture-diagram.html) — Interactive 5-layer system architecture & offline data-flow diagram.
   - [`navapp-ui-mockup.html`](./navapp-ui-mockup.html) — Interactive Web Desktop & Mobile UI/UX mockup synced to the shipped application.
   - [`osm-zoom-levels.md`](./osm-zoom-levels.md) — Vector tile & contour zoom-level specification.
+  - [`tilemaker-nature-reserves-fix.md`](./tilemaker-nature-reserves-fix.md) — Tilemaker nature reserves rendering fix documentation.
   - [`android-auto-distribution.md`](./android-auto-distribution.md) — Publishing & installing NavApp for Android Auto (Play Internal Testing, Production, and Sideloading).
   - [`README.md`](./README.md) — User, DevOps & Deployment guide.
 - **[`data/`](../data/)** — Offline PMTiles & GeoJSON map data archives:
