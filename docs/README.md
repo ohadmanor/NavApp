@@ -12,6 +12,7 @@
   - [`architecture-diagram.html`](./architecture-diagram.html) — Interactive 5-layer system architecture & offline data-flow diagram.
   - [`navapp-ui-mockup.html`](./navapp-ui-mockup.html) — Interactive Web Desktop & Mobile UI/UX mockup synced to the shipped application.
   - [`osm-zoom-levels.md`](./osm-zoom-levels.md) — Vector tile & contour zoom-level specification.
+  - [`android-auto-distribution.md`](./android-auto-distribution.md) — Publishing & installing NavApp for Android Auto (Play Internal Testing, Production, and Sideloading).
   - [`README.md`](./README.md) — User, DevOps & Deployment guide.
 - **[`data/`](../data/)** — Offline PMTiles & GeoJSON map data archives:
   - [`Israel.dem.pmtiles`](../data/Israel.dem.pmtiles) (**1.40 GB — Constant / Static DEM**): Terrarium 256px PNG elevation pyramid (`z0–z14`). Installed once; never changes. Powers Hillshade, 3D Terrain, Dynamic Contour Lines (`10m`/`50m`), and Offline Route Elevation Profiles.
