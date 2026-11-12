@@ -18,6 +18,8 @@ import {
 } from '../routing/TileRoadGraphBuilder';
 import { ClientRoutePlannerEngine } from '../routing/ClientRoutePlannerEngine';
 import { RouteManager } from '../navigation/RouteManager';
+import { HighwayWayGeometryService } from '../trails/HighwayWayGeometryService';
+import { trailWayIdFromMvtId } from '../trails/TrailAnnotationTypes';
 import {
   FIREBASE_PLANNING_FOLDER,
   buildPlaningTracksPaths,
@@ -281,6 +283,21 @@ describe('Client-Side Route Planner (4x4, Foot, Bicycle) & Firebase planing_trac
 
       // Real-data test 1: Ein Aqev desert trails & dirt tracks ([34.8134, 30.835] across 3x3 desert corridor)
       const einCenter = lonLatToTile(34.8134, 30.835, ROUTING_TILE_ZOOM);
+      const selectableWay = (await builder.getDecodedTileWays(einCenter.tx, einCenter.ty)).find(
+        (way) => /^\d+$/.test(way.featureId) && way.points.length >= 2
+      );
+      if (!selectableWay) throw new Error('Expected a stable highway feature ID in the PMTiles fixture.');
+      const wayId = trailWayIdFromMvtId(selectableWay.featureId);
+      if (!wayId) throw new Error('Expected the PMTiles highway ID to be numeric.');
+      const selectedPoint = selectableWay.points[Math.floor(selectableWay.points.length / 2)];
+      const resolvedWay = await new HighwayWayGeometryService(builder).resolveWayAt(
+        wayId,
+        selectedPoint.lon,
+        selectedPoint.lat,
+        'integration-test-release'
+      );
+      expect(resolvedWay.geometry.coordinates.flat().length).toBeGreaterThanOrEqual(2);
+
       const einTiles = [];
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {

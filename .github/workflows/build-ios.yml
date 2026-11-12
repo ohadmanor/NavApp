@@ -1,0 +1,56 @@
+name: Build iOS App (.ipa)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "iOS build output mode"
+        required: true
+        default: "unsigned"
+        type: choice
+        options:
+          - unsigned
+          - simulator
+          - ad-hoc
+          - app-store
+      build_number:
+        description: "CFBundleVersion (leave empty to use GitHub run number)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build iOS package
+        env:
+          IOS_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          chmod +x devops/build-ios-ipa.sh
+          bash devops/build-ios-ipa.sh --${{ inputs.build_mode }}
+
+      - name: Upload iOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: navapp-ios-${{ inputs.build_mode }}
+          path: |
+            dist/NavApp-Israel-*.ipa
+            dist/NavApp-Israel-*.app.zip
+          if-no-files-found: error
+          retention-days: 14

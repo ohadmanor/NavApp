@@ -23,6 +23,7 @@ import {
   PenTool,
   Undo2,
   Check,
+  MapPin,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
 import {
@@ -31,6 +32,7 @@ import {
   buildPoiTieredLayerFilter,
   isMasterPoiActive,
   POI_STYLE_LAYER_IDS,
+  HIGHWAY_LAYER_IDS,
   DEFAULT_LAYER_VISIBILITY,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
@@ -116,6 +118,7 @@ import {
 } from './components/map/UserIconPickerSheet';
 import { SearchBar } from './components/search/SearchBar';
 import { GoogleAccountButton } from './components/auth/GoogleAccountButton';
+import { TrailAnnotationsPanel } from './components/map/TrailAnnotationsPanel';
 import {
   UserStateSyncService,
   type MergeUserStateResult,
@@ -123,11 +126,32 @@ import {
   type SavedUserConfiguration,
 } from './core/preferences/UserStateSyncService';
 import { getSurfaceTheme, type MapTheme } from './components/ui/themeTokens';
+import {
+  getTrailMapReleaseId,
+} from './core/firebase/TrailAnnotationsCloudService';
+import { highwayWayGeometryService } from './core/trails/HighwayWayGeometryService';
+import {
+  trailWayIdFromMvtId,
+  type TrailWayCandidate,
+  type TrailWayGeometry,
+} from './core/trails/TrailAnnotationTypes';
 
-type DesktopDrawerMode = 'poi' | 'routes' | 'record' | 'add-poi' | 'plan-route' | null;
+type DesktopDrawerMode =
+  | 'poi'
+  | 'routes'
+  | 'record'
+  | 'add-poi'
+  | 'plan-route'
+  | null;
 type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
-type MobileOverlayMode = 'poi' | 'layers' | 'add-poi' | 'plan-route' | 'user-icon' | null;
+type MobileOverlayMode =
+  | 'poi'
+  | 'layers'
+  | 'add-poi'
+  | 'plan-route'
+  | 'user-icon'
+  | null;
 type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'user-icon' | null;
 
 const LAST_AUTH_UID_STORAGE_KEY = 'navapp.lastAuthUid.v1';
@@ -253,6 +277,16 @@ export const App: React.FC = () => {
   const [isMapReady, setIsMapReady] = useState(false);
   const [demInfo, setDemInfo] = useState<MountedArchiveInfo | null>(null);
   const [osmInfo, setOsmInfo] = useState<MountedArchiveInfo | null>(null);
+  const [trailOverlayGeoJSON, setTrailOverlayGeoJSON] = useState<GeoJSON.FeatureCollection>({
+    type: 'FeatureCollection',
+    features: [],
+  });
+  const [showTrailOverlay, setShowTrailOverlay] = useState(true);
+  const [mapStyleRevision, setMapStyleRevision] = useState(0);
+  const [selectedTrailWay, setSelectedTrailWay] = useState<TrailWayGeometry | null>(null);
+  const [trailWayCandidates, setTrailWayCandidates] = useState<TrailWayCandidate[]>([]);
+  const [isTrailMarkingMode, setIsTrailMarkingMode] = useState(false);
+  const [selectedTrailAnnotationId, setSelectedTrailAnnotationId] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<OutdoorLayerVisibility>(
     () => initialConfig.visibility
   );
@@ -462,6 +496,9 @@ export const App: React.FC = () => {
   planOverlayStateRef.current = planOverlayState;
   const isPlanningRouteRef = useRef<boolean>(isPlanningRouteMode);
   isPlanningRouteRef.current = isPlanningRouteMode;
+  const isTrailMarkingModeRef = useRef<boolean>(isTrailMarkingMode);
+  isTrailMarkingModeRef.current = isTrailMarkingMode;
+  const isTrailAddWaysModeRef = useRef(false);
   const planningModeRef = useRef<PlanningMode>(planningMode);
   planningModeRef.current = planningMode;
   const planWaypointsRef = useRef<PlannedWaypoint[]>(planWaypoints);
@@ -486,6 +523,9 @@ export const App: React.FC = () => {
     deletedRouteIdsRef.current = getDeletedPlannedRouteIds();
   }
   const handlePlanMapClickRef = useRef<(lon: number, lat: number) => Promise<void>>(async () => {});
+  const handleTrailMapClickRef = useRef<(event: maplibregl.MapMouseEvent) => Promise<void>>(
+    async () => {}
+  );
   const handleFinishPlanningRef = useRef<() => Promise<void>>(async () => {});
   const isStyleLoadedRef = useRef<boolean>(false);
   const mobileDisplayModeRef = useRef<MobileDisplayMode>(mobileDisplayMode);
@@ -667,6 +707,141 @@ export const App: React.FC = () => {
       setUndoDeletedPoi(null);
     }, durationMs);
   }, []);
+
+  const resolveTrailCandidate = useCallback(
+    async (candidate: TrailWayCandidate) => {
+      if (!osmInfo) return;
+      try {
+        const resolved = await highwayWayGeometryService.resolveWayAt(
+          candidate.wayId,
+          candidate.lon,
+          candidate.lat,
+          getTrailMapReleaseId(osmInfo)
+        );
+        const { fragments: _fragments, ...geometry } = resolved;
+        setSelectedTrailWay(geometry);
+        setTrailWayCandidates([]);
+      } catch (error) {
+        console.error('[TrailAnnotations] Highway resolution failed:', error);
+        showToast(error instanceof Error ? error.message : 'לא ניתן לטעון את כל אורך הדרך.');
+      }
+    },
+    [osmInfo, showToast]
+  );
+
+  const handleTrailMapClick = useCallback(
+    async (event: maplibregl.MapMouseEvent) => {
+      const map = mapRef.current;
+      if (!map || !osmInfo || isNavigationActiveRef.current || map.getZoom() < 13.5) {
+        showToast('יש להתקרב למפה לרמת שביל מפורטת לפני בחירה.');
+        return;
+      }
+      if (!isTrailAddWaysModeRef.current) {
+        const overlayLayers = ['community-trails-line', 'community-trails-stale'].filter((id) =>
+          Boolean(map.getLayer(id))
+        );
+        const overlayHit = overlayLayers.length
+          ? map
+              .queryRenderedFeatures(
+                [
+                  [event.point.x - 8, event.point.y - 8],
+                  [event.point.x + 8, event.point.y + 8],
+                ],
+                { layers: overlayLayers }
+              )
+              .find((feature) => {
+                const id = feature.properties?.trailId;
+                return typeof id === 'string' && id !== '' && id !== 'selection-preview';
+              })
+          : undefined;
+        if (overlayHit) {
+          setTrailWayCandidates([]);
+          setSelectedTrailAnnotationId(String(overlayHit.properties!.trailId));
+          return;
+        }
+      }
+      const sourceLayerById = new Map(
+        map.getStyle().layers.map((layer) => [
+          layer.id,
+          (layer as maplibregl.LayerSpecification & { 'source-layer'?: string })['source-layer'],
+        ])
+      );
+      const layers = Array.from(HIGHWAY_LAYER_IDS).filter((id) => {
+        return Boolean(map.getLayer(id)) && sourceLayerById.get(id) === 'transportation';
+      });
+      if (layers.length === 0) {
+        showToast('שכבות השבילים אינן זמינות בקובץ המפה הנוכחי.');
+        return;
+      }
+      const hits = map.queryRenderedFeatures(
+        [
+          [event.point.x - 12, event.point.y - 12],
+          [event.point.x + 12, event.point.y + 12],
+        ],
+        { layers }
+      );
+      const candidates = new Map<string, TrailWayCandidate>();
+      for (const feature of hits) {
+        if (sourceLayerById.get(feature.layer.id) !== 'transportation') continue;
+        if (!feature.properties?.class) continue;
+        const wayId = trailWayIdFromMvtId(feature.id);
+        if (wayId) {
+          candidates.set(wayId, {
+            wayId,
+            lon: event.lngLat.lng,
+            lat: event.lngLat.lat,
+            highwayClass: String(feature.properties.class || ''),
+            highwaySubclass: String(feature.properties.subclass || ''),
+            layer: Number(feature.properties.layer || 0),
+          });
+        }
+      }
+      if (candidates.size === 0) {
+        showToast('לא נמצא כביש או שביל מזוהה בנקודה. נסה לבחור את הקו עצמו.');
+        return;
+      }
+      if (candidates.size > 1) {
+        setTrailWayCandidates(Array.from(candidates.values()));
+        showToast('נמצאו כמה דרכים חופפות. בחר את הדרך המתאימה.');
+        return;
+      }
+      const candidate = candidates.values().next().value as TrailWayCandidate | undefined;
+      if (candidate) await resolveTrailCandidate(candidate);
+    },
+    [osmInfo, resolveTrailCandidate, showToast]
+  );
+  handleTrailMapClickRef.current = handleTrailMapClick;
+
+  const handleTrailAddWaysModeChange = useCallback((enabled: boolean) => {
+    isTrailAddWaysModeRef.current = enabled;
+  }, []);
+
+  const consumeSelectedTrailWay = useCallback(() => {
+    setSelectedTrailWay(null);
+  }, []);
+
+  const consumeSelectedTrailAnnotation = useCallback(() => {
+    setSelectedTrailAnnotationId(null);
+  }, []);
+
+  const exitTrailMarkingMode = useCallback(() => {
+    setIsTrailMarkingMode(false);
+    setSelectedTrailWay(null);
+    setSelectedTrailAnnotationId(null);
+    setTrailWayCandidates([]);
+  }, []);
+
+  const toggleTrailMarkingMode = useCallback(() => {
+    if (isTrailMarkingModeRef.current) {
+      exitTrailMarkingMode();
+      return;
+    }
+    if (!currentUserRef.current) return;
+    setDesktopDrawer(null);
+    setMobilePlanningOverlay(null);
+    setMobileSheetExpanded(false);
+    setIsTrailMarkingMode(true);
+  }, [exitTrailMarkingMode]);
 
   const t = getSurfaceTheme(theme);
 
@@ -944,7 +1119,7 @@ export const App: React.FC = () => {
     };
   }, [currentUser, isOnline, showToast, applyRemoteMergedState, resetRouteSessionState]);
 
-  // Toggle MapLibre doubleClickZoom & crosshair cursor while Route Planning mode is active
+  // Toggle map interaction feedback while route planning or community way selection is active.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -953,13 +1128,19 @@ export const App: React.FC = () => {
       map.getCanvas().style.cursor = 'crosshair';
     } else {
       map.doubleClickZoom.enable();
-      map.getCanvas().style.cursor = '';
+      map.getCanvas().style.cursor = isTrailMarkingMode ? 'crosshair' : '';
       if (clickTimerRef.current) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
       }
     }
-  }, [isPlanningRouteMode, isMapReady]);
+  }, [isPlanningRouteMode, isTrailMarkingMode, isMapReady]);
+
+  useEffect(() => {
+    if (isTrailMarkingMode && (!currentUser || isPlanningRouteMode || isAddingPoiMode)) {
+      exitTrailMarkingMode();
+    }
+  }, [isTrailMarkingMode, currentUser, isPlanningRouteMode, isAddingPoiMode, exitTrailMarkingMode]);
 
   // Listen to background downloads from Firebase into persistent OPFS
   useEffect(() => {
@@ -969,7 +1150,10 @@ export const App: React.FC = () => {
     });
 
     const unsubUpdated = pmtilesRegistry.onArchiveUpdated((id, info) => {
-      if (id === 'israel-osm') setOsmInfo(info);
+      if (id === 'israel-osm') {
+        highwayWayGeometryService.clearTileCache();
+        setOsmInfo(info);
+      }
       if (id === 'israel-dem') setDemInfo(info);
       setDownloadStatus(null);
       showToast(`קובץ המפה ${info.record.fileName} נשמר במכשיר! פועל 100% אופליין.`);
@@ -2271,6 +2455,7 @@ export const App: React.FC = () => {
       if (isCancelled) return;
       isStyleLoadedRef.current = true;
       setIsMapReady(true);
+      setMapStyleRevision((revision) => revision + 1);
       map.resize();
       applyLayerVisibilityToMap(map, visibilityRef.current);
       syncOverlaySourcesToMap(
@@ -2557,6 +2742,12 @@ export const App: React.FC = () => {
         return;
       }
 
+      if (isTrailMarkingModeRef.current) {
+        e.preventDefault();
+        void handleTrailMapClickRef.current(e);
+        return;
+      }
+
       const geoJsonPoiLayerIds = ['israel-pois-labels', 'israel-pois-midzoom', 'israel-pois-peaks'];
       const clickableLayers = [...geoJsonPoiLayerIds, ...Array.from(POI_STYLE_LAYER_IDS)].filter((id) =>
         Boolean(map.getLayer(id))
@@ -2729,6 +2920,7 @@ export const App: React.FC = () => {
       completed = true;
       if (mapRef.current !== map) return;
       isStyleLoadedRef.current = true;
+      setMapStyleRevision((revision) => revision + 1);
       applyLayerVisibilityToMap(map, visibilityRef.current);
       syncOverlaySourcesToMap(
         map,
@@ -2793,6 +2985,111 @@ export const App: React.FC = () => {
     routeDisplayContext,
     bgHydrationSeq,
     syncOverlaySourcesToMap,
+  ]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady || !map.isStyleLoaded()) return;
+    const sourceId = 'community-trails-src';
+    const existing = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+    if (existing) {
+      existing.setData(trailOverlayGeoJSON);
+    } else {
+      map.addSource(sourceId, { type: 'geojson', data: trailOverlayGeoJSON });
+    }
+
+    const beforeId = map.getLayer('saved-routes-line') ? 'saved-routes-line' : undefined;
+    if (!map.getLayer('community-trails-casing')) {
+      map.addLayer(
+        {
+          id: 'community-trails-casing',
+          type: 'line',
+          source: sourceId,
+          filter: ['!=', ['coalesce', ['get', 'stale'], false], true],
+          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
+          paint: {
+            'line-color': theme === 'topo-dark' ? '#f8fafc' : '#0f172a',
+            'line-width': 7,
+            'line-opacity': 0.8,
+          },
+        },
+        beforeId
+      );
+      map.addLayer(
+        {
+          id: 'community-trails-line',
+          type: 'line',
+          source: sourceId,
+          filter: ['!=', ['coalesce', ['get', 'stale'], false], true],
+          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
+          paint: {
+            'line-color': ['get', 'color'],
+            'line-width': 4,
+            'line-opacity': 0.95,
+          },
+        },
+        beforeId
+      );
+      map.addLayer(
+        {
+          id: 'community-trails-stale',
+          type: 'line',
+          source: sourceId,
+          filter: ['==', ['get', 'stale'], true],
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round',
+            visibility: showTrailOverlay ? 'visible' : 'none',
+          },
+          paint: {
+            'line-color': '#f59e0b',
+            'line-width': 4,
+            'line-opacity': 0.9,
+            'line-dasharray': [2, 1],
+          },
+        },
+        beforeId
+      );
+      map.addLayer(
+        {
+          id: 'community-trails-number',
+          type: 'symbol',
+          source: sourceId,
+          layout: {
+            'symbol-placement': 'line',
+            'symbol-spacing': 600,
+            'text-field': ['get', 'number'],
+            'text-size': 12,
+            'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
+            'text-allow-overlap': false,
+            visibility: showTrailOverlay ? 'visible' : 'none',
+          },
+          paint: {
+            'text-color': ['get', 'color'],
+            'text-halo-color': theme === 'topo-dark' ? '#0b1015' : '#ffffff',
+            'text-halo-width': 2,
+          },
+        },
+        beforeId
+      );
+    }
+
+    for (const layerId of [
+      'community-trails-casing',
+      'community-trails-line',
+      'community-trails-stale',
+      'community-trails-number',
+    ]) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', showTrailOverlay ? 'visible' : 'none');
+      }
+    }
+  }, [
+    isMapReady,
+    mapStyleRevision,
+    trailOverlayGeoJSON,
+    showTrailOverlay,
+    theme,
   ]);
 
   // Mirror routes, user POIs, theme, layer visibility, and active navigation status for Android Auto
@@ -4839,6 +5136,36 @@ export const App: React.FC = () => {
           </div>
         )}
 
+        <div
+          className={`fixed z-[55] ${
+            isMobile ? 'bottom-20 left-2 right-2' : 'top-16 right-3 w-[380px] max-w-[calc(100vw-24px)]'
+          }`}
+        >
+          <TrailAnnotationsPanel
+            isMarkingMode={isTrailMarkingMode}
+            theme={theme}
+            currentUser={currentUser}
+            firebaseAvailable={AuthService.isAvailable()}
+            isOnline={isOnline}
+            releaseId={getTrailMapReleaseId(osmInfo)}
+            showTrailOverlay={showTrailOverlay}
+            onToggleTrailOverlay={() => setShowTrailOverlay((value) => !value)}
+            wayCandidates={trailWayCandidates}
+            onResolveCandidate={(candidate) => void resolveTrailCandidate(candidate)}
+            selectedMapWay={selectedTrailWay}
+            onConsumeSelectedWay={consumeSelectedTrailWay}
+            selectedAnnotationId={selectedTrailAnnotationId}
+            onConsumeSelectedAnnotation={consumeSelectedTrailAnnotation}
+            onAddWaysModeChange={handleTrailAddWaysModeChange}
+            onGeoJSONChange={setTrailOverlayGeoJSON}
+            onNotify={showToast}
+            onClose={() => {
+              setSelectedTrailWay(null);
+              setTrailWayCandidates([]);
+            }}
+          />
+        </div>
+
         {/* ================= DESKTOP / WEB FLOATING CHROME ================= */}
         {!isMobile && (
           <>
@@ -4988,6 +5315,7 @@ export const App: React.FC = () => {
                       }}
                     />
                   )}
+
                 </div>
               )}
             </div>
@@ -5134,6 +5462,18 @@ export const App: React.FC = () => {
                   <Plus className="w-4 h-4 text-sky-500" />
                   <span>דווח נקודה</span>
                 </button>
+                {currentUser && (
+                  <button
+                    onClick={toggleTrailMarkingMode}
+                    aria-pressed={isTrailMarkingMode}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                      isTrailMarkingMode ? 'bg-emerald-600 text-white' : t.hoverRow
+                    }`}
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-rose-500" />
+                    <span>סימון שבילים</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -5880,6 +6220,7 @@ export const App: React.FC = () => {
                       onClick={() => {
                         setMobileDisplayMode('planning');
                         setMobilePlanningOverlay('plan-route');
+                        exitTrailMarkingMode();
                         setMobileSheetExpanded(true);
                       }}
                       className="px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
@@ -5887,6 +6228,18 @@ export const App: React.FC = () => {
                       <PenTool className="w-3 h-3" />
                       <span>תכנון</span>
                     </button>
+                    {currentUser && (
+                      <button
+                        onClick={toggleTrailMarkingMode}
+                        aria-pressed={isTrailMarkingMode}
+                        className={`px-2.5 py-1 rounded-full text-white text-xs font-bold flex items-center gap-1 shadow-sm ${
+                          isTrailMarkingMode ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'
+                        }`}
+                      >
+                        <MapPin className="w-3 h-3" />
+                        <span>סימון שבילים</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         void NavigationHeadingService.requestCompassPermissionIfNeeded();
@@ -5979,6 +6332,7 @@ export const App: React.FC = () => {
                   onClick={() => {
                     setMobileTab(tab.id);
                     setMobilePlanningOverlay(null);
+                    exitTrailMarkingMode();
                   }}
                   className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 text-xs font-bold transition-colors ${
                     active ? 'text-emerald-500' : ''

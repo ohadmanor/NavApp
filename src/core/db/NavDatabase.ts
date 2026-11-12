@@ -1,5 +1,10 @@
 import Dexie, { type Table } from 'dexie';
 import type { PlanningMode } from '../routing/RoutingProfiles';
+import type {
+  TrailAnnotationDraftRecord,
+  TrailAnnotationRecord,
+  TrailGeometryCacheRecord,
+} from '../trails/TrailAnnotationTypes';
 
 export interface MapArchiveRecord {
   id: 'israel-dem' | 'israel-osm';
@@ -178,6 +183,9 @@ export class NavDatabase extends Dexie {
   routePayloads!: Table<RoutePayloadRecord, string>;
   tracks!: Table<RecordedTrackRecord, string>;
   searchIndexCache!: Table<SearchIndexCacheRecord, string>;
+  trailAnnotations!: Table<TrailAnnotationRecord, string>;
+  trailGeometryCache!: Table<TrailGeometryCacheRecord, string>;
+  trailAnnotationDrafts!: Table<TrailAnnotationDraftRecord, string>;
 
   constructor() {
     super('NavAppOutdoorDB');
@@ -264,6 +272,19 @@ export class NavDatabase extends Dexie {
       routePayloads: 'id, updatedAt',
       tracks: 'id, startedAt',
       searchIndexCache: 'fingerprint, createdUtc',
+    });
+    this.version(6).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source',
+      poiOverrides: 'id, deleted, category, updatedAt',
+      routes:
+        'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
+      routePayloads: 'id, updatedAt',
+      tracks: 'id, startedAt',
+      searchIndexCache: 'fingerprint, createdUtc',
+      trailAnnotations: 'id, status, updatedAt, selectionReleaseId, *wayIds',
+      trailGeometryCache: 'id, wayId, releaseId',
+      trailAnnotationDrafts: 'id, ownerUid, updatedAt',
     });
   }
 }

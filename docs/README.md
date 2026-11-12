@@ -10,6 +10,7 @@
   - [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) — Full architectural & implementation blueprint.
   - [`decoupled-storage-implementation-plan.md`](./decoupled-storage-implementation-plan.md) — Decoupling code deployments (`deploy-firebase.bat`) from Firebase map data storage.
   - [`route-planning-implementation-plan.md`](./route-planning-implementation-plan.md) — Client-side route planning (4x4, Foot, Bicycle) & Firebase `planing_tracks` sync design.
+  - [`trail-annotations-implementation-plan.md`](./trail-annotations-implementation-plan.md) — Community highway/trail colors, numbers, descriptions, authenticated editing, audit history, and persistence across PMTiles updates.
   - [`route-planning-v2-implementation-plan.md`](./route-planning-v2-implementation-plan.md) — Route Planning v2 (scalable 100s+ route library, map visibility rules, My/Shared split, and user-to-user sharing).
   - [`poi-refactoring-prds.md`](./poi-refactoring-prds.md) — Product Requirements Documents (PRDs) for strict 6-category POI taxonomy, text-integrated classifier, and POI edit/delete lifecycle.
   - [`poi-refactoring-implementation-plan.md`](./poi-refactoring-implementation-plan.md) — Implementation plan for POI refactoring across Web, Search, Cloud Sync, and Android Auto.
@@ -27,8 +28,11 @@
   - [`run-local.bat`](../devops/run-local.bat) — Launches the local development server (`http://localhost:5173`) with HTTP `206 Partial Content` byte-range streaming from `data\*.pmtiles`.
   - [`deploy-firebase.bat`](../devops/deploy-firebase.bat) — Builds the production PWA and deploys to **Firebase Hosting (Free Spark Tier)**.
   - [`build-android-apk.bat`](../devops/build-android-apk.bat) — Syncs Capacitor Android, applies Android security & RSA-2048 release keystore signing, and builds an installable `.apk`.
+  - [`build-ios.bat`](../devops/build-ios.bat) — Generates & syncs the Capacitor iOS Xcode project (`ios/App/App.xcworkspace`) on Windows and applies iOS permissions/security/icon config.
+  - [`build-ios-ipa.sh`](../devops/build-ios-ipa.sh) — Full macOS iOS builder (`pod install` + `xcodebuild`) producing an unsigned/signed `.ipa` or Simulator `.app.zip`.
   - [`fetch-israel-pois.mjs`](../devops/fetch-israel-pois.mjs) — Harvests & updates `data/Israel.pois.geojson`.
   - [`configure-android-security.mjs`](../devops/configure-android-security.mjs) — Automates Android Keystore generation, `network_security_config.xml`, GPS permissions, and Gradle v1/v2/v3 APK signing.
+  - [`configure-ios.mjs`](../devops/configure-ios.mjs) — Automates `Info.plist` GPS/background permissions, Files app sharing, ATS HTTPS security, Xcode version sync, and 1024x1024 AppIcon generation.
 - **[`.agents/skills/outdoor-map-navigation/`](../.agents/skills/outdoor-map-navigation/)** — Custom Antigravity Expert Skill in MapLibre + PMTiles outdoor navigation.
 
 ---
@@ -84,4 +88,28 @@ Android Auto hides sideloaded `CarAppService` navigation apps installed from a f
    - Open the top-right **⋮ menu → Developer settings** → enable **Unknown sources** (and set **Application mode** to **Developer**).
 3. Open **NavApp** once on the phone before connecting to your car or Desktop Head Unit (DHU).
 
+---
+
+## 5. Build iOS Version (`.ipa` / Xcode Project)
+
+### Generate & Sync the Xcode Project on Windows
+Run:
+```bat
+C:\Develop\github\NavApp\devops\build-ios.bat
+```
+This builds the offline assets and web bundle (`dist/`), syncs Capacitor iOS (`ios/App`), and runs [`configure-ios.mjs`](../devops/configure-ios.mjs) to configure:
+- **GPS & Background Location (`Info.plist`)**: `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`, and `UIBackgroundModes` (`location`).
+- **Files App Access & Export Compliance**: `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`, and `ITSAppUsesNonExemptEncryption=false`.
+- **Network Security (ATS)**: Enforces HTTPS/TLS while allowing local networking (`NSAllowsLocalNetworking=true`).
+- **Version & 1024×1024 App Icon**: Syncs `MARKETING_VERSION` from [`package.json`](../package.json) and generates an opaque RGB `AppIcon-512@2x.png` from [`public/icon-512.png`](../public/icon-512.png).
+
+### Compile the `.ipa` on macOS or GitHub Actions
+Compiling an `.ipa` requires macOS + Xcode:
+- **On a Mac**:
+  ```bash
+  bash devops/build-ios-ipa.sh                # Produces dist/NavApp-Israel-Unsigned.ipa
+  bash devops/build-ios-ipa.sh --simulator    # Produces dist/NavApp-Israel-Simulator.app.zip
+  IOS_TEAM_ID=YOUR_TEAM_ID bash devops/build-ios-ipa.sh --ad-hoc   # Signed .ipa
+  ```
+- **From Windows via GitHub Actions**: Trigger the **Build iOS App (.ipa)** workflow ([`.github/workflows/build-ios.yml`](../.github/workflows/build-ios.yml)) on `macos-latest` from the repository's **Actions** tab and download the generated `.ipa` artifact.
 

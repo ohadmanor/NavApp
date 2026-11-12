@@ -1,9 +1,236 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function annotationPath(trailId) {
+      return /databases/$(database)/documents/trail_annotations/$(trailId);
+    }
+
+    function historyPath(trailId, historyId) {
+      return /databases/$(database)/documents/trail_annotations/$(trailId)/history/$(historyId);
+    }
+
+    function validTrailSnapshot(data) {
+      return data is map &&
+        data.keys().hasOnly([
+          'wayIds',
+          'color',
+          'number',
+          'description',
+          'status',
+          'geometryPath',
+          'selectionReleaseId'
+        ]) &&
+        data.keys().hasAll([
+          'wayIds',
+          'color',
+          'number',
+          'description',
+          'status',
+          'geometryPath',
+          'selectionReleaseId'
+        ]) &&
+        data.wayIds is list &&
+        data.color is string &&
+        data.number is string &&
+        data.description is string &&
+        data.status in ['active', 'deleted'] &&
+        data.geometryPath is string &&
+        data.selectionReleaseId is string;
+    }
+
+    function validTrailAnnotation(data, trailId) {
+      return data.keys().hasOnly([
+          'id',
+          'schemaVersion',
+          'wayIds',
+          'color',
+          'number',
+          'description',
+          'status',
+          'revision',
+          'lastHistoryId',
+          'geometryPath',
+          'selectionReleaseId',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasAll([
+          'id',
+          'schemaVersion',
+          'wayIds',
+          'color',
+          'number',
+          'description',
+          'status',
+          'revision',
+          'lastHistoryId',
+          'geometryPath',
+          'selectionReleaseId',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.id == trailId &&
+        data.schemaVersion == 1 &&
+        data.wayIds is list &&
+        data.wayIds.size() > 0 &&
+        data.wayIds.size() <= 500 &&
+        data.color in ['#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#2563eb', '#7c3aed', '#334155'] &&
+        data.number is string &&
+        data.number.size() > 0 &&
+        data.number.size() <= 32 &&
+        data.description is string &&
+        data.description.size() <= 4000 &&
+        data.status in ['active', 'deleted'] &&
+        data.revision is int &&
+        data.revision > 0 &&
+        data.lastHistoryId is string &&
+        data.lastHistoryId.matches('^[A-Za-z0-9_-]{16,64}$') &&
+        data.geometryPath is string &&
+        data.geometryPath.matches('^trail_annotations/' + trailId + '/geometry/[1-9][0-9]*-[A-Za-z0-9_-]{16,64}\\.json$') &&
+        data.selectionReleaseId is string &&
+        data.selectionReleaseId.size() > 0 &&
+        data.selectionReleaseId.size() <= 256 &&
+        data.createdByUid is string &&
+        data.updatedByUid is string &&
+        data.updatedAt == request.time;
+    }
+
+    function validHistoryPair(trailId, data, oldData, operation) {
+      let history = getAfter(historyPath(trailId, data.lastHistoryId)).data;
+      return existsAfter(historyPath(trailId, data.lastHistoryId)) &&
+        history.keys().hasOnly([
+          'revision',
+          'operation',
+          'actorUid',
+          'occurredAt',
+          'previous',
+          'next',
+          'reason'
+        ]) &&
+        history.revision == data.revision &&
+        history.operation == operation &&
+        history.actorUid == request.auth.uid &&
+        history.occurredAt == request.time &&
+        history.reason is string &&
+        history.reason.size() <= 500 &&
+        validTrailSnapshot(history.next) &&
+        history.next.wayIds == data.wayIds &&
+        history.next.color == data.color &&
+        history.next.number == data.number &&
+        history.next.description == data.description &&
+        history.next.status == data.status &&
+        history.next.geometryPath == data.geometryPath &&
+        history.next.selectionReleaseId == data.selectionReleaseId &&
+        (oldData == null
+          ? history.previous == null
+          : validTrailSnapshot(history.previous) &&
+            history.previous.wayIds == oldData.wayIds &&
+            history.previous.color == oldData.color &&
+            history.previous.number == oldData.number &&
+            history.previous.description == oldData.description &&
+            history.previous.status == oldData.status &&
+            history.previous.geometryPath == oldData.geometryPath &&
+            history.previous.selectionReleaseId == oldData.selectionReleaseId);
+    }
+
+    function validHistoryCreate(trailId, historyId) {
+      let annotation = getAfter(annotationPath(trailId)).data;
+      let existingAnnotation = get(annotationPath(trailId));
+      let annotationExists = exists(annotationPath(trailId));
+      let history = request.resource.data;
+      return existsAfter(annotationPath(trailId)) &&
+        annotation.lastHistoryId == historyId &&
+        annotation.revision == history.revision &&
+        annotation.updatedByUid == request.auth.uid &&
+        validTrailSnapshot(history.next) &&
+        history.next.wayIds == annotation.wayIds &&
+        history.next.color == annotation.color &&
+        history.next.number == annotation.number &&
+        history.next.description == annotation.description &&
+        history.next.status == annotation.status &&
+        history.next.geometryPath == annotation.geometryPath &&
+        history.next.selectionReleaseId == annotation.selectionReleaseId &&
+        (annotationExists
+          ? validTrailSnapshot(history.previous) &&
+            history.previous.wayIds == existingAnnotation.data.wayIds &&
+            history.previous.color == existingAnnotation.data.color &&
+            history.previous.number == existingAnnotation.data.number &&
+            history.previous.description == existingAnnotation.data.description &&
+            history.previous.status == existingAnnotation.data.status &&
+            history.previous.geometryPath == existingAnnotation.data.geometryPath &&
+            history.previous.selectionReleaseId == existingAnnotation.data.selectionReleaseId
+          : history.previous == null);
+    }
+
     match /users/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /trail_annotations/{trailId} {
+      allow get, list: if true;
+      allow create: if signedIn() &&
+        validTrailAnnotation(request.resource.data, trailId) &&
+        request.resource.data.revision == 1 &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.updatedByUid == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        validHistoryPair(trailId, request.resource.data, null, 'create');
+      allow update: if signedIn() &&
+        validTrailAnnotation(request.resource.data, trailId) &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.revision == resource.data.revision + 1 &&
+        request.resource.data.updatedByUid == request.auth.uid &&
+        validHistoryPair(
+          trailId,
+          request.resource.data,
+          resource.data,
+          request.resource.data.status == 'deleted'
+            ? 'delete'
+            : resource.data.status == 'deleted'
+              ? 'restore'
+              : request.resource.data.wayIds != resource.data.wayIds
+                ? 'rebind'
+                : 'edit'
+        );
+      allow delete: if false;
+
+      match /history/{historyId} {
+        allow get, list: if true;
+        allow create: if signedIn() &&
+          request.resource.data.keys().hasOnly([
+            'revision',
+            'operation',
+            'actorUid',
+            'occurredAt',
+            'previous',
+            'next',
+            'reason'
+          ]) &&
+          request.resource.data.revision is int &&
+          request.resource.data.revision > 0 &&
+          request.resource.data.operation in ['create', 'edit', 'delete', 'restore', 'rebind'] &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.occurredAt == request.time &&
+          request.resource.data.reason is string &&
+          request.resource.data.reason.size() <= 500 &&
+          validHistoryCreate(trailId, historyId);
+        allow update, delete: if false;
+      }
+
+      match /geometry/{geometryFile} {
+        allow get, list: if true;
+        allow write: if false;
+      }
     }
 
     match /planing_tracks/{userId}/routes/{routeId} {
