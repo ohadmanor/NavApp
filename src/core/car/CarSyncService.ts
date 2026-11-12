@@ -7,6 +7,8 @@ export interface CarSyncSnapshotInput {
   activeRoute: SavedRouteRecord | null;
   routes: SavedRouteRecord[];
   pois: PoiRecord[];
+  overriddenPoiIds?: readonly string[] | ReadonlySet<string>;
+  deletedPoiIds?: readonly string[];
   isNavigationActive: boolean;
   theme: MapTheme;
   visibility: OutdoorLayerVisibility;
@@ -78,10 +80,19 @@ export function serializeCarRoute(route: SavedRouteRecord): CompactCarRoute {
 }
 
 /**
- * Extracts user-created POIs, imported community/GPX waypoints, and any bundled POIs
- * whose notes were edited locally so Android Auto can render and search them offline.
+ * Extracts user-created POIs, imported community/GPX waypoints, category-overridden POIs,
+ * and any bundled POIs whose notes were edited locally so Android Auto can render and search them offline.
  */
-export function selectCarSyncablePois(pois: PoiRecord[]): CompactCarPoi[] {
+export function selectCarSyncablePois(
+  pois: PoiRecord[],
+  overriddenPoiIds?: readonly string[] | ReadonlySet<string>
+): CompactCarPoi[] {
+  const overriddenSet =
+    overriddenPoiIds instanceof Set
+      ? overriddenPoiIds
+      : overriddenPoiIds
+        ? new Set(overriddenPoiIds)
+        : null;
   const result: CompactCarPoi[] = [];
   for (const p of pois) {
     const isCustomOrImported =
@@ -89,7 +100,8 @@ export function selectCarSyncablePois(pois: PoiRecord[]): CompactCarPoi[] {
       p.id.startsWith('user-poi-') ||
       p.id.startsWith('import-') ||
       p.id.startsWith('il-poi-') ||
-      Boolean(p.userNotes && p.userNotes.trim().length > 0);
+      Boolean(p.userNotes && p.userNotes.trim().length > 0) ||
+      Boolean(overriddenSet && overriddenSet.has(p.id));
     if (!isCustomOrImported) continue;
     result.push({
       id: p.id,
@@ -114,11 +126,13 @@ export function buildCarSyncPayload(input: CarSyncSnapshotInput): {
   activeRouteJson: string;
   savedRoutesJson: string;
   userPoisJson: string;
+  deletedPoiIdsJson: string;
   carStateJson: string;
 } {
   const activeCompact = input.activeRoute ? serializeCarRoute(input.activeRoute) : null;
   const routesCompact = input.routes.map(serializeCarRoute);
-  const userPois = selectCarSyncablePois(input.pois);
+  const userPois = selectCarSyncablePois(input.pois, input.overriddenPoiIds);
+  const deletedPoiIds = input.deletedPoiIds ? Array.from(new Set(input.deletedPoiIds)).sort() : [];
   const carState: CarSyncStatePayload = {
     isNavigationActive: input.isNavigationActive,
     theme: input.theme,
@@ -142,6 +156,7 @@ export function buildCarSyncPayload(input: CarSyncSnapshotInput): {
     activeRouteJson: JSON.stringify(activeCompact),
     savedRoutesJson: JSON.stringify(routesCompact),
     userPoisJson: JSON.stringify(userPois),
+    deletedPoiIdsJson: JSON.stringify(deletedPoiIds),
     carStateJson: JSON.stringify(carState),
   };
 }
@@ -152,6 +167,7 @@ class CarSyncServiceImpl {
     activeRouteJson: '',
     savedRoutesJson: '',
     userPoisJson: '',
+    deletedPoiIdsJson: '',
     carStateJson: '',
   };
 
@@ -174,6 +190,7 @@ class CarSyncServiceImpl {
         activeRouteJson?: string;
         savedRoutesJson?: string;
         userPoisJson?: string;
+        deletedPoiIdsJson?: string;
         carStateJson?: string;
       } = {};
       if (next.activeRouteJson !== this.lastPayloads.activeRouteJson) {
@@ -184,6 +201,9 @@ class CarSyncServiceImpl {
       }
       if (next.userPoisJson !== this.lastPayloads.userPoisJson) {
         delta.userPoisJson = next.userPoisJson;
+      }
+      if (next.deletedPoiIdsJson !== this.lastPayloads.deletedPoiIdsJson) {
+        delta.deletedPoiIdsJson = next.deletedPoiIdsJson;
       }
       if (next.carStateJson !== this.lastPayloads.carStateJson) {
         delta.carStateJson = next.carStateJson;
@@ -206,6 +226,7 @@ class CarSyncServiceImpl {
       activeRouteJson: '',
       savedRoutesJson: '',
       userPoisJson: '',
+      deletedPoiIdsJson: '',
       carStateJson: '',
     };
   }

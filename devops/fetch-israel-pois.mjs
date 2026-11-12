@@ -30,6 +30,7 @@ import { PMTiles } from 'pmtiles';
 import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import * as turf from '@turf/turf';
+import { loadPoiClassifierModule } from './load-poi-classifier.mjs';
 
 // Avoid Node/undici 30s IPv6 connection stalls on Windows networks
 dns.setDefaultResultOrder('ipv4first');
@@ -1249,6 +1250,8 @@ function writeFileAtomic(targetPath, content) {
 }
 
 export async function runHarvester() {
+  const { classifyPoiWithText, normalizeSubcategoryForCategory, resolvePoiSymbolId } =
+    await loadPoiClassifierModule();
   const tStart = Date.now();
   const boundary = await createIsraelBoundaryChecker(PMTILES_PATH);
 
@@ -1298,11 +1301,13 @@ export async function runHarvester() {
     // 1. Curated flagship POIs first
     for (let idx = 0; idx < CURATED_ISRAEL_POIS.length; idx++) {
       const item = CURATED_ISRAEL_POIS[idx];
+      const curatedSub = normalizeSubcategoryForCategory(item.category, item.subcategory);
+      const curatedSym = resolvePoiSymbolId(item.category, curatedSub);
       const priority = computePoiPriority({
         isCurated: true,
         curatedIndex: idx,
         category: item.category,
-        subcategory: item.subcategory,
+        subcategory: curatedSub,
         ele: item.ele ?? null,
         wikipedia: item.wikipedia ?? null,
         nameHe: item.nameHe,
@@ -1323,7 +1328,8 @@ export async function runHarvester() {
           nameHe: item.nameHe,
           nameEn: item.nameEn,
           category: item.category,
-          subcategory: item.subcategory,
+          subcategory: curatedSub,
+          symbolId: curatedSym,
           ele: item.ele ?? null,
           waterStatus: item.waterStatus ?? null,
           difficulty4x4: item.difficulty4x4 ?? null,
@@ -1427,10 +1433,28 @@ export async function runHarvester() {
         tags
       );
 
+      const unified = classifyPoiWithText({
+        nameHe: cls.nameHe,
+        nameEn: cls.nameEn,
+        descHe,
+        descEn,
+        waterStatus: cls.category === 'water' ? buildWaterStatus(tags) : null,
+        difficulty4x4: cls.category === 'offroad' ? buildDifficulty4x4(tags) : null,
+        existingCategory: cls.category,
+        existingSubcategory: cls.subcategory,
+        source: 'OpenStreetMap Israel + IsraelHiking',
+        ele,
+        wikipedia,
+      });
+
+      const finalCategory = unified.category;
+      const finalSubcategory = normalizeSubcategoryForCategory(finalCategory, unified.subcategory);
+      const finalSymbolId = resolvePoiSymbolId(finalCategory, finalSubcategory);
+
       const priority = computePoiPriority({
         isCurated: false,
-        category: cls.category,
-        subcategory: cls.subcategory,
+        category: finalCategory,
+        subcategory: finalSubcategory,
         ele,
         wikipedia,
         nameHe: cls.nameHe,
@@ -1451,11 +1475,12 @@ export async function runHarvester() {
           name: cls.nameHe,
           nameHe: cls.nameHe,
           nameEn: cls.nameEn,
-          category: cls.category,
-          subcategory: cls.subcategory,
+          category: finalCategory,
+          subcategory: finalSubcategory,
+          symbolId: finalSymbolId,
           ele,
-          waterStatus: cls.category === 'water' ? buildWaterStatus(tags) : null,
-          difficulty4x4: cls.category === 'offroad' ? buildDifficulty4x4(tags) : null,
+          waterStatus: finalCategory === 'water' ? buildWaterStatus(tags) : null,
+          difficulty4x4: finalCategory === 'offroad' ? buildDifficulty4x4(tags) : null,
           descHe,
           descEn,
           source: 'OpenStreetMap Israel + IsraelHiking',

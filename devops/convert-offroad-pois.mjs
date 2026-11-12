@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createIsraelBoundaryChecker } from './fetch-israel-pois.mjs';
+import { loadPoiClassifierModule } from './load-poi-classifier.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -601,14 +602,14 @@ export function classifyOffroadItem(rawProps, options = {}) {
       break;
     }
     case 'Image': {
-      const res = classifyByKeywords(title, descHe, typeKey, 'heritage', 'offroad_photo');
+      const res = classifyByKeywords(title, descHe, typeKey, 'heritage', 'heritage_site');
       category = res.category;
       subcategory = res.subcategory;
       break;
     }
     case 'POI':
     default: {
-      const res = classifyByKeywords(title, descHe, typeKey, 'heritage', 'offroad_poi');
+      const res = classifyByKeywords(title, descHe, typeKey, 'heritage', 'heritage_site');
       category = res.category;
       subcategory = res.subcategory;
       break;
@@ -724,6 +725,7 @@ function buildCompactFeature(item) {
     nameHe: item.nameHe,
     category: item.category,
     subcategory: item.subcategory,
+    symbolId: item.symbolId,
     priority: item.priority,
   };
   if (item.waterStatus) props.waterStatus = item.waterStatus;
@@ -746,6 +748,8 @@ function buildCompactFeature(item) {
 }
 
 export async function convertOffroadPois(options = {}) {
+  const { classifyPoiWithText, normalizeSubcategoryForCategory, resolvePoiSymbolId } =
+    await loadPoiClassifierModule();
   const inputFiles = options.inputFiles || INPUT_GEOJSON_FILES;
   const outputFiles = options.outputFiles || OUTPUT_FILES;
   const pmtilesPath = options.pmtilesPath || PMTILES_PATH;
@@ -863,6 +867,21 @@ export async function convertOffroadPois(options = {}) {
         stats.rejectedQuality++;
         continue;
       }
+      const unified = classifyPoiWithText({
+        nameHe: classified.nameHe,
+        descHe: classified.descHe,
+        waterStatus: classified.waterStatus,
+        difficulty4x4: classified.difficulty4x4,
+        existingCategory: classified.category,
+        existingSubcategory: classified.subcategory,
+        source: 'Off-Road.io',
+        wikipedia: classified.wikipedia,
+      });
+      classified.category = unified.category;
+      classified.subcategory = normalizeSubcategoryForCategory(unified.category, unified.subcategory);
+      classified.symbolId = unified.symbolId || resolvePoiSymbolId(unified.category, classified.subcategory);
+      classified.waterStatus = unified.category === 'water' ? classified.waterStatus : null;
+      classified.difficulty4x4 = unified.category === 'offroad' ? classified.difficulty4x4 : null;
       if (sameAsOsmNearby) stats.sameAsOsmNearby++;
 
       candidates.push({

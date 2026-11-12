@@ -16,6 +16,8 @@ import {
   type OutdoorLayerVisibility,
 } from '../style/israelOutdoorStyle';
 import type { MapTheme } from '../../components/ui/themeTokens';
+import type { PoiOverrideRecord } from '../db/NavDatabase';
+import { isValidPoiCategory, normalizeSubcategoryForCategory } from '../pois/poiTaxonomy';
 
 export interface SavedMapCamera {
   lon: number;
@@ -40,6 +42,8 @@ export interface PersistedUserState {
   cameraUpdatedAt: number;
   config: SavedUserConfiguration;
   configUpdatedAt: number;
+  poiOverrides?: PoiOverrideRecord[];
+  poiOverridesUpdatedAt?: number;
   lastUpdatedByDeviceId: string;
   lastSyncedAt?: string;
 }
@@ -48,6 +52,7 @@ export interface MergeUserStateResult {
   merged: PersistedUserState;
   applyRemoteCamera: boolean;
   applyRemoteConfig: boolean;
+  applyRemotePoiOverrides: boolean;
   shouldPushCloud: boolean;
 }
 
@@ -218,6 +223,84 @@ export function sanitizeUserConfiguration(
   };
 }
 
+const MAX_SYNCED_POI_OVERRIDES = 500;
+
+export function sanitizePoiOverrides(raw: unknown): PoiOverrideRecord[] {
+  if (!Array.isArray(raw)) return [];
+  const byId = new Map<string, PoiOverrideRecord>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Partial<PoiOverrideRecord>;
+    if (typeof rec.id !== 'string' || !rec.id.trim()) continue;
+    if (typeof rec.updatedAt !== 'string' || !rec.updatedAt.trim()) continue;
+    const id = rec.id.trim();
+    const updatedAt = rec.updatedAt.trim();
+    const deleted = typeof rec.deleted === 'boolean' ? rec.deleted : undefined;
+    const hasCat = isValidPoiCategory(rec.category);
+    if (!deleted && !hasCat) continue;
+
+    const clean: PoiOverrideRecord = {
+      id,
+      ...(deleted !== undefined ? { deleted } : {}),
+      ...(hasCat
+        ? {
+            category: rec.category,
+            subcategory: normalizeSubcategoryForCategory(rec.category!, rec.subcategory),
+          }
+        : {}),
+      updatedAt,
+    };
+    const prev = byId.get(id);
+    if (!prev || clean.updatedAt >= prev.updatedAt) {
+      byId.set(id, clean);
+    }
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_SYNCED_POI_OVERRIDES);
+}
+
+function mergePoiOverrideLists(
+  localList: PoiOverrideRecord[],
+  remoteList: PoiOverrideRecord[]
+): {
+  merged: PoiOverrideRecord[];
+  takeRemote: boolean;
+  pushLocal: boolean;
+} {
+  const localById = new Map(localList.map((r) => [r.id, r]));
+  const remoteById = new Map(remoteList.map((r) => [r.id, r]));
+  const mergedMap = new Map<string, PoiOverrideRecord>();
+  let takeRemote = false;
+  let pushLocal = false;
+
+  for (const r of localList) {
+    mergedMap.set(r.id, r);
+  }
+  for (const r of remoteList) {
+    const local = localById.get(r.id);
+    if (!local) {
+      mergedMap.set(r.id, r);
+      takeRemote = true;
+    } else if (r.updatedAt > local.updatedAt) {
+      mergedMap.set(r.id, r);
+      takeRemote = true;
+    } else if (local.updatedAt > r.updatedAt) {
+      pushLocal = true;
+    }
+  }
+  for (const r of localList) {
+    if (!remoteById.has(r.id)) {
+      pushLocal = true;
+    }
+  }
+
+  const merged = Array.from(mergedMap.values())
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_SYNCED_POI_OVERRIDES);
+  return { merged, takeRemote, pushLocal };
+}
+
 export function sanitizePersistedUserState(
   raw: unknown,
   fallbackDeviceId = getOrCreateDeviceId()
@@ -244,6 +327,11 @@ export function sanitizePersistedUserState(
     typeof rec.configUpdatedAt === 'number' && Number.isFinite(rec.configUpdatedAt)
       ? Math.max(0, rec.configUpdatedAt)
       : 0;
+  const poiOverrides = sanitizePoiOverrides(rec.poiOverrides);
+  const poiOverridesTs =
+    typeof rec.poiOverridesUpdatedAt === 'number' && Number.isFinite(rec.poiOverridesUpdatedAt)
+      ? Math.max(0, rec.poiOverridesUpdatedAt)
+      : 0;
 
   return {
     version: 1,
@@ -251,6 +339,8 @@ export function sanitizePersistedUserState(
     cameraUpdatedAt: camTs,
     config: cfg,
     configUpdatedAt: cfgTs,
+    ...(poiOverrides.length > 0 ? { poiOverrides } : {}),
+    ...(poiOverridesTs > 0 ? { poiOverridesUpdatedAt: poiOverridesTs } : {}),
     lastUpdatedByDeviceId:
       typeof rec.lastUpdatedByDeviceId === 'string' && rec.lastUpdatedByDeviceId.trim()
         ? rec.lastUpdatedByDeviceId.trim()
@@ -261,7 +351,7 @@ export function sanitizePersistedUserState(
 
 /**
  * Pure conflict-resolution merge between local device state and cloud user state.
- * Newer timestamps win independently for camera position and app configuration.
+ * Newer timestamps win independently for camera position, app configuration, and per-POI overrides.
  */
 export function mergeUserStates(
   localRaw: PersistedUserState,
@@ -270,11 +360,16 @@ export function mergeUserStates(
 ): MergeUserStateResult {
   const local = sanitizePersistedUserState(localRaw, localDeviceId);
   if (!remoteRaw || typeof remoteRaw !== 'object') {
-    const hasLocalData = local.cameraUpdatedAt > 0 || local.configUpdatedAt > 0;
+    const hasLocalData =
+      local.cameraUpdatedAt > 0 ||
+      local.configUpdatedAt > 0 ||
+      (local.poiOverridesUpdatedAt ?? 0) > 0 ||
+      (local.poiOverrides?.length ?? 0) > 0;
     return {
       merged: local,
       applyRemoteCamera: false,
       applyRemoteConfig: false,
+      applyRemotePoiOverrides: false,
       shouldPushCloud: hasLocalData,
     };
   }
@@ -296,9 +391,18 @@ export function mergeUserStates(
   const mergedConfig = takeRemoteConfig ? remote.config : local.config;
   const mergedConfigTs = takeRemoteConfig ? remote.configUpdatedAt : local.configUpdatedAt;
 
+  const ovMerge = mergePoiOverrideLists(local.poiOverrides ?? [], remote.poiOverrides ?? []);
+  const localOvTs = local.poiOverridesUpdatedAt ?? 0;
+  const remoteOvTs = remote.poiOverridesUpdatedAt ?? 0;
+  const mergedOvTs = Math.max(localOvTs, remoteOvTs);
+  const takeRemotePoiOverrides =
+    ovMerge.takeRemote && (localOvTs === 0 || fromAnotherDevice);
+
   const shouldPushCloud =
     (local.cameraUpdatedAt > remote.cameraUpdatedAt && Boolean(local.camera)) ||
-    local.configUpdatedAt > remote.configUpdatedAt;
+    local.configUpdatedAt > remote.configUpdatedAt ||
+    ovMerge.pushLocal ||
+    localOvTs > remoteOvTs;
 
   return {
     merged: {
@@ -307,12 +411,17 @@ export function mergeUserStates(
       cameraUpdatedAt: mergedCameraTs,
       config: mergedConfig,
       configUpdatedAt: mergedConfigTs,
+      ...(ovMerge.merged.length > 0 ? { poiOverrides: ovMerge.merged } : {}),
+      ...(mergedOvTs > 0 ? { poiOverridesUpdatedAt: mergedOvTs } : {}),
       lastUpdatedByDeviceId:
-        takeRemoteCamera || takeRemoteConfig ? remote.lastUpdatedByDeviceId : localDeviceId,
+        takeRemoteCamera || takeRemoteConfig || takeRemotePoiOverrides
+          ? remote.lastUpdatedByDeviceId
+          : localDeviceId,
       lastSyncedAt: remote.lastSyncedAt || local.lastSyncedAt,
     },
     applyRemoteCamera: takeRemoteCamera,
     applyRemoteConfig: takeRemoteConfig,
+    applyRemotePoiOverrides: takeRemotePoiOverrides,
     shouldPushCloud,
   };
 }
@@ -409,6 +518,26 @@ export class UserStateSyncService {
     return next;
   }
 
+  static recordLocalPoiOverrides(
+    overrides: PoiOverrideRecord[],
+    user?: NavUser | null,
+    debounceMs = 1000
+  ): PersistedUserState {
+    const prev = this.loadLocalState();
+    const clean = sanitizePoiOverrides(overrides);
+    const nowTs = Math.max(Date.now(), (prev.poiOverridesUpdatedAt ?? 0) + 1);
+    const next = this.saveLocalState({
+      ...prev,
+      poiOverrides: clean,
+      poiOverridesUpdatedAt: nowTs,
+      lastUpdatedByDeviceId: getOrCreateDeviceId(),
+    });
+    if (user) {
+      this.scheduleCloudPush(user, debounceMs);
+    }
+    return next;
+  }
+
   static cancelScheduledCloudPush(): void {
     if (cloudWriteTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(cloudWriteTimer);
@@ -437,7 +566,12 @@ export class UserStateSyncService {
     if (!services) return false;
 
     const current = this.loadLocalState();
-    if (current.cameraUpdatedAt === 0 && current.configUpdatedAt === 0) {
+    if (
+      current.cameraUpdatedAt === 0 &&
+      current.configUpdatedAt === 0 &&
+      (current.poiOverridesUpdatedAt ?? 0) === 0 &&
+      (current.poiOverrides?.length ?? 0) === 0
+    ) {
       cloudSyncDirty = false;
       return false;
     }
@@ -499,7 +633,7 @@ export class UserStateSyncService {
         ? (snap.data() as Partial<PersistedUserState>)
         : null;
       const result = mergeUserStates(local, remoteData, deviceId);
-      if (result.applyRemoteCamera || result.applyRemoteConfig) {
+      if (result.applyRemoteCamera || result.applyRemoteConfig || result.applyRemotePoiOverrides) {
         this.saveLocalState(result.merged);
       }
       if (result.shouldPushCloud || !snap.exists()) {
@@ -537,7 +671,7 @@ export class UserStateSyncService {
         const remoteData = snap.data() as Partial<PersistedUserState>;
         const local = this.loadLocalState();
         const result = mergeUserStates(local, remoteData, deviceId);
-        if (result.applyRemoteCamera || result.applyRemoteConfig) {
+        if (result.applyRemoteCamera || result.applyRemoteConfig || result.applyRemotePoiOverrides) {
           this.saveLocalState(result.merged);
           onRemoteUpdate(result);
         }

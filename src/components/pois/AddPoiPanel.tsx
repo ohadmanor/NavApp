@@ -2,9 +2,15 @@ import React, { useState } from 'react';
 import { X, Crosshair, Check } from 'lucide-react';
 import type { PoiCategory, PoiRecord } from '../../core/db/NavDatabase';
 import { PoiManager } from '../../core/pois/PoiManager';
+import {
+  POI_CATEGORIES,
+  POI_CATEGORY_SPECS,
+  POI_SYMBOLS_BY_CATEGORY,
+} from '../../core/pois/poiTaxonomy';
 import { ElevationService } from '../../core/navigation/ElevationService';
 import { MilitaryGridService } from '../../core/navigation/MilitaryGridService';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
+import { PoiCategoryIcon } from './PoiCategoryIcon';
 
 interface AddPoiPanelProps {
   theme: MapTheme;
@@ -13,15 +19,6 @@ interface AddPoiPanelProps {
   onCreated: (poi: PoiRecord) => void;
 }
 
-const REPORT_CATEGORIES: Array<{ id: PoiCategory; label: string }> = [
-  { id: 'water', label: '💧 מעיין / גב' },
-  { id: 'offroad', label: '🚙 מעלה 4x4' },
-  { id: 'campsite', label: '⛺ חניון לילה' },
-  { id: 'heritage', label: '🏛️ תצפית / מערה' },
-  { id: 'peak', label: '🏔️ פסגה / נ.ג.' },
-  { id: 'user', label: '📍 נקודת שטח' },
-];
-
 export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   theme,
   centerCoords,
@@ -29,12 +26,19 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   onCreated,
 }) => {
   const [category, setCategory] = useState<PoiCategory>('water');
+  const [subcategory, setSubcategory] = useState<string>(POI_CATEGORY_SPECS.water.defaultSubcategory);
   const [nameHe, setNameHe] = useState('');
   const [descHe, setDescHe] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   const t = getSurfaceTheme(theme);
   const milCoords = MilitaryGridService.toMilitaryCoords(centerCoords.lon, centerCoords.lat);
+  const categorySymbols = POI_SYMBOLS_BY_CATEGORY[category] || [];
+
+  const handleSelectCategory = (nextCat: PoiCategory) => {
+    setCategory(nextCat);
+    setSubcategory(POI_CATEGORY_SPECS[nextCat].defaultSubcategory);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,6 +51,7 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
       const created = await PoiManager.addCustomUserPoi({
         nameHe: nameHe.trim(),
         category,
+        subcategory,
         lon: centerCoords.lon,
         lat: centerCoords.lat,
         ele,
@@ -90,22 +95,47 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         </span>
       </div>
 
-      {/* Category Selector */}
+      {/* Category Selector (6 Exclusive Categories) */}
       <div className="grid grid-cols-3 gap-1.5">
-        {REPORT_CATEGORIES.map((cat) => (
-          <button
-            key={cat.id}
-            type="button"
-            onClick={() => setCategory(cat.id)}
-            className={`py-2 px-1.5 rounded-xl border text-xs font-bold transition-all text-center truncate ${
-              category === cat.id
-                ? 'border-emerald-500 bg-emerald-500/15 text-emerald-500'
-                : t.subCard
-            }`}
-          >
-            {cat.label}
-          </button>
-        ))}
+        {POI_CATEGORIES.map((catId) => {
+          const spec = POI_CATEGORY_SPECS[catId];
+          const active = category === catId;
+          return (
+            <button
+              key={catId}
+              type="button"
+              onClick={() => handleSelectCategory(catId)}
+              className={`py-2 px-1.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-1.5 truncate ${
+                active ? spec.activeClass : t.subCard
+              }`}
+            >
+              <PoiCategoryIcon category={catId} size={18} />
+              <span className="truncate">{spec.shortLabelHe}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Exclusive Symbol Selector within selected Category */}
+      <div className="flex flex-wrap gap-1.5">
+        {categorySymbols.map((sym) => {
+          const active = subcategory === sym.subcategory;
+          return (
+            <button
+              key={sym.id}
+              type="button"
+              onClick={() => setSubcategory(sym.subcategory)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold transition-all ${
+                active
+                  ? 'border-emerald-500 bg-emerald-500/15 text-emerald-500'
+                  : t.pillBtn
+              }`}
+            >
+              <PoiCategoryIcon category={category} subcategory={sym.subcategory} size={15} />
+              <span>{sym.labelHe}</span>
+            </button>
+          );
+        })}
       </div>
 
       <input

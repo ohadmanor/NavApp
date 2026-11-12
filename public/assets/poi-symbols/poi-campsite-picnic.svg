@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><defs>
+        <filter id="badgeShadow" x="-15%" y="-15%" width="130%" height="135%">
+          <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" flood-color="#0f172a" flood-opacity="0.38"/>
+        </filter>
+      </defs><g filter="url(#badgeShadow)">
+        <rect x="4.5" y="4.5" width="27" height="27" rx="7.5" fill="#009000" stroke="#ffffff" stroke-width="2.3"/>
+      </g>
+      <path d="M11 14H25" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M9.5 18.8H26.5" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M14.2 14L11.8 23.5" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+      <path d="M21.8 14L24.2 23.5" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+    </svg>

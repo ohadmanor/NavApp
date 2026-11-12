@@ -46,6 +46,7 @@ export interface NativeOfflineStoragePluginInterface {
     activeRouteJson?: string | null;
     savedRoutesJson?: string | null;
     userPoisJson?: string | null;
+    deletedPoiIdsJson?: string | null;
     carStateJson?: string | null;
   }): Promise<void>;
   getCarSyncState(): Promise<{
@@ -222,6 +223,7 @@ export class NativeOfflineStorage {
     activeRouteJson?: string | null;
     savedRoutesJson?: string | null;
     userPoisJson?: string | null;
+    deletedPoiIdsJson?: string | null;
     carStateJson?: string | null;
   }): Promise<void> {
     if (!this.isAndroidNative()) return;

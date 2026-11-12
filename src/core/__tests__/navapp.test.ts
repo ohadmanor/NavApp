@@ -2737,6 +2737,9 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     const toArraySpy = vi
       .spyOn(db.pois, 'toArray')
       .mockImplementation((async () => stored.map((r) => ({ ...r }))) as any);
+    const overridesToArraySpy = vi
+      .spyOn(db.poiOverrides, 'toArray')
+      .mockImplementation((async () => []) as any);
     const bulkDeleteSpy = vi.spyOn(db.pois, 'bulkDelete').mockImplementation((async (
       keys: string[]
     ) => {
@@ -2794,6 +2797,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       globalThis.fetch = origFetch;
       (globalThis as any).window = origWindow;
       toArraySpy.mockRestore();
+      overridesToArraySpy.mockRestore();
       bulkDeleteSpy.mockRestore();
       bulkPutSpy.mockRestore();
       txSpy.mockRestore();
@@ -2978,6 +2982,9 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     const toArraySpy = vi
       .spyOn(db.pois, 'toArray')
       .mockImplementation((async () => stored.map((r) => ({ ...r }))) as any);
+    const overridesToArraySpy = vi
+      .spyOn(db.poiOverrides, 'toArray')
+      .mockImplementation((async () => []) as any);
     const bulkDeleteSpy = vi.spyOn(db.pois, 'bulkDelete').mockImplementation((async () => {}) as any);
     const bulkPutSpy = vi.spyOn(db.pois, 'bulkPut').mockImplementation((async (
       items: readonly PoiRecord[]
@@ -3090,6 +3097,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
         'nameHe',
         'priority',
         'subcategory',
+        'symbolId',
       ]);
 
       await PoiManager.saveUserNote('or-6518653317545984', 'עביר עם נעילה אחורית', orRec);
@@ -3102,6 +3110,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       globalThis.fetch = origFetch;
       (globalThis as any).window = origWindow;
       toArraySpy.mockRestore();
+      overridesToArraySpy.mockRestore();
       bulkDeleteSpy.mockRestore();
       bulkPutSpy.mockRestore();
       updateSpy.mockRestore();
@@ -3146,7 +3155,8 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
       expect(foundAnchor).not.toBeNull();
       expect(foundAnchor.properties).toMatchObject({
         category: 'offroad',
-        subcategory: 'upward',
+        subcategory: 'maale',
+        symbolId: 'poi-offroad-pass',
         difficulty4x4: 'בינוני +',
       });
 

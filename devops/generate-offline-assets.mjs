@@ -322,6 +322,14 @@ const userIconAssets = fs.existsSync(userIconsDir)
       .map((f) => `/assets/user-icons/${f}`)
   : [];
 
+const poiSymbolsDir = path.join(ASSETS_DIR, 'poi-symbols');
+const poiSymbolAssets = fs.existsSync(poiSymbolsDir)
+  ? fs
+      .readdirSync(poiSymbolsDir)
+      .filter((f) => f.endsWith('.svg'))
+      .map((f) => `/assets/poi-symbols/${f}`)
+  : [];
+
 const appShellEntries = [
   '/',
   '/index.html',
@@ -336,10 +344,11 @@ const appShellEntries = [
   '/assets/sprites/sprite@2x.json',
   '/assets/sprites/sprite@2x.png',
   ...userIconAssets,
+  ...poiSymbolAssets,
   ...optionalDataAssets
 ];
 
-const swCode = `const CACHE_NAME = 'navapp-offline-v8';
+const swCode = `const CACHE_NAME = 'navapp-offline-v11';
 const APP_SHELL = ${JSON.stringify(appShellEntries, null, 2)};
 
 self.addEventListener('install', (event) => {

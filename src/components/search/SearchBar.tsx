@@ -3,6 +3,7 @@ import { Search, Route as RouteIcon, X } from 'lucide-react';
 import type { SearchIndexStatus, SearchResultItem } from '../../core/search/PMTilesSearchService';
 import { SEARCH_FILTER_TABS, type SearchFilterCategory } from '../../core/search/searchTaxonomy';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
+import { PoiCategoryIcon } from '../pois/PoiCategoryIcon';
 
 const QUICK_EXAMPLES = [
   'ירושלים',
@@ -290,7 +291,15 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(
                       }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="text-base shrink-0">{item.emoji}</span>
+                        {item.kind === 'curated-poi' || item.filterGroup === 'nature' || item.filterGroup === 'pois' ? (
+                          <PoiCategoryIcon
+                            category={item.poiCategory}
+                            subcategory={item.subcategory}
+                            size={20}
+                          />
+                        ) : (
+                          <span className="text-base shrink-0">{item.emoji}</span>
+                        )}
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="text-xs font-bold truncate" dir="auto">

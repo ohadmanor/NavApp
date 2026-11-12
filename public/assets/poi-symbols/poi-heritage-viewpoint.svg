@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><defs>
+        <filter id="badgeShadow" x="-15%" y="-15%" width="130%" height="135%">
+          <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" flood-color="#0f172a" flood-opacity="0.38"/>
+        </filter>
+      </defs><g filter="url(#badgeShadow)">
+        <polygon points="12.2,4 23.8,4 32,12.2 32,23.8 23.8,32 12.2,32 4,23.8 4,12.2" fill="#FFE119" stroke="#ffffff" stroke-width="2.3" stroke-linejoin="round"/>
+        <polygon points="12.9,5.6 23.1,5.6 30.4,12.9 30.4,23.1 23.1,30.4 12.9,30.4 5.6,23.1 5.6,12.9" fill="none" stroke="#111827" stroke-opacity="0.22" stroke-width="1" stroke-linejoin="round"/>
+      </g>
+      <path d="M9.5 18C11.8 13.8 14.8 12.2 18 12.2C21.2 12.2 24.2 13.8 26.5 18C24.2 22.2 21.2 23.8 18 23.8C14.8 23.8 11.8 22.2 9.5 18Z" fill="none" stroke="#111827" stroke-width="2.1" stroke-linejoin="round"/>
+      <circle cx="18" cy="18" r="2.7" fill="#111827"/>
+    </svg>

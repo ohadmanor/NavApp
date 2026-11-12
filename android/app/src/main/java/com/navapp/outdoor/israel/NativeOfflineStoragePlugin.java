@@ -350,11 +350,12 @@ public class NativeOfflineStoragePlugin extends Plugin {
         String activeRouteJson = call.getString("activeRouteJson");
         String savedRoutesJson = call.getString("savedRoutesJson");
         String userPoisJson = call.getString("userPoisJson");
+        String deletedPoiIdsJson = call.getString("deletedPoiIdsJson");
         String carStateJson = call.getString("carStateJson");
 
         NativeMapStore store = NativeMapStore.getInstance(getContext());
         try {
-            store.syncCarData(activeRouteJson, savedRoutesJson, userPoisJson, carStateJson);
+            store.syncCarData(activeRouteJson, savedRoutesJson, userPoisJson, deletedPoiIdsJson, carStateJson);
             call.resolve();
         } catch (Exception ex) {
             call.reject("Car sync failed: " + ex.getMessage());

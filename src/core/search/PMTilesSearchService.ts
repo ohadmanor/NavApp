@@ -58,6 +58,7 @@ export interface SearchQueryOptions {
   referenceCoord?: { lon: number; lat: number } | null;
   pois?: PoiRecord[];
   routes?: SavedRouteRecord[];
+  deletedSignatures?: Array<{ id: string; normName: string; lon: number; lat: number }>;
   limit?: number;
 }
 
@@ -579,9 +580,17 @@ export class PMTilesSearchService {
     }
 
     // 3. Curated & User Offline POIs (db.pois)
+    const deletedSigs = (options?.deletedSignatures || []).map((d) => ({
+      id: d.id,
+      norm: normalizeSearchText(d.normName),
+      lon: d.lon,
+      lat: d.lat,
+    }));
+    const deletedIdSet = new Set(deletedSigs.map((d) => d.id));
     const curatedDedupKeys: Array<{ normName: string; lon: number; lat: number }> = [];
     if (filter !== 'routes' && curatedPois.length > 0) {
       for (const poi of curatedPois) {
+        if (deletedIdSet.has(poi.id)) continue;
         if (!matchesPoiFilter(poi, filter)) continue;
         let cachedNorm = this.normalizedPoiCache.get(poi);
         if (!cachedNorm) {
@@ -681,15 +690,24 @@ export class PMTilesSearchService {
       );
 
       for (const hit of pmtilesHits) {
+        const hitNorm = normalizeSearchText(hit.title);
         // Suppress PMTiles duplicate if a curated POI with the same name sits within ~350m
         if (curatedDedupKeys.length > 0) {
-          const hitNorm = normalizeSearchText(hit.title);
           const dup = curatedDedupKeys.some(
             (c) =>
               c.normName === hitNorm &&
               haversineKmFast(c.lon, c.lat, hit.lon, hit.lat) < 0.35
           );
           if (dup) continue;
+        }
+        if (deletedSigs.length > 0 && hitNorm) {
+          const deletedDup = deletedSigs.some(
+            (d) =>
+              d.norm &&
+              d.norm === hitNorm &&
+              haversineKmFast(d.lon, d.lat, hit.lon, hit.lat) < 0.085
+          );
+          if (deletedDup) continue;
         }
         candidates.push(hit);
       }

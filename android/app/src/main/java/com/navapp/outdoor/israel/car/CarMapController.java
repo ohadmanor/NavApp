@@ -58,15 +58,14 @@ public final class CarMapController implements SurfaceCallback {
     private static final String SRC_ROUTE_ENDPOINTS = "car-route-endpoints-src";
     private static final String LAYER_ROUTE_ENDPOINTS = "car-route-endpoints-layer";
     private static final String SRC_ISRAEL_POIS = "car-israel-pois-src";
+    private static final String LAYER_ISRAEL_POIS_PEAKS = "car-israel-pois-peaks";
+    private static final String LAYER_ISRAEL_POIS_MIDZOOM = "car-israel-pois-midzoom";
     private static final String LAYER_ISRAEL_POIS = "car-israel-pois-labels";
     private static final String SRC_TARGET_POI = "car-target-poi-src";
     private static final String LAYER_TARGET_POI = "car-target-poi-layer";
     private static final String SRC_USER_LOC = "car-user-loc-src";
     private static final String LAYER_USER_LOC = "car-user-loc-layer";
 
-    private static final String IMG_OFFROAD_PASS = "offroad-pass";
-    private static final String IMG_OFFROAD_BLOCKED = "offroad-blocked";
-    private static final String IMG_OFFROAD_DANGER = "offroad-danger";
     private static final String IMG_CAR_USER_PUCK = "car-user-puck";
     private static final String IMG_CAR_TARGET_PIN = "car-target-pin";
 
@@ -91,6 +90,7 @@ public final class CarMapController implements SurfaceCallback {
     private String lastAppliedStyleSignature = "";
     private File lastPoiGeoJsonFileLoaded = null;
     private long lastPoiGeoJsonModified = 0L;
+    private long lastPoiRevisionLoaded = -1L;
 
     private NativeMapStore.CarSyncState currentSyncState;
     private NativeMapStore.CarRoute currentActiveRoute;
@@ -354,6 +354,7 @@ public final class CarMapController implements SurfaceCallback {
         mapLibreMap = null;
         lastAppliedStyleSignature = "";
         lastPoiGeoJsonFileLoaded = null;
+        lastPoiRevisionLoaded = -1L;
         if (presentation != null) {
             try {
                 presentation.dispatchPause();
@@ -393,6 +394,7 @@ public final class CarMapController implements SurfaceCallback {
         String json = CarStyleBuilder.buildStyleJson(appContext, st);
         lastAppliedStyleSignature = buildStyleSignature(st);
         lastPoiGeoJsonFileLoaded = null;
+        lastPoiRevisionLoaded = -1L;
         mapLibreMap.setStyle(new Style.Builder().fromJson(json), style -> {
             if (this.mapLibreMap == null || style == null) return;
             this.loadedStyle = style;
@@ -404,15 +406,6 @@ public final class CarMapController implements SurfaceCallback {
     }
 
     private void ensureProceduralImages(Style style) {
-        if (style.getImage(IMG_OFFROAD_PASS) == null) {
-            style.addImage(IMG_OFFROAD_PASS, createOffroadPassBitmap());
-        }
-        if (style.getImage(IMG_OFFROAD_BLOCKED) == null) {
-            style.addImage(IMG_OFFROAD_BLOCKED, createOffroadBlockedBitmap());
-        }
-        if (style.getImage(IMG_OFFROAD_DANGER) == null) {
-            style.addImage(IMG_OFFROAD_DANGER, createOffroadDangerBitmap());
-        }
         if (style.getImage(IMG_CAR_USER_PUCK) == null) {
             style.addImage(IMG_CAR_USER_PUCK, createUserPuckBitmap());
         }
@@ -506,26 +499,79 @@ public final class CarMapController implements SurfaceCallback {
                 style.addSource(new GeoJsonSource(SRC_ISRAEL_POIS, poiFile.toURI()));
                 lastPoiGeoJsonFileLoaded = poiFile;
                 lastPoiGeoJsonModified = poiFile.lastModified();
+                lastPoiRevisionLoaded = store.getPoiRevision();
             } else {
                 style.addSource(new GeoJsonSource(SRC_ISRAEL_POIS));
             }
 
-            SymbolLayer poiLayer = new SymbolLayer(LAYER_ISRAEL_POIS, SRC_ISRAEL_POIS);
-            poiLayer.setMinZoom(13.0f);
-            poiLayer.setProperties(
-                PropertyFactory.iconImage(buildPoiIconExpression()),
-                PropertyFactory.iconSize(0.7f),
+            Expression poiIcons = buildPoiIconExpression();
+            Expression poiTextColors = buildPoiTextColorExpression(isDark);
+            Expression poiNameExpr = Expression.coalesce(Expression.get("nameHe"), Expression.literal(""));
+            String haloColor = isDark ? "#0b1015" : "#ffffff";
+
+            SymbolLayer peaksLayer = new SymbolLayer(LAYER_ISRAEL_POIS_PEAKS, SRC_ISRAEL_POIS);
+            peaksLayer.setMinZoom(11.5f);
+            peaksLayer.setProperties(
+                PropertyFactory.iconImage(poiIcons),
+                PropertyFactory.iconSize(buildPoiIconSizeExpression(0.94f)),
+                PropertyFactory.iconPadding(1.5f),
                 PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER),
                 PropertyFactory.iconAllowOverlap(false),
-                PropertyFactory.textField(Expression.coalesce(Expression.get("nameHe"), Expression.literal(""))),
+                PropertyFactory.textField(
+                    Expression.step(Expression.zoom(), Expression.literal(""), Expression.stop(12.5f, poiNameExpr))
+                ),
                 PropertyFactory.textFont(new String[] { "bold", "Arial", "Tahoma", "sans-serif" }),
                 PropertyFactory.textSize(13.0f),
-                PropertyFactory.textOffset(new Float[] { 0f, 0.85f }),
+                PropertyFactory.textOffset(new Float[] { 0f, 1.0f }),
                 PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
                 PropertyFactory.textMaxWidth(9.0f),
                 PropertyFactory.textOptional(true),
-                PropertyFactory.textColor(buildPoiTextColorExpression(isDark)),
-                PropertyFactory.textHaloColor(isDark ? "#0b1015" : "#ffffff"),
+                PropertyFactory.textColor(poiTextColors),
+                PropertyFactory.textHaloColor(haloColor),
+                PropertyFactory.textHaloWidth(2.8f)
+            );
+            style.addLayer(peaksLayer);
+
+            SymbolLayer midzoomLayer = new SymbolLayer(LAYER_ISRAEL_POIS_MIDZOOM, SRC_ISRAEL_POIS);
+            midzoomLayer.setMinZoom(13.0f);
+            midzoomLayer.setProperties(
+                PropertyFactory.iconImage(poiIcons),
+                PropertyFactory.iconSize(buildPoiIconSizeExpression(0.98f)),
+                PropertyFactory.iconPadding(1.5f),
+                PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER),
+                PropertyFactory.iconAllowOverlap(false),
+                PropertyFactory.textField(
+                    Expression.step(Expression.zoom(), Expression.literal(""), Expression.stop(14.0f, poiNameExpr))
+                ),
+                PropertyFactory.textFont(new String[] { "bold", "Arial", "Tahoma", "sans-serif" }),
+                PropertyFactory.textSize(13.0f),
+                PropertyFactory.textOffset(new Float[] { 0f, 1.0f }),
+                PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
+                PropertyFactory.textMaxWidth(9.0f),
+                PropertyFactory.textOptional(true),
+                PropertyFactory.textColor(poiTextColors),
+                PropertyFactory.textHaloColor(haloColor),
+                PropertyFactory.textHaloWidth(2.8f)
+            );
+            style.addLayer(midzoomLayer);
+
+            SymbolLayer poiLayer = new SymbolLayer(LAYER_ISRAEL_POIS, SRC_ISRAEL_POIS);
+            poiLayer.setMinZoom(14.0f);
+            poiLayer.setProperties(
+                PropertyFactory.iconImage(poiIcons),
+                PropertyFactory.iconSize(buildPoiIconSizeExpression(1.02f)),
+                PropertyFactory.iconPadding(1.5f),
+                PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER),
+                PropertyFactory.iconAllowOverlap(false),
+                PropertyFactory.textField(poiNameExpr),
+                PropertyFactory.textFont(new String[] { "bold", "Arial", "Tahoma", "sans-serif" }),
+                PropertyFactory.textSize(13.0f),
+                PropertyFactory.textOffset(new Float[] { 0f, 1.0f }),
+                PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
+                PropertyFactory.textMaxWidth(9.0f),
+                PropertyFactory.textOptional(true),
+                PropertyFactory.textColor(poiTextColors),
+                PropertyFactory.textHaloColor(haloColor),
                 PropertyFactory.textHaloWidth(2.8f)
             );
             style.addLayer(poiLayer);
@@ -602,22 +648,41 @@ public final class CarMapController implements SurfaceCallback {
         File poiFile = store.getCompactPoisGeoJsonFile();
         GeoJsonSource poiSrc = style.getSourceAs(SRC_ISRAEL_POIS);
         if (poiSrc != null && poiFile != null) {
+            long curRev = store.getPoiRevision();
             boolean fileChanged =
                 lastPoiGeoJsonFileLoaded == null ||
                 !poiFile.equals(lastPoiGeoJsonFileLoaded) ||
-                poiFile.lastModified() != lastPoiGeoJsonModified;
+                poiFile.lastModified() != lastPoiGeoJsonModified ||
+                curRev != lastPoiRevisionLoaded;
             if (fileChanged) {
                 poiSrc.setUri(poiFile.toURI());
                 lastPoiGeoJsonFileLoaded = poiFile;
                 lastPoiGeoJsonModified = poiFile.lastModified();
+                lastPoiRevisionLoaded = curRev;
             }
         }
-        SymbolLayer poiLayer = style.getLayerAs(LAYER_ISRAEL_POIS);
-        if (poiLayer != null && currentSyncState != null) {
+        if (currentSyncState != null) {
             NativeMapStore.CarVisibility vis = currentSyncState.visibility;
             boolean showPois = vis.pois && (vis.poiWater || vis.poiOffroad || vis.poiHeritage || vis.poiCampsites || vis.poiPeaks || vis.poiUser);
-            poiLayer.setProperties(PropertyFactory.visibility(showPois ? Property.VISIBLE : Property.NONE));
-            poiLayer.setFilter(buildPoiFilterExpression(vis));
+            String visProp = showPois ? Property.VISIBLE : Property.NONE;
+
+            SymbolLayer peaksLayer = style.getLayerAs(LAYER_ISRAEL_POIS_PEAKS);
+            if (peaksLayer != null) {
+                peaksLayer.setProperties(PropertyFactory.visibility(visProp));
+                peaksLayer.setFilter(buildPoiFilterExpression(vis, new String[] { "peak" }));
+            }
+
+            SymbolLayer midzoomLayer = style.getLayerAs(LAYER_ISRAEL_POIS_MIDZOOM);
+            if (midzoomLayer != null) {
+                midzoomLayer.setProperties(PropertyFactory.visibility(visProp));
+                midzoomLayer.setFilter(buildPoiFilterExpression(vis, new String[] { "campsite", "heritage" }));
+            }
+
+            SymbolLayer poiLayer = style.getLayerAs(LAYER_ISRAEL_POIS);
+            if (poiLayer != null) {
+                poiLayer.setProperties(PropertyFactory.visibility(visProp));
+                poiLayer.setFilter(buildPoiFilterExpression(vis, new String[] { "water", "offroad", "user" }));
+            }
         }
 
         // Target POI pin
@@ -771,14 +836,18 @@ public final class CarMapController implements SurfaceCallback {
             + "}]}";
     }
 
-    private static Expression buildPoiFilterExpression(NativeMapStore.CarVisibility vis) {
-        List<String> cats = new ArrayList<>(6);
-        if (vis.poiWater) cats.add("water");
-        if (vis.poiOffroad) cats.add("offroad");
-        if (vis.poiHeritage) cats.add("heritage");
-        if (vis.poiCampsites) cats.add("campsite");
-        if (vis.poiPeaks) cats.add("peak");
-        if (vis.poiUser) cats.add("user");
+    private static Expression buildPoiFilterExpression(NativeMapStore.CarVisibility vis, String[] allowedCategories) {
+        List<String> cats = new ArrayList<>(allowedCategories.length);
+        for (String cat : allowedCategories) {
+            boolean enabled = false;
+            if ("water".equals(cat)) enabled = vis.poiWater;
+            else if ("offroad".equals(cat)) enabled = vis.poiOffroad;
+            else if ("heritage".equals(cat)) enabled = vis.poiHeritage;
+            else if ("campsite".equals(cat)) enabled = vis.poiCampsites;
+            else if ("peak".equals(cat)) enabled = vis.poiPeaks;
+            else if ("user".equals(cat)) enabled = vis.poiUser;
+            if (enabled) cats.add(cat);
+        }
         if (cats.isEmpty()) {
             return Expression.eq(Expression.literal(1), Expression.literal(2));
         }
@@ -789,136 +858,154 @@ public final class CarMapController implements SurfaceCallback {
         Expression sub = Expression.coalesce(Expression.get("subcategory"), Expression.literal(""));
         Expression waterExpr = Expression.match(
             sub,
-            Expression.literal("spring"),
-            Expression.stop("waterhole", "water_hole"),
-            Expression.stop("waterfall", "waterfall"),
-            Expression.stop("cistern", "cistern"),
-            Expression.stop("water_well", "water_well"),
-            Expression.stop("drinking_water", "tap")
-        );
-        Expression campExpr = Expression.match(
-            sub,
-            Expression.literal("camping"),
-            Expression.stop("picnic_site", "picnic"),
-            Expression.stop("shelter", "alpinehut"),
-            Expression.stop("wilderness_hut", "alpinehut")
-        );
-        Expression heritageExpr = Expression.match(
-            sub,
-            Expression.literal("viewpoint"),
-            Expression.stop("cave", "cave"),
-            Expression.stop("ruins", "ruins"),
-            Expression.stop("archaeological_site", "jar"),
-            Expression.stop("fort", "jar"),
-            Expression.stop("castle", "jar"),
-            Expression.stop("memorial", "monument"),
-            Expression.stop("nature_site", "flower"),
-            Expression.stop("offroad_poi", "info"),
-            Expression.stop("offroad_photo", "info")
+            Expression.literal("poi-water-spring"),
+            Expression.stop("water_pool", "poi-water-pool"),
+            Expression.stop("water_hole", "poi-water-pool"),
+            Expression.stop("waterhole", "poi-water-pool"),
+            Expression.stop("stream_pool", "poi-water-pool"),
+            Expression.stop("pool", "poi-water-pool"),
+            Expression.stop("swimming", "poi-water-pool"),
+            Expression.stop("waterfall", "poi-water-waterfall"),
+            Expression.stop("cistern", "poi-water-cistern"),
+            Expression.stop("water_well", "poi-water-cistern"),
+            Expression.stop("well", "poi-water-cistern"),
+            Expression.stop("birket", "poi-water-cistern"),
+            Expression.stop("maagora", "poi-water-cistern"),
+            Expression.stop("drinking_water", "poi-water-tap"),
+            Expression.stop("tap", "poi-water-tap"),
+            Expression.stop("fountain", "poi-water-tap")
         );
         Expression offroadExpr = Expression.match(
             sub,
-            Expression.literal(IMG_OFFROAD_PASS),
-            Expression.stop("gate", "gate_closed"),
-            Expression.stop("barrier", "gate_closed"),
-            Expression.stop("blocked_road", IMG_OFFROAD_BLOCKED),
-            Expression.stop("danger", IMG_OFFROAD_DANGER),
-            Expression.stop("obstacle", IMG_OFFROAD_DANGER),
-            Expression.stop("floods", IMG_OFFROAD_DANGER),
-            Expression.stop("wifi_sos", "antenna"),
-            Expression.stop("ratag_info", "sign"),
-            Expression.stop("clunker", "construction")
+            Expression.literal("poi-offroad-pass"),
+            Expression.stop("blocked_road", "poi-offroad-blocked"),
+            Expression.stop("gate_closed", "poi-offroad-blocked"),
+            Expression.stop("gate", "poi-offroad-blocked"),
+            Expression.stop("barrier", "poi-offroad-blocked"),
+            Expression.stop("blocked", "poi-offroad-blocked"),
+            Expression.stop("danger", "poi-offroad-danger"),
+            Expression.stop("hazard", "poi-offroad-danger"),
+            Expression.stop("obstacle", "poi-offroad-danger"),
+            Expression.stop("rock_step", "poi-offroad-danger"),
+            Expression.stop("ford", "poi-offroad-danger"),
+            Expression.stop("mud", "poi-offroad-mud"),
+            Expression.stop("wadi_crossing", "poi-offroad-mud"),
+            Expression.stop("floods", "poi-offroad-mud"),
+            Expression.stop("offroad_track", "poi-offroad-track"),
+            Expression.stop("scenic_4x4", "poi-offroad-track"),
+            Expression.stop("parking_4x4", "poi-offroad-track"),
+            Expression.stop("ratag_info", "poi-offroad-track"),
+            Expression.stop("wifi_sos", "poi-offroad-track"),
+            Expression.stop("fuel_4x4", "poi-offroad-service"),
+            Expression.stop("recovery_service", "poi-offroad-service"),
+            Expression.stop("clunker", "poi-offroad-service")
+        );
+        Expression campExpr = Expression.match(
+            sub,
+            Expression.literal("poi-campsite-night"),
+            Expression.stop("picnic_site", "poi-campsite-picnic"),
+            Expression.stop("picnic", "poi-campsite-picnic"),
+            Expression.stop("shade_grove", "poi-campsite-picnic"),
+            Expression.stop("khan", "poi-campsite-khan"),
+            Expression.stop("shelter", "poi-campsite-khan"),
+            Expression.stop("wilderness_hut", "poi-campsite-khan"),
+            Expression.stop("alpine_hut", "poi-campsite-khan"),
+            Expression.stop("alpinehut", "poi-campsite-khan"),
+            Expression.stop("coffee_spot", "poi-campsite-fire"),
+            Expression.stop("rest_stop", "poi-campsite-fire"),
+            Expression.stop("bonfire", "poi-campsite-fire")
+        );
+        Expression heritageExpr = Expression.match(
+            sub,
+            Expression.literal("poi-heritage-landmark"),
+            Expression.stop("ruins", "poi-heritage-ruins"),
+            Expression.stop("archaeological_site", "poi-heritage-ruins"),
+            Expression.stop("fort", "poi-heritage-ruins"),
+            Expression.stop("castle", "poi-heritage-ruins"),
+            Expression.stop("cave", "poi-heritage-cave"),
+            Expression.stop("cave_entrance", "poi-heritage-cave"),
+            Expression.stop("viewpoint", "poi-heritage-viewpoint"),
+            Expression.stop("scenic_view", "poi-heritage-viewpoint"),
+            Expression.stop("monument", "poi-heritage-monument"),
+            Expression.stop("memorial", "poi-heritage-monument"),
+            Expression.stop("tomb", "poi-heritage-monument"),
+            Expression.stop("nature_site", "poi-heritage-nature"),
+            Expression.stop("flowers", "poi-heritage-nature"),
+            Expression.stop("ancient_tree", "poi-heritage-nature"),
+            Expression.stop("geology", "poi-heritage-nature"),
+            Expression.stop("botany", "poi-heritage-nature"),
+            Expression.stop("holy_site", "poi-heritage-holy"),
+            Expression.stop("synagogue", "poi-heritage-holy"),
+            Expression.stop("monastery", "poi-heritage-holy"),
+            Expression.stop("mosque", "poi-heritage-holy")
+        );
+        Expression peakExpr = Expression.match(
+            sub,
+            Expression.literal("poi-peak-summit"),
+            Expression.stop("saddle", "poi-peak-saddle"),
+            Expression.stop("ridge", "poi-peak-saddle"),
+            Expression.stop("cliff", "poi-peak-saddle"),
+            Expression.stop("crater", "poi-peak-crater"),
+            Expression.stop("volcano", "poi-peak-crater"),
+            Expression.stop("tel_ridge", "poi-peak-crater"),
+            Expression.stop("fire_lookout", "poi-peak-tower"),
+            Expression.stop("beacon", "poi-peak-tower"),
+            Expression.stop("tower_peak", "poi-peak-tower")
+        );
+        Expression userExpr = Expression.match(
+            sub,
+            Expression.literal("poi-user-pin"),
+            Expression.stop("waypoint", "poi-user-flag"),
+            Expression.stop("flag", "poi-user-flag"),
+            Expression.stop("target", "poi-user-flag"),
+            Expression.stop("field_note", "poi-user-note"),
+            Expression.stop("report", "poi-user-note"),
+            Expression.stop("favorite", "poi-user-star"),
+            Expression.stop("star", "poi-user-star"),
+            Expression.stop("civic_amenity", "poi-user-service"),
+            Expression.stop("hospital", "poi-user-service"),
+            Expression.stop("restaurant", "poi-user-service"),
+            Expression.stop("shop", "poi-user-service")
         );
 
         return Expression.match(
             Expression.get("category"),
-            Expression.literal("viewpoint"),
+            Expression.literal("poi-heritage-landmark"),
             Expression.stop("water", waterExpr),
-            Expression.stop("campsite", campExpr),
-            Expression.stop("peak", Expression.literal("dot")),
-            Expression.stop("heritage", heritageExpr),
             Expression.stop("offroad", offroadExpr),
-            Expression.stop("user", Expression.literal("star"))
+            Expression.stop("campsite", campExpr),
+            Expression.stop("heritage", heritageExpr),
+            Expression.stop("peak", peakExpr),
+            Expression.stop("user", userExpr)
+        );
+    }
+
+    private static Expression buildPoiIconSizeExpression(float categoryScale) {
+        return Expression.interpolate(
+            Expression.linear(),
+            Expression.zoom(),
+            Expression.stop(11.5f, 0.45f * categoryScale),
+            Expression.stop(13.0f, 0.62f * categoryScale),
+            Expression.stop(14.0f, 0.78f * categoryScale),
+            Expression.stop(15.5f, 1.00f * categoryScale),
+            Expression.stop(17.5f, 1.28f * categoryScale)
         );
     }
 
     private static Expression buildPoiTextColorExpression(boolean isDark) {
         return Expression.match(
             Expression.get("category"),
-            Expression.literal(isDark ? "#fbbf24" : "#404040"),
-            Expression.stop("water", isDark ? "#38bdf8" : "#125595"),
-            Expression.stop("offroad", isDark ? "#f87171" : "#991b1b"),
-            Expression.stop("campsite", isDark ? "#34d399" : "#166534"),
-            Expression.stop("peak", isDark ? "#e2e8f0" : "#404040"),
-            Expression.stop("user", isDark ? "#2dd4bf" : "#0f766e")
+            Expression.literal(isDark ? "#FFE119" : "#7A6300"),
+            Expression.stop("water", isDark ? "#38BDF8" : "#0369A1"),
+            Expression.stop("offroad", isDark ? "#FB7185" : "#B80F3A"),
+            Expression.stop("campsite", isDark ? "#4ADE80" : "#006B00"),
+            Expression.stop("heritage", isDark ? "#FFE119" : "#7A6300"),
+            Expression.stop("peak", isDark ? "#E2E8F0" : "#000000"),
+            Expression.stop("user", isDark ? "#D875F5" : "#6B1286")
         );
     }
 
     // ---- Procedural Canvas Bitmaps ----
-
-    private static Bitmap createOffroadPassBitmap() {
-        int s = 36;
-        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        fill.setColor(0xFFDC2626);
-        c.drawCircle(s / 2f, s / 2f, 13f, fill);
-
-        Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        stroke.setStyle(Paint.Style.STROKE);
-        stroke.setColor(Color.WHITE);
-        stroke.setStrokeWidth(3f);
-        stroke.setStrokeCap(Paint.Cap.ROUND);
-        stroke.setStrokeJoin(Paint.Join.ROUND);
-        c.drawCircle(s / 2f, s / 2f, 13f, stroke);
-
-        Path arrow = new Path();
-        arrow.moveTo(s / 2f - 6f, s / 2f + 3f);
-        arrow.lineTo(s / 2f, s / 2f - 4.5f);
-        arrow.lineTo(s / 2f + 6f, s / 2f + 3f);
-        c.drawPath(arrow, stroke);
-        return bmp;
-    }
-
-    private static Bitmap createOffroadBlockedBitmap() {
-        int s = 36;
-        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        fill.setColor(0xFFB91C1C);
-        c.drawCircle(s / 2f, s / 2f, 13f, fill);
-
-        Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        stroke.setStyle(Paint.Style.STROKE);
-        stroke.setColor(Color.WHITE);
-        stroke.setStrokeWidth(3.2f);
-        stroke.setStrokeCap(Paint.Cap.ROUND);
-        c.drawCircle(s / 2f, s / 2f, 13f, stroke);
-        c.drawLine(s / 2f - 6.5f, s / 2f, s / 2f + 6.5f, s / 2f, stroke);
-        return bmp;
-    }
-
-    private static Bitmap createOffroadDangerBitmap() {
-        int s = 36;
-        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        fill.setColor(0xFFD97706);
-        c.drawCircle(s / 2f, s / 2f, 13f, fill);
-
-        Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        stroke.setStyle(Paint.Style.STROKE);
-        stroke.setColor(Color.WHITE);
-        stroke.setStrokeWidth(3f);
-        stroke.setStrokeCap(Paint.Cap.ROUND);
-        c.drawCircle(s / 2f, s / 2f, 13f, stroke);
-        c.drawLine(s / 2f, s / 2f - 6f, s / 2f, s / 2f + 1.5f, stroke);
-
-        Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
-        dot.setColor(Color.WHITE);
-        c.drawCircle(s / 2f, s / 2f + 6f, 2f, dot);
-        return bmp;
-    }
 
     private static Bitmap createUserPuckBitmap() {
         int s = 64;

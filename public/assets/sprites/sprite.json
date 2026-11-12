@@ -502,5 +502,222 @@
     "width": 38,
     "x": 332,
     "y": 154
+  },
+  "poi-water-spring": {
+    "width": 36,
+    "height": 36,
+    "x": 4,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-water-pool": {
+    "width": 36,
+    "height": 36,
+    "x": 44,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-water-waterfall": {
+    "width": 36,
+    "height": 36,
+    "x": 84,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-water-cistern": {
+    "width": 36,
+    "height": 36,
+    "x": 124,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-water-tap": {
+    "width": 36,
+    "height": 36,
+    "x": 164,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-offroad-pass": {
+    "width": 36,
+    "height": 36,
+    "x": 204,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-offroad-blocked": {
+    "width": 36,
+    "height": 36,
+    "x": 244,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-offroad-danger": {
+    "width": 36,
+    "height": 36,
+    "x": 284,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-offroad-mud": {
+    "width": 36,
+    "height": 36,
+    "x": 324,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-offroad-track": {
+    "width": 36,
+    "height": 36,
+    "x": 364,
+    "y": 338,
+    "pixelRatio": 1
+  },
+  "poi-offroad-service": {
+    "width": 36,
+    "height": 36,
+    "x": 4,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-campsite-night": {
+    "width": 36,
+    "height": 36,
+    "x": 44,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-campsite-picnic": {
+    "width": 36,
+    "height": 36,
+    "x": 84,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-campsite-khan": {
+    "width": 36,
+    "height": 36,
+    "x": 124,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-campsite-fire": {
+    "width": 36,
+    "height": 36,
+    "x": 164,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-heritage-landmark": {
+    "width": 36,
+    "height": 36,
+    "x": 204,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-heritage-ruins": {
+    "width": 36,
+    "height": 36,
+    "x": 244,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-heritage-cave": {
+    "width": 36,
+    "height": 36,
+    "x": 284,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-heritage-viewpoint": {
+    "width": 36,
+    "height": 36,
+    "x": 324,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-heritage-monument": {
+    "width": 36,
+    "height": 36,
+    "x": 364,
+    "y": 378,
+    "pixelRatio": 1
+  },
+  "poi-heritage-nature": {
+    "width": 36,
+    "height": 36,
+    "x": 4,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-heritage-holy": {
+    "width": 36,
+    "height": 36,
+    "x": 44,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-peak-summit": {
+    "width": 36,
+    "height": 36,
+    "x": 84,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-peak-saddle": {
+    "width": 36,
+    "height": 36,
+    "x": 124,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-peak-crater": {
+    "width": 36,
+    "height": 36,
+    "x": 164,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-peak-tower": {
+    "width": 36,
+    "height": 36,
+    "x": 204,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-user-pin": {
+    "width": 36,
+    "height": 36,
+    "x": 244,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-user-flag": {
+    "width": 36,
+    "height": 36,
+    "x": 284,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-user-note": {
+    "width": 36,
+    "height": 36,
+    "x": 324,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-user-star": {
+    "width": 36,
+    "height": 36,
+    "x": 364,
+    "y": 418,
+    "pixelRatio": 1
+  },
+  "poi-user-service": {
+    "width": 36,
+    "height": 36,
+    "x": 4,
+    "y": 458,
+    "pixelRatio": 1
   }
 }

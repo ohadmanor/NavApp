@@ -2,6 +2,8 @@ import type { StyleSpecification, LayerSpecification } from 'maplibre-gl';
 import navappLayersRaw from './navappLayer.json';
 import { REMOTE_DATA_ORIGIN } from '../dataUrls';
 import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
+import type { PoiCategory } from '../db/NavDatabase';
+import { POI_CATEGORY_ZOOM_RULES } from '../pois/poiTaxonomy';
 
 export interface OutdoorLayerVisibility {
   googleSatellite: boolean;
@@ -75,6 +77,15 @@ export function isMasterPoiActive(visibility: OutdoorLayerVisibility): boolean {
   return visibility.pois && countActivePoiCategories(visibility) > 0;
 }
 
+const POI_VISIBILITY_KEY_BY_CATEGORY: Record<PoiCategory, PoiLayerKey> = {
+  water: 'poiWater',
+  offroad: 'poiOffroad',
+  heritage: 'poiHeritage',
+  campsite: 'poiCampsites',
+  peak: 'poiPeaks',
+  user: 'poiUser',
+};
+
 export function buildPoiLayerFilter(visibility: OutdoorLayerVisibility): any {
   const activeCategories: string[] = [];
   if (visibility.poiWater) activeCategories.push('water');
@@ -83,6 +94,16 @@ export function buildPoiLayerFilter(visibility: OutdoorLayerVisibility): any {
   if (visibility.poiCampsites) activeCategories.push('campsite');
   if (visibility.poiPeaks) activeCategories.push('peak');
   if (visibility.poiUser ?? true) activeCategories.push('user');
+  return ['in', ['get', 'category'], ['literal', activeCategories]];
+}
+
+export function buildPoiTieredLayerFilter(
+  visibility: OutdoorLayerVisibility,
+  categories: readonly PoiCategory[]
+): any {
+  const activeCategories = categories.filter(
+    (cat) => visibility[POI_VISIBILITY_KEY_BY_CATEGORY[cat]] ?? true
+  );
   return ['in', ['get', 'category'], ['literal', activeCategories]];
 }
 
@@ -885,6 +906,194 @@ function getDynamicPaintUpdates(
   return null;
 }
 
+const VECTOR_POI_CATEGORY_BY_LAYER_ID: Record<string, PoiCategory> = {
+  'name-peak': 'peak',
+  'name-water-point': 'water',
+  'water-hole': 'water',
+  'water-well': 'water',
+  'water-tank': 'water',
+  'water-waterfall': 'water',
+  'water-drinking': 'water',
+  'icon-camp_site': 'campsite',
+  'icon-picnic': 'campsite',
+  'icon-viewpoint': 'heritage',
+  'icon-cave': 'heritage',
+  'icon-ruins': 'heritage',
+  'icon-archaeological': 'heritage',
+  'icon-memorial': 'heritage',
+  'icon-holy': 'heritage',
+  'icon-jewish': 'heritage',
+  'icon-muslim': 'heritage',
+  'icon-christian': 'heritage',
+  'icon-tree': 'heritage',
+  'icon-guidepost': 'heritage',
+  'icon-fuel': 'offroad',
+  'icon-parking': 'offroad',
+};
+
+function getModernVectorPoiLayerUpdates(
+  layerId: string,
+  originalLayout?: any
+): { iconImage?: any; iconSize?: any; iconPadding?: number; minzoom?: number; textField?: any } | null {
+  const category = VECTOR_POI_CATEGORY_BY_LAYER_ID[layerId];
+  const zoomRule = category ? POI_CATEGORY_ZOOM_RULES[category] : null;
+  const peakZoomScale = ['interpolate', ['linear'], ['zoom'], 11.5, 0.43, 13, 0.58, 14, 0.74, 15.5, 0.94, 17.5, 1.2];
+  const standardZoomScale = ['interpolate', ['linear'], ['zoom'], 11.5, 0.45, 13, 0.62, 14, 0.78, 15.5, 1.0, 17.5, 1.26];
+  const secondaryZoomScale = ['interpolate', ['linear'], ['zoom'], 11.5, 0.42, 13, 0.58, 14, 0.74, 15.5, 0.94, 17.5, 1.18];
+  const lateZoomScale = ['interpolate', ['linear'], ['zoom'], 13, 0.6, 14, 0.78, 15.5, 1.0, 17.5, 1.26];
+
+  const origTextField = originalLayout?.['text-field'];
+  const textFieldStep =
+    zoomRule && origTextField && zoomRule.textMinZoom > zoomRule.iconMinZoom
+      ? ['step', ['zoom'], '', zoomRule.textMinZoom, structuredClone(origTextField)]
+      : undefined;
+
+  switch (layerId) {
+    case 'name-water-point':
+      return {
+        iconImage: [
+          'match',
+          ['coalesce', ['get', 'subclass'], ''],
+          'cistern',
+          'poi-water-cistern',
+          'poi-water-spring',
+        ],
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
+      };
+    case 'water-hole':
+      return {
+        iconImage: 'poi-water-pool',
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
+      };
+    case 'water-well':
+    case 'water-tank':
+      return {
+        iconImage: 'poi-water-cistern',
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
+      };
+    case 'water-waterfall':
+      return {
+        iconImage: 'poi-water-waterfall',
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
+      };
+    case 'water-drinking':
+      return {
+        iconImage: 'poi-water-tap',
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
+      };
+    case 'icon-camp_site':
+      return {
+        iconImage: 'poi-campsite-night',
+        iconSize: standardZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.campsite.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-picnic':
+      return {
+        iconImage: 'poi-campsite-picnic',
+        iconSize: secondaryZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.campsite.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-viewpoint':
+      return {
+        iconImage: 'poi-heritage-viewpoint',
+        iconSize: standardZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-cave':
+      return {
+        iconImage: 'poi-heritage-cave',
+        iconSize: standardZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-ruins':
+    case 'icon-archaeological':
+      return {
+        iconImage: 'poi-heritage-ruins',
+        iconSize: standardZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-memorial':
+      return {
+        iconImage: 'poi-heritage-monument',
+        iconSize: secondaryZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-holy':
+    case 'icon-jewish':
+    case 'icon-muslim':
+    case 'icon-christian':
+      return {
+        iconImage: 'poi-heritage-holy',
+        iconSize: secondaryZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-tree':
+      return {
+        iconImage: 'poi-heritage-nature',
+        iconSize: secondaryZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-guidepost':
+      return {
+        iconImage: 'poi-heritage-landmark',
+        iconSize: secondaryZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-fuel':
+      return {
+        iconImage: 'poi-offroad-service',
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.offroad.iconMinZoom,
+      };
+    case 'icon-parking':
+      return {
+        iconImage: 'poi-offroad-track',
+        iconSize: lateZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.offroad.iconMinZoom,
+      };
+    case 'name-peak':
+      return {
+        iconImage: 'poi-peak-summit',
+        iconSize: peakZoomScale,
+        iconPadding: 1.5,
+        minzoom: POI_CATEGORY_ZOOM_RULES.peak.iconMinZoom,
+        ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    default:
+      return null;
+  }
+}
+
 function getVisibilityForIhmLayer(
   layerId: string,
   visibility: OutdoorLayerVisibility
@@ -1175,6 +1384,28 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       };
     }
 
+    const vectorPoiUpdate = getModernVectorPoiLayerUpdates(layer.id, (layer as any).layout);
+    if (vectorPoiUpdate) {
+      if (typeof vectorPoiUpdate.minzoom === 'number') {
+        (layer as any).minzoom = vectorPoiUpdate.minzoom;
+      }
+      (layer as any).layout = {
+        ...((layer as any).layout || {}),
+        ...(vectorPoiUpdate.iconImage !== undefined
+          ? { 'icon-image': vectorPoiUpdate.iconImage }
+          : {}),
+        ...(vectorPoiUpdate.iconSize !== undefined
+          ? { 'icon-size': vectorPoiUpdate.iconSize }
+          : {}),
+        ...(vectorPoiUpdate.iconPadding !== undefined
+          ? { 'icon-padding': vectorPoiUpdate.iconPadding }
+          : {}),
+        ...(vectorPoiUpdate.textField !== undefined
+          ? { 'text-field': vectorPoiUpdate.textField }
+          : {}),
+      };
+    }
+
     layers.push(layer);
   }
 
@@ -1249,14 +1480,46 @@ export function applyLayerVisibilityToMap(
     }
   }
 
+  const hasTieredPoiLayers = Boolean(
+    map.getLayer('israel-pois-peaks') || map.getLayer('israel-pois-midzoom')
+  );
+  const masterPoiActive = isMasterPoiActive(visibility);
+  if (map.getLayer('israel-pois-peaks')) {
+    map.setLayoutProperty(
+      'israel-pois-peaks',
+      'visibility',
+      masterPoiActive ? 'visible' : 'none'
+    );
+    if (typeof map.setFilter === 'function') {
+      map.setFilter('israel-pois-peaks', buildPoiTieredLayerFilter(visibility, ['peak']));
+    }
+  }
+  if (map.getLayer('israel-pois-midzoom')) {
+    map.setLayoutProperty(
+      'israel-pois-midzoom',
+      'visibility',
+      masterPoiActive ? 'visible' : 'none'
+    );
+    if (typeof map.setFilter === 'function') {
+      map.setFilter(
+        'israel-pois-midzoom',
+        buildPoiTieredLayerFilter(visibility, ['campsite', 'heritage'])
+      );
+    }
+  }
   if (map.getLayer('israel-pois-labels')) {
     map.setLayoutProperty(
       'israel-pois-labels',
       'visibility',
-      isMasterPoiActive(visibility) ? 'visible' : 'none'
+      masterPoiActive ? 'visible' : 'none'
     );
     if (typeof map.setFilter === 'function') {
-      map.setFilter('israel-pois-labels', buildPoiLayerFilter(visibility));
+      map.setFilter(
+        'israel-pois-labels',
+        hasTieredPoiLayers
+          ? buildPoiTieredLayerFilter(visibility, ['water', 'offroad', 'user'])
+          : buildPoiLayerFilter(visibility)
+      );
     }
   }
 

@@ -1,6 +1,8 @@
 import * as turf from '@turf/turf';
 import { db, type PoiRecord, type PoiCategory } from '../db/NavDatabase';
 import { MilitaryGridService } from '../navigation/MilitaryGridService';
+import { classifyPoiWithText } from './poiClassifier';
+import { isValidPoiCategory, normalizeSubcategoryForCategory } from './poiTaxonomy';
 
 export interface ExtractedRouteTrack {
   name?: string;
@@ -104,39 +106,63 @@ export class CommunityPoiImporter {
     return `import-${prefix}-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`;
   }
 
-  private static inferCategory(name: string, desc: string): PoiCategory {
-    const combined = `${name} ${desc}`.toLowerCase();
+  private static classifyImportedPoi(params: {
+    name: string;
+    desc: string;
+    ele?: number | null;
+    explicitCategory?: unknown;
+    explicitSubcategory?: unknown;
+    sourceFile?: string;
+  }): { category: PoiCategory; subcategory: string } {
+    const { name, desc, ele, explicitCategory, explicitSubcategory, sourceFile } = params;
+    const rawSub = typeof explicitSubcategory === 'string' ? explicitSubcategory.trim() : '';
+
+    if (isValidPoiCategory(explicitCategory)) {
+      const normalized = normalizeSubcategoryForCategory(explicitCategory, rawSub);
+      const isGeneric =
+        !rawSub ||
+        rawSub === 'poi' ||
+        rawSub.startsWith('imported_') ||
+        rawSub === 'offroad_poi' ||
+        rawSub === 'offroad_photo';
+      if (!isGeneric) {
+        return { category: explicitCategory, subcategory: normalized };
+      }
+      const cls = classifyPoiWithText({
+        nameHe: name,
+        descHe: desc,
+        ele: ele ?? null,
+        existingCategory: explicitCategory,
+        existingSubcategory: rawSub,
+        source: sourceFile ? `Imported (${sourceFile})` : 'Imported',
+      });
+      return {
+        category: explicitCategory,
+        subcategory:
+          cls.category === explicitCategory
+            ? cls.subcategory
+            : normalizeSubcategoryForCategory(explicitCategory, rawSub),
+      };
+    }
+
+    const cls = classifyPoiWithText({
+      nameHe: name,
+      descHe: desc,
+      ele: ele ?? null,
+      existingSubcategory: rawSub || null,
+      source: sourceFile ? `Imported (${sourceFile})` : 'Imported',
+    });
+
+    // Generic unnamed waypoints ("Waypoint 1", "KML Item 2") with no text cues belong in 'user'
+    const topScore = Math.max(...Object.values(cls.scores));
     if (
-      combined.includes('עין ') ||
-      combined.includes('מעיין') ||
-      combined.includes('גב ') ||
-      combined.includes('בור ') ||
-      combined.includes('באר ') ||
-      combined.includes('spring') ||
-      combined.includes('water')
+      topScore <= 0 &&
+      /^(?:waypoint|kml item|geojson item|wpt)\s*\d*$/i.test(name.trim())
     ) {
-      return 'water';
+      return { category: 'user', subcategory: 'waypoint' };
     }
-    if (
-      combined.includes('מעלה ') ||
-      combined.includes('4x4') ||
-      combined.includes('עבירות') ||
-      combined.includes('מדרגה') ||
-      combined.includes('חסימה')
-    ) {
-      return 'offroad';
-    }
-    if (
-      combined.includes('חניון לילה') ||
-      combined.includes('קמפינג') ||
-      combined.includes('camp')
-    ) {
-      return 'campsite';
-    }
-    if (combined.includes('הר ') || combined.includes('פסגת') || combined.includes('peak')) {
-      return 'peak';
-    }
-    return 'heritage';
+
+    return { category: cls.category, subcategory: cls.subcategory };
   }
 
   private static stripHtml(raw: string): string {
@@ -301,7 +327,12 @@ export class CommunityPoiImporter {
         (nameMatch ? this.decodeXmlEntities(nameMatch[1]).trim() : '') || `Waypoint ${wIdx + 1}`;
       const desc = descMatch ? this.stripHtml(this.decodeXmlEntities(descMatch[1])) : '';
       const ele = eleMatch ? this.parseValidElevation(eleMatch[1]) : null;
-      const category = this.inferCategory(name, desc);
+      const { category, subcategory } = this.classifyImportedPoi({
+        name,
+        desc,
+        ele,
+        sourceFile,
+      });
 
       importedPois.push({
         id: this.createImportId('gpx', wIdx++),
@@ -309,7 +340,7 @@ export class CommunityPoiImporter {
         nameHe: name,
         nameEn: name,
         category,
-        subcategory: 'imported_wpt',
+        subcategory,
         lon,
         lat,
         ele,
@@ -395,7 +426,12 @@ export class CommunityPoiImporter {
       );
       const eleText = this.queryByLocalName(wpt, 'ele')[0]?.textContent;
       const ele = this.parseValidElevation(eleText);
-      const category = this.inferCategory(name, desc);
+      const { category, subcategory } = this.classifyImportedPoi({
+        name,
+        desc,
+        ele,
+        sourceFile,
+      });
 
       const record: PoiRecord = {
         id: this.createImportId('gpx', i),
@@ -403,7 +439,7 @@ export class CommunityPoiImporter {
         nameHe: name,
         nameEn: name,
         category,
-        subcategory: 'imported_wpt',
+        subcategory,
         lon,
         lat,
         ele,
@@ -537,18 +573,24 @@ export class CommunityPoiImporter {
         if (!pointCoord) continue;
         const parts = pointCoord.split(',').map((s) => parseFloat(s.trim()));
         if (parts.length >= 2 && this.isValidLatLon(parts[0], parts[1])) {
-          const [lon, lat, ele] = parts;
-          const category = this.inferCategory(name, desc);
+          const [lon, lat, eleRaw] = parts;
+          const ele = this.parseValidElevation(eleRaw);
+          const { category, subcategory } = this.classifyImportedPoi({
+            name,
+            desc,
+            ele,
+            sourceFile,
+          });
           importedPois.push({
             id: this.createImportId('kml', poiSeq++),
             name,
             nameHe: name,
             nameEn: name,
             category,
-            subcategory: 'imported_kml',
+            subcategory,
             lon,
             lat,
-            ele: this.parseValidElevation(ele),
+            ele,
             waterStatus: null,
             difficulty4x4: null,
             descHe: desc || `יובא מקובץ KML (${sourceFile})`,
@@ -612,8 +654,47 @@ export class CommunityPoiImporter {
       }
     }
 
-    // Recovery if KML had broken XML structure outside Placemark parser
+    // Recovery if KML had broken XML structure or ran without DOMParser
     if (hasParserError && importedPois.length === 0 && extractedRoutes.length === 0) {
+      const pmBlocks = cleaned.match(/<Placemark\b[\s\S]*?(?:<\/Placemark>|$)/gi) || [];
+      for (const pmBlock of pmBlocks) {
+        if (!/<Point\b/i.test(pmBlock)) continue;
+        const nameM = /<name>([\s\S]*?)<\/name>/i.exec(pmBlock);
+        const descM = /<description>([\s\S]*?)<\/description>/i.exec(pmBlock);
+        const ptM = /<Point\b[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>/i.exec(pmBlock);
+        if (!ptM) continue;
+        const parts = ptM[1].trim().split(',').map((s) => parseFloat(s.trim()));
+        if (parts.length >= 2 && this.isValidLatLon(parts[0], parts[1])) {
+          const [lon, lat, eleRaw] = parts;
+          const ele = this.parseValidElevation(eleRaw);
+          const name =
+            (nameM ? this.decodeXmlEntities(nameM[1]).trim() : '') || `KML Item ${poiSeq + 1}`;
+          const desc = descM ? this.stripHtml(this.decodeXmlEntities(descM[1])) : '';
+          const { category, subcategory } = this.classifyImportedPoi({
+            name,
+            desc,
+            ele,
+            sourceFile,
+          });
+          importedPois.push({
+            id: this.createImportId('kml', poiSeq++),
+            name,
+            nameHe: name,
+            nameEn: name,
+            category,
+            subcategory,
+            lon,
+            lat,
+            ele,
+            waterStatus: null,
+            difficulty4x4: null,
+            descHe: desc || `יובא מקובץ KML (${sourceFile})`,
+            descEn: desc || `Imported from KML (${sourceFile})`,
+            source: `KML Import (${sourceFile})`,
+            wikipedia: null,
+          });
+        }
+      }
       const lsMatches = cleaned.match(/<LineString[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>/gi) || [];
       for (const m of lsMatches) {
         const inner = /<coordinates>([\s\S]*?)<\/coordinates>/i.exec(m)?.[1] || '';
@@ -661,16 +742,25 @@ export class CommunityPoiImporter {
         const lon = Number(lonRaw);
         const lat = Number(latRaw);
         if (!this.isValidLatLon(lon, lat)) continue;
+        const ele = this.parseValidElevation(eleRaw) ?? this.parseValidElevation(props.ele);
+        const { category, subcategory } = this.classifyImportedPoi({
+          name,
+          desc,
+          ele,
+          explicitCategory: props.category,
+          explicitSubcategory: props.subcategory,
+          sourceFile,
+        });
         importedPois.push({
           id: String(props.id || this.createImportId('geojson', i)),
           name,
           nameHe: name,
           nameEn: props.nameEn || name,
-          category: (props.category as PoiCategory) || this.inferCategory(name, desc),
-          subcategory: props.subcategory || 'imported_geojson',
+          category,
+          subcategory,
           lon,
           lat,
-          ele: this.parseValidElevation(eleRaw) ?? this.parseValidElevation(props.ele),
+          ele,
           waterStatus: props.waterStatus || null,
           difficulty4x4: props.difficulty4x4 || null,
           descHe: desc || `יובא מקובץ ${sourceFile}`,
@@ -798,13 +888,19 @@ export class CommunityPoiImporter {
       if (lon !== null && lat !== null && this.isValidLatLon(lon, lat)) {
         raw.push({ lon, lat, ele });
         if (label && /[a-zA-Z\u0590-\u05FF]/.test(label)) {
+          const { category, subcategory } = this.classifyImportedPoi({
+            name: label,
+            desc: '',
+            ele,
+            sourceFile,
+          });
           importedPois.push({
             id: this.createImportId('twl', importedPois.length),
             name: label,
             nameHe: label,
             nameEn: label,
-            category: this.inferCategory(label, ''),
-            subcategory: 'imported_twl',
+            category,
+            subcategory,
             lon,
             lat,
             ele,
@@ -824,13 +920,20 @@ export class CommunityPoiImporter {
       extractedLineCoordinates.push(coords);
       extractedRoutes.push({ segments: [coords], pointElevations: [elevations] });
     } else if (raw.length === 1 && importedPois.length === 0) {
+      const baseName = sourceFile.replace(/\.[^.]+$/, '');
+      const { category, subcategory } = this.classifyImportedPoi({
+        name: baseName,
+        desc: '',
+        ele: raw[0].ele,
+        sourceFile,
+      });
       importedPois.push({
         id: this.createImportId('twl', 0),
-        name: sourceFile.replace(/\.[^.]+$/, ''),
-        nameHe: sourceFile.replace(/\.[^.]+$/, ''),
-        nameEn: sourceFile.replace(/\.[^.]+$/, ''),
-        category: 'heritage',
-        subcategory: 'imported_twl',
+        name: baseName,
+        nameHe: baseName,
+        nameEn: baseName,
+        category,
+        subcategory,
         lon: raw[0].lon,
         lat: raw[0].lat,
         ele: raw[0].ele,

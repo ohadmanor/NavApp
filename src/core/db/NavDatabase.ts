@@ -41,6 +41,14 @@ export interface PoiRecord {
   updatedAt?: string;
 }
 
+export interface PoiOverrideRecord {
+  id: string;
+  deleted?: boolean;
+  category?: PoiCategory;
+  subcategory?: string;
+  updatedAt: string;
+}
+
 export interface PlannedWaypoint {
   lon: number;
   lat: number;
@@ -165,6 +173,7 @@ function computeGeoJsonBounds(
 export class NavDatabase extends Dexie {
   mapRegistry!: Table<MapArchiveRecord, string>;
   pois!: Table<PoiRecord, string>;
+  poiOverrides!: Table<PoiOverrideRecord, string>;
   routes!: Table<SavedRouteRecord, string>;
   routePayloads!: Table<RoutePayloadRecord, string>;
   tracks!: Table<RecordedTrackRecord, string>;
@@ -246,6 +255,16 @@ export class NavDatabase extends Dexie {
         }
         await routesTable.bulkPut(leanRoutes);
       });
+    this.version(5).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source',
+      poiOverrides: 'id, deleted, category, updatedAt',
+      routes:
+        'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
+      routePayloads: 'id, updatedAt',
+      tracks: 'id, startedAt',
+      searchIndexCache: 'fingerprint, createdUtc',
+    });
   }
 }
 

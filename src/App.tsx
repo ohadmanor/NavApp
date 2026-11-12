@@ -28,12 +28,21 @@ import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTiles
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
-  buildPoiLayerFilter,
+  buildPoiTieredLayerFilter,
   isMasterPoiActive,
+  POI_STYLE_LAYER_IDS,
   DEFAULT_LAYER_VISIBILITY,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
-import { PoiManager, getPoiSortPriority } from './core/pois/PoiManager';
+import { PoiManager, getPoiSortPriority, type DeletedPoiUndoSnapshot } from './core/pois/PoiManager';
+import {
+  POI_CATEGORY_ZOOM_RULES,
+  buildPoiIconExpression,
+  buildPoiIconSizeExpression,
+  buildPoiTextColorExpression,
+  getPoiSymbolSpec,
+} from './core/pois/poiTaxonomy';
+import { classifyPoiWithText } from './core/pois/poiClassifier';
 import { RouteManager, resolveRouteDisplayColor } from './core/navigation/RouteManager';
 import {
   resolveMapRouteDisplay,
@@ -91,6 +100,7 @@ import {
 import { UserDirectoryService } from './core/firebase/UserDirectoryService';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
+import { PoiCategoryIcon } from './components/pois/PoiCategoryIcon';
 import { MapStorageModal } from './components/maps-manager/MapStorageModal';
 import { ElevationProfileDrawer } from './components/navigation/ElevationProfileDrawer';
 import { ShareRouteModal } from './components/navigation/ShareRouteModal';
@@ -112,7 +122,7 @@ import {
   type SavedMapCamera,
   type SavedUserConfiguration,
 } from './core/preferences/UserStateSyncService';
-import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from './components/ui/themeTokens';
+import { getSurfaceTheme, type MapTheme } from './components/ui/themeTokens';
 
 type DesktopDrawerMode = 'poi' | 'routes' | 'record' | 'add-poi' | 'plan-route' | null;
 type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
@@ -354,6 +364,7 @@ export const App: React.FC = () => {
     percent: number;
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [undoDeletedPoi, setUndoDeletedPoi] = useState<DeletedPoiUndoSnapshot | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
   const isAddingPoiMode =
@@ -570,6 +581,15 @@ export const App: React.FC = () => {
     [hasCameraChangedMeaningfully]
   );
 
+  const syncPoiOverridesToCloud = useCallback(() => {
+    void PoiManager.getOverrides().then((ovs) => {
+      const localCount = UserStateSyncService.loadLocalState().poiOverrides?.length ?? 0;
+      if (ovs.length > 0 || localCount > 0) {
+        UserStateSyncService.recordLocalPoiOverrides(ovs, currentUserRef.current);
+      }
+    });
+  }, []);
+
   const applyRemoteMergedState = useCallback(
     (result: MergeUserStateResult) => {
       if (result.applyRemoteConfig) {
@@ -619,6 +639,18 @@ export const App: React.FC = () => {
         }));
       }
 
+      if (result.applyRemotePoiOverrides && result.merged.poiOverrides?.length) {
+        void PoiManager.applyRemoteOverrides(result.merged.poiOverrides)
+          .then(() => PoiManager.getAllPois())
+          .then((allPois) => {
+            setPois(allPois);
+            setSelectedPoi((cur) => {
+              if (!cur) return null;
+              return allPois.find((p) => p.id === cur.id) || null;
+            });
+          });
+      }
+
       if (result.merged.lastSyncedAt) {
         setLastSyncedAt(result.merged.lastSyncedAt);
       }
@@ -626,10 +658,14 @@ export const App: React.FC = () => {
     [beginCameraTransition]
   );
 
-  const showToast = useCallback((msg: string) => {
+  const showToast = useCallback((msg: string, durationMs = 3500) => {
+    setUndoDeletedPoi(null);
     setToastMessage(msg);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToastMessage(null), 3500);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      setUndoDeletedPoi(null);
+    }, durationMs);
   }, []);
 
   const t = getSurfaceTheme(theme);
@@ -1737,300 +1773,130 @@ export const App: React.FC = () => {
           });
         }
 
-        if (!map.hasImage('offroad-pass')) {
-          const size = 24;
-          const canvas = document.createElement('canvas');
-          canvas.width = size;
-          canvas.height = size;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.beginPath();
-            ctx.arc(size / 2, size / 2, 8.5, 0, Math.PI * 2);
-            ctx.fillStyle = '#dc2626';
-            ctx.fill();
-            ctx.lineWidth = 2.2;
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
+        const poiIconExpression: any = buildPoiIconExpression();
+        const poiIconSizeExpression: any = buildPoiIconSizeExpression();
+        const poiTextColorExpression: any = buildPoiTextColorExpression(
+          currentTheme === 'topo-dark'
+        );
 
-            ctx.beginPath();
-            ctx.moveTo(size / 2 - 4, size / 2 + 2);
-            ctx.lineTo(size / 2, size / 2 - 3);
-            ctx.lineTo(size / 2 + 4, size / 2 + 2);
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
-
-            const imgData = ctx.getImageData(0, 0, size, size);
-            map.addImage('offroad-pass', {
-              width: size,
-              height: size,
-              data: new Uint8Array(imgData.data.buffer),
-            });
-          }
-        }
-
-        if (!map.hasImage('offroad-blocked')) {
-          const size = 24;
-          const canvas = document.createElement('canvas');
-          canvas.width = size;
-          canvas.height = size;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.beginPath();
-            ctx.arc(size / 2, size / 2, 8.5, 0, Math.PI * 2);
-            ctx.fillStyle = '#b91c1c';
-            ctx.fill();
-            ctx.lineWidth = 2.2;
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(size / 2 - 4.5, size / 2);
-            ctx.lineTo(size / 2 + 4.5, size / 2);
-            ctx.lineWidth = 2.4;
-            ctx.lineCap = 'round';
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
-
-            const imgData = ctx.getImageData(0, 0, size, size);
-            map.addImage('offroad-blocked', {
-              width: size,
-              height: size,
-              data: new Uint8Array(imgData.data.buffer),
-            });
-          }
-        }
-
-        if (!map.hasImage('offroad-danger')) {
-          const size = 24;
-          const canvas = document.createElement('canvas');
-          canvas.width = size;
-          canvas.height = size;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.beginPath();
-            ctx.arc(size / 2, size / 2, 8.5, 0, Math.PI * 2);
-            ctx.fillStyle = '#d97706';
-            ctx.fill();
-            ctx.lineWidth = 2.2;
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(size / 2, size / 2 - 4);
-            ctx.lineTo(size / 2, size / 2 + 1);
-            ctx.lineWidth = 2.2;
-            ctx.lineCap = 'round';
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.arc(size / 2, size / 2 + 4, 1.25, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
-            ctx.fill();
-
-            const imgData = ctx.getImageData(0, 0, size, size);
-            map.addImage('offroad-danger', {
-              width: size,
-              height: size,
-              data: new Uint8Array(imgData.data.buffer),
-            });
-          }
-        }
-
-        const poiIconExpression: any = [
-          'match',
-          ['get', 'category'],
-          'water',
-          [
-            'match',
-            ['coalesce', ['get', 'subcategory'], ''],
-            'waterhole',
-            'water_hole',
-            'waterfall',
-            'waterfall',
-            'cistern',
-            'cistern',
-            'water_well',
-            'water_well',
-            'drinking_water',
-            'tap',
-            'spring',
-          ],
-          'campsite',
-          [
-            'match',
-            ['coalesce', ['get', 'subcategory'], ''],
-            'picnic_site',
-            'picnic',
-            'shelter',
-            'alpinehut',
-            'wilderness_hut',
-            'alpinehut',
-            'camping',
-          ],
-          'peak',
-          'dot',
-          'heritage',
-          [
-            'match',
-            ['coalesce', ['get', 'subcategory'], ''],
-            'cave',
-            'cave',
-            'ruins',
-            'ruins',
-            'archaeological_site',
-            'jar',
-            'fort',
-            'jar',
-            'castle',
-            'jar',
-            'memorial',
-            'monument',
-            'nature_site',
-            'flower',
-            'offroad_poi',
-            'info',
-            'offroad_photo',
-            'info',
-            'viewpoint',
-          ],
-          'offroad',
-          [
-            'match',
-            ['coalesce', ['get', 'subcategory'], ''],
-            'gate',
-            'gate_closed',
-            'barrier',
-            'gate_closed',
-            'blocked_road',
-            'offroad-blocked',
-            'danger',
-            'offroad-danger',
-            'obstacle',
-            'offroad-danger',
-            'floods',
-            'offroad-danger',
-            'wifi_sos',
-            'antenna',
-            'ratag_info',
-            'sign',
-            'clunker',
-            'construction',
-            'offroad-pass',
-          ],
-          'user',
-          'star',
-          'viewpoint',
+        // Unified Outdoor POIs Layers (tiered per category minzoom & text zoom thresholds)
+        const poiTierSpecs: Array<{
+          id: string;
+          minzoom: number;
+          categories: Array<'peak' | 'campsite' | 'heritage' | 'water' | 'offroad' | 'user'>;
+          textField: any;
+        }> = [
+          {
+            id: 'israel-pois-peaks',
+            minzoom: POI_CATEGORY_ZOOM_RULES.peak.iconMinZoom,
+            categories: ['peak'],
+            textField: [
+              'step',
+              ['zoom'],
+              '',
+              POI_CATEGORY_ZOOM_RULES.peak.textMinZoom,
+              ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
+            ],
+          },
+          {
+            id: 'israel-pois-midzoom',
+            minzoom: POI_CATEGORY_ZOOM_RULES.campsite.iconMinZoom,
+            categories: ['campsite', 'heritage'],
+            textField: [
+              'step',
+              ['zoom'],
+              '',
+              POI_CATEGORY_ZOOM_RULES.campsite.textMinZoom,
+              ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
+            ],
+          },
+          {
+            id: 'israel-pois-labels',
+            minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
+            categories: ['water', 'offroad', 'user'],
+            textField: ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
+          },
         ];
 
-        const poiIconSizeExpression: any = [
-          'match',
-          ['get', 'category'],
-          'water',
-          [
-            'match',
-            ['coalesce', ['get', 'subcategory'], ''],
-            'waterfall',
-            0.52,
-            'drinking_water',
-            0.52,
-            'waterhole',
-            0.62,
-            'cistern',
-            0.58,
-            'water_well',
-            0.58,
-            0.85,
-          ],
-          'peak',
-          0.5,
-          'offroad',
-          [
-            'match',
-            ['coalesce', ['get', 'subcategory'], ''],
-            'gate',
-            0.55,
-            'barrier',
-            0.55,
-            'wifi_sos',
-            0.55,
-            'ratag_info',
-            0.55,
-            'clunker',
-            0.55,
-            0.85,
-          ],
-          'user',
-          0.58,
-          0.55,
-        ];
-
-        const poiTextColorExpression: any = [
-          'match',
-          ['get', 'category'],
-          'water',
-          currentTheme === 'topo-dark' ? '#38bdf8' : '#125595',
-          'offroad',
-          currentTheme === 'topo-dark' ? '#f87171' : '#991b1b',
-          'campsite',
-          currentTheme === 'topo-dark' ? '#34d399' : '#166534',
-          'peak',
-          currentTheme === 'topo-dark' ? '#e2e8f0' : '#404040',
-          'user',
-          currentTheme === 'topo-dark' ? '#2dd4bf' : '#0f766e',
-          currentTheme === 'topo-dark' ? '#fbbf24' : '#404040',
-        ];
-
-        // Unified Outdoor POIs Layer (Curated + OSM + Off-Road.io + Imported + User merged into one categorized collection)
         const existingPoiSrc = map.getSource('israel-pois-src') as maplibregl.GeoJSONSource;
-        if (existingPoiSrc) {
-          if (lastPoiSyncRef.current !== currentPois) {
-            existingPoiSrc.setData(PoiManager.toCompactMapGeoJSON(currentPois));
-            lastPoiSyncRef.current = currentPois;
-          }
-          if (map.getLayer('israel-pois-labels')) {
-            map.setFilter('israel-pois-labels', buildPoiLayerFilter(currentVis));
-          }
-        } else {
+        if (!existingPoiSrc) {
           const poiGeoJson = PoiManager.toCompactMapGeoJSON(currentPois);
           lastPoiSyncRef.current = currentPois;
           map.addSource('israel-pois-src', { type: 'geojson', data: poiGeoJson });
-          map.addLayer({
-            id: 'israel-pois-labels',
-            type: 'symbol',
-            source: 'israel-pois-src',
-            minzoom: 13,
-            filter: buildPoiLayerFilter(currentVis),
-            layout: {
-              visibility: isMasterPoiActive(currentVis) ? 'visible' : 'none',
-              'symbol-sort-key': ['coalesce', ['get', 'priority'], 500],
-              'icon-image': poiIconExpression,
-              'icon-size': poiIconSizeExpression,
-              'icon-anchor': 'center',
-              'icon-allow-overlap': false,
-              'icon-ignore-placement': false,
-              'icon-padding': ['interpolate', ['linear'], ['zoom'], 13, 8, 15, 6],
-              'text-field': ['coalesce', ['get', 'nameHe'], ['get', 'name'], ''],
-              'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
-              'text-size': ['interpolate', ['linear'], ['zoom'], 13, 11.5, 14, 12.8, 15, 14],
-              'text-offset': [0, 0.75],
-              'text-anchor': 'top',
-              'text-max-width': 9,
-              'text-allow-overlap': false,
-              'text-ignore-placement': false,
-              'text-optional': true,
-              'text-padding': 3,
-            },
-            paint: {
-              'text-color': poiTextColorExpression,
-              'text-halo-color': currentTheme === 'topo-dark' ? '#0b1015' : 'white',
-              'text-halo-width': 3,
-              'text-halo-blur': 1.5,
-            },
-          });
+        } else if (lastPoiSyncRef.current !== currentPois) {
+          existingPoiSrc.setData(PoiManager.toCompactMapGeoJSON(currentPois));
+          lastPoiSyncRef.current = currentPois;
+        }
+
+        const iconAllowOverlapExpr: any = ['step', ['zoom'], false, 15.5, true];
+        const iconPaddingExpr: any = ['interpolate', ['linear'], ['zoom'], 11.5, 1.5, 14, 1.2, 16, 0.8];
+        const textSizeExpr: any = ['interpolate', ['linear'], ['zoom'], 12.5, 10.8, 14, 12.4, 16, 14];
+        const textOffsetExpr: any = [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          12.5,
+          ['literal', [0, 0.72]],
+          14,
+          ['literal', [0, 0.92]],
+          16,
+          ['literal', [0, 1.12]],
+          17.5,
+          ['literal', [0, 1.28]],
+        ];
+        const poiVisibilityValue = isMasterPoiActive(currentVis) ? 'visible' : 'none';
+        const poiHaloColor = currentTheme === 'topo-dark' ? '#0b1015' : 'white';
+
+        for (const tier of poiTierSpecs) {
+          const tierFilter = buildPoiTieredLayerFilter(currentVis, tier.categories);
+          if (map.getLayer(tier.id)) {
+            map.setFilter(tier.id, tierFilter);
+            map.setLayerZoomRange(tier.id, tier.minzoom, 24);
+            map.setLayoutProperty(tier.id, 'visibility', poiVisibilityValue);
+            map.setLayoutProperty(tier.id, 'icon-image', poiIconExpression);
+            map.setLayoutProperty(tier.id, 'icon-size', poiIconSizeExpression);
+            map.setLayoutProperty(tier.id, 'icon-allow-overlap', iconAllowOverlapExpr);
+            map.setLayoutProperty(tier.id, 'icon-padding', iconPaddingExpr);
+            map.setLayoutProperty(tier.id, 'text-field', tier.textField);
+            map.setLayoutProperty(tier.id, 'text-size', textSizeExpr);
+            map.setLayoutProperty(tier.id, 'text-offset', textOffsetExpr);
+            map.setPaintProperty(tier.id, 'text-color', poiTextColorExpression);
+            map.setPaintProperty(tier.id, 'text-halo-color', poiHaloColor);
+          } else {
+            map.addLayer({
+              id: tier.id,
+              type: 'symbol',
+              source: 'israel-pois-src',
+              minzoom: tier.minzoom,
+              filter: tierFilter,
+              layout: {
+                visibility: poiVisibilityValue,
+                'symbol-sort-key': ['coalesce', ['get', 'priority'], 500],
+                'icon-image': poiIconExpression,
+                'icon-size': poiIconSizeExpression,
+                'icon-anchor': 'center',
+                'icon-allow-overlap': iconAllowOverlapExpr,
+                'icon-ignore-placement': false,
+                'icon-padding': iconPaddingExpr,
+                'text-field': tier.textField,
+                'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
+                'text-size': textSizeExpr,
+                'text-offset': textOffsetExpr,
+                'text-anchor': 'top',
+                'text-max-width': 9,
+                'text-allow-overlap': false,
+                'text-ignore-placement': false,
+                'text-optional': true,
+                'text-padding': 3,
+              },
+              paint: {
+                'text-color': poiTextColorExpression,
+                'text-halo-color': poiHaloColor,
+                'text-halo-width': 3,
+                'text-halo-blur': 1.5,
+              },
+            });
+          }
         }
 
         // Route Planning Overlays (draft network legs, straight fallback legs, snapped cursor preview, numbered waypoints)
@@ -2550,43 +2416,106 @@ export const App: React.FC = () => {
       }));
     });
 
-    const handlePoiFeatureClick = (e: maplibregl.MapLayerMouseEvent) => {
-      if (isCancelled || isPlanningRouteRef.current) return;
-      const feature = e.features?.[0];
+    const selectPoiFromRenderedFeature = (
+      feature: any,
+      fallbackLngLat: { lng: number; lat: number }
+    ) => {
       if (!feature || !feature.properties) return;
       const p = feature.properties as any;
-      const featureId = String(p.id || feature.id || '');
-      const fullRecord = featureId
-        ? poisRef.current.find((item) => item.id === featureId)
-        : undefined;
+      const layerId = String(feature.layer?.id || '');
       const geomCoords =
         feature.geometry && feature.geometry.type === 'Point'
           ? (feature.geometry as GeoJSON.Point).coordinates
           : undefined;
-      const clickedPoi: PoiRecord = fullRecord ?? {
-        id: featureId,
-        name: p.nameHe || p.name,
-        nameHe: p.nameHe || p.name,
-        nameEn: p.nameEn || p.nameHe || p.name,
-        category: p.category,
-        subcategory: p.subcategory,
-        lon: Number(p.lon ?? geomCoords?.[0] ?? e.lngLat.lng),
-        lat: Number(p.lat ?? geomCoords?.[1] ?? e.lngLat.lat),
-        ele: p.ele ? Number(p.ele) : null,
-        waterStatus: p.waterStatus || null,
-        difficulty4x4: p.difficulty4x4 || null,
-        descHe: p.descHe || '',
-        descEn: p.descEn || '',
-        source:
-          p.source ||
-          (featureId.startsWith('or-') ? 'Off-Road.io (קהילת השטח)' : 'IsraelHiking / OSM'),
-        wikipedia: p.wikipedia || null,
-        externalUrl: p.externalUrl || null,
-        likes: typeof p.likes === 'number' ? p.likes : undefined,
-        updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
-        userNotes: p.userNotes || '',
-        priority: typeof p.priority === 'number' ? p.priority : undefined,
-      };
+      const lon = Number(p.lon ?? geomCoords?.[0] ?? fallbackLngLat.lng);
+      const lat = Number(p.lat ?? geomCoords?.[1] ?? fallbackLngLat.lat);
+
+      let clickedPoi: PoiRecord;
+      if (
+        layerId === 'israel-pois-labels' ||
+        layerId === 'israel-pois-midzoom' ||
+        layerId === 'israel-pois-peaks'
+      ) {
+        const featureId = String(p.id || feature.id || '');
+        const fullRecord = featureId
+          ? poisRef.current.find((item) => item.id === featureId)
+          : undefined;
+        clickedPoi = fullRecord ?? {
+          id: featureId,
+          name: p.nameHe || p.name,
+          nameHe: p.nameHe || p.name,
+          nameEn: p.nameEn || p.nameHe || p.name,
+          category: p.category,
+          subcategory: p.subcategory,
+          lon,
+          lat,
+          ele: p.ele ? Number(p.ele) : null,
+          waterStatus: p.waterStatus || null,
+          difficulty4x4: p.difficulty4x4 || null,
+          descHe: p.descHe || '',
+          descEn: p.descEn || '',
+          source:
+            p.source ||
+            (featureId.startsWith('or-') ? 'Off-Road.io (קהילת השטח)' : 'IsraelHiking / OSM'),
+          wikipedia: p.wikipedia || null,
+          externalUrl: p.externalUrl || null,
+          likes: typeof p.likes === 'number' ? p.likes : undefined,
+          updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
+          userNotes: p.userNotes || '',
+          priority: typeof p.priority === 'number' ? p.priority : undefined,
+        };
+      } else {
+        const rawNameHe = String(p['name:he'] || p.name || p['name:latin'] || '').trim();
+        const rawNameEn = String(p['name:en'] || p.name_en || p['name:latin'] || p.name || '').trim();
+        const subclass = String(p.subclass || p.class || '').trim();
+        const eleNum =
+          typeof p.ele === 'number' && Number.isFinite(p.ele)
+            ? p.ele
+            : p.ele && Number.isFinite(Number(p.ele))
+              ? Number(p.ele)
+              : null;
+        const cls = classifyPoiWithText({
+          nameHe: rawNameHe || undefined,
+          nameEn: rawNameEn || undefined,
+          existingSubcategory: subclass || undefined,
+          source: 'IsraelHiking / OSM',
+          ele: eleNum,
+        });
+        const symSpec = getPoiSymbolSpec(cls.category, cls.subcategory);
+
+        // If a matching GeoJSON/Off-Road POI sits at the same spot (~25m), open the richer full record
+        const normVtName = rawNameHe.replace(/[\s"'׳״\-–—]/g, '').toLowerCase();
+        const nearbyMatch = poisRef.current.find((item) => {
+          if (Math.abs(item.lon - lon) > 0.0004 || Math.abs(item.lat - lat) > 0.0004) return false;
+          if (item.category !== cls.category) return false;
+          const dMeters = Math.hypot((item.lon - lon) * 95000, (item.lat - lat) * 111320);
+          if (dMeters > 28) return false;
+          if (!normVtName) return true;
+          const normItemName = (item.nameHe || item.name || '').replace(/[\s"'׳״\-–—]/g, '').toLowerCase();
+          return !normItemName || normItemName.includes(normVtName) || normVtName.includes(normItemName);
+        });
+
+        clickedPoi = nearbyMatch ?? {
+          id: `vt-${layerId || 'poi'}-${lon.toFixed(5)}-${lat.toFixed(5)}`,
+          name: rawNameHe || rawNameEn || symSpec.labelHe,
+          nameHe: rawNameHe || symSpec.labelHe,
+          nameEn: rawNameEn || rawNameHe || symSpec.labelEn,
+          category: cls.category,
+          subcategory: cls.subcategory,
+          lon,
+          lat,
+          ele: eleNum,
+          waterStatus: null,
+          difficulty4x4: null,
+          descHe: symSpec.labelHe,
+          descEn: symSpec.labelEn,
+          source: 'IsraelHiking / OSM',
+          wikipedia: null,
+          externalUrl: null,
+          userNotes: '',
+        };
+      }
+
       setSelectedPoi(clickedPoi);
       if (isMobileRef.current) {
         if (mobileDisplayModeRef.current === 'navigating') {
@@ -2601,29 +2530,49 @@ export const App: React.FC = () => {
       }
     };
 
-    const handleMapPlanClick = (e: maplibregl.MapMouseEvent) => {
-      if (isCancelled || !isPlanningRouteRef.current) return;
-      const origDetail = (e.originalEvent as MouseEvent | undefined)?.detail ?? 1;
-      if (origDetail > 1) {
+    const handleMapClick = (e: maplibregl.MapMouseEvent) => {
+      if (isCancelled) return;
+      if (isPlanningRouteRef.current) {
+        const origDetail = (e.originalEvent as MouseEvent | undefined)?.detail ?? 1;
+        if (origDetail > 1) {
+          if (clickTimerRef.current) {
+            window.clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+          }
+          return;
+        }
+        if (isRoutingLegRef.current) return;
+
+        const clickLon = Number(e.lngLat.lng.toFixed(6));
+        const clickLat = Number(e.lngLat.lat.toFixed(6));
         if (clickTimerRef.current) {
           window.clearTimeout(clickTimerRef.current);
-          clickTimerRef.current = null;
         }
+        clickTimerRef.current = window.setTimeout(() => {
+          clickTimerRef.current = null;
+          if (!isCancelled && isPlanningRouteRef.current) {
+            void handlePlanMapClickRef.current(clickLon, clickLat);
+          }
+        }, 220);
         return;
       }
-      if (isRoutingLegRef.current) return;
 
-      const clickLon = Number(e.lngLat.lng.toFixed(6));
-      const clickLat = Number(e.lngLat.lat.toFixed(6));
-      if (clickTimerRef.current) {
-        window.clearTimeout(clickTimerRef.current);
-      }
-      clickTimerRef.current = window.setTimeout(() => {
-        clickTimerRef.current = null;
-        if (!isCancelled && isPlanningRouteRef.current) {
-          void handlePlanMapClickRef.current(clickLon, clickLat);
-        }
-      }, 220);
+      const geoJsonPoiLayerIds = ['israel-pois-labels', 'israel-pois-midzoom', 'israel-pois-peaks'];
+      const clickableLayers = [...geoJsonPoiLayerIds, ...Array.from(POI_STYLE_LAYER_IDS)].filter((id) =>
+        Boolean(map.getLayer(id))
+      );
+      if (clickableLayers.length === 0) return;
+      const hitFeatures = map.queryRenderedFeatures(
+        [
+          [e.point.x - 8, e.point.y - 8],
+          [e.point.x + 8, e.point.y + 8],
+        ],
+        { layers: clickableLayers }
+      );
+      if (!hitFeatures || hitFeatures.length === 0) return;
+      const preferred =
+        hitFeatures.find((f) => geoJsonPoiLayerIds.includes(String(f.layer?.id || ''))) || hitFeatures[0];
+      selectPoiFromRenderedFeature(preferred, e.lngLat);
     };
 
     const handleMapPlanDblClick = (e: maplibregl.MapMouseEvent) => {
@@ -2636,17 +2585,23 @@ export const App: React.FC = () => {
       void handleFinishPlanningRef.current();
     };
 
-    map.on('click', 'israel-pois-labels', handlePoiFeatureClick);
-    map.on('click', handleMapPlanClick);
+    map.on('click', handleMapClick);
     map.on('dblclick', handleMapPlanDblClick);
-    map.on('mouseenter', 'israel-pois-labels', () => {
-      if (!isPlanningRouteRef.current) {
-        map.getCanvas().style.cursor = 'pointer';
-      }
-    });
-    map.on('mouseleave', 'israel-pois-labels', () => {
-      map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
-    });
+    for (const poiHoverLayerId of [
+      'israel-pois-labels',
+      'israel-pois-midzoom',
+      'israel-pois-peaks',
+      ...Array.from(POI_STYLE_LAYER_IDS),
+    ]) {
+      map.on('mouseenter', poiHoverLayerId, () => {
+        if (!isPlanningRouteRef.current) {
+          map.getCanvas().style.cursor = 'pointer';
+        }
+      });
+      map.on('mouseleave', poiHoverLayerId, () => {
+        map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
+      });
+    }
 
     (async () => {
       try {
@@ -2846,6 +2801,8 @@ export const App: React.FC = () => {
       activeRoute,
       routes,
       pois,
+      overriddenPoiIds: PoiManager.getOverriddenPoiIdsSnapshot(),
+      deletedPoiIds: PoiManager.getDeletedPoiIdsSnapshot(),
       isNavigationActive: isNavigatingRoute || isFreeNavigation,
       theme,
       visibility,
@@ -2902,6 +2859,7 @@ export const App: React.FC = () => {
         referenceCoord: searchRefCoordRef.current,
         pois,
         routes,
+        deletedSignatures: PoiManager.getDeletedSignatures(),
         limit: 30,
       });
       setSearchResults(results);
@@ -3372,6 +3330,50 @@ export const App: React.FC = () => {
       setIsFreeNavigation(true);
     }
   };
+
+  const handlePoiUpdated = useCallback(
+    (updated: PoiRecord) => {
+      setSelectedPoi(updated);
+      setPois((prev) =>
+        prev.some((p) => p.id === updated.id)
+          ? prev.map((p) => (p.id === updated.id ? updated : p))
+          : [...prev, updated]
+      );
+      syncPoiOverridesToCloud();
+    },
+    [syncPoiOverridesToCloud]
+  );
+
+  const handleDeletePoi = useCallback(
+    async (poi: PoiRecord) => {
+      const snapshot = await PoiManager.deletePoi(poi);
+      setPois((prev) => prev.filter((p) => p.id !== poi.id));
+      setSelectedPoi((prev) => (prev?.id === poi.id ? null : prev));
+      setDesktopDrawer((prev) => (prev === 'poi' ? null : prev));
+      setMobilePlanningOverlay((prev) => (prev === 'poi' ? null : prev));
+      setMobileNavOverlay((prev) => (prev === 'poi-mini' ? null : prev));
+      syncPoiOverridesToCloud();
+
+      setUndoDeletedPoi(snapshot);
+      setToastMessage(`הנקודה "${poi.nameHe || poi.name}" נמחקה`);
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = window.setTimeout(() => {
+        setToastMessage(null);
+        setUndoDeletedPoi(null);
+      }, 6000);
+    },
+    [syncPoiOverridesToCloud]
+  );
+
+  const handleUndoDeletePoi = useCallback(async () => {
+    if (!undoDeletedPoi) return;
+    const restored = await PoiManager.restoreDeletedPoi(undoDeletedPoi);
+    setUndoDeletedPoi(null);
+    setPois((prev) => (prev.some((p) => p.id === restored.id) ? prev : [...prev, restored]));
+    setSelectedPoi(restored);
+    syncPoiOverridesToCloud();
+    showToast(`הנקודה "${restored.nameHe || restored.name}" שוחזרה`);
+  }, [undoDeletedPoi, showToast, syncPoiOverridesToCloud]);
 
   const handleSelectRoute = useCallback(
     async (route: SavedRouteRecord | null, options?: { flyTo?: boolean }) => {
@@ -4821,9 +4823,19 @@ export const App: React.FC = () => {
 
         {/* Toast Notification */}
         {toastMessage && (
-          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white rounded-full shadow-2xl px-4 py-2 flex items-center gap-2 text-xs font-bold">
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white rounded-full shadow-2xl px-4 py-2 flex items-center gap-2.5 text-xs font-bold">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>{toastMessage}</span>
+            {undoDeletedPoi && (
+              <button
+                type="button"
+                onClick={() => void handleUndoDeletePoi()}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white text-emerald-700 hover:bg-emerald-50 text-xs font-extrabold transition-colors"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>בטל מחיקה</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -4852,14 +4864,8 @@ export const App: React.FC = () => {
                       }}
                       onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                       onNavigateToPoi={handleNavigateToPoi}
-                      onPoiUpdated={(updated) => {
-                        setSelectedPoi(updated);
-                        setPois((prev) =>
-                          prev.some((p) => p.id === updated.id)
-                            ? prev.map((p) => (p.id === updated.id ? updated : p))
-                            : [...prev, updated]
-                        );
-                      }}
+                      onPoiUpdated={handlePoiUpdated}
+                      onDeletePoi={handleDeletePoi}
                       onNotify={showToast}
                     />
                   )}
@@ -5651,14 +5657,8 @@ export const App: React.FC = () => {
                   }}
                   onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                   onNavigateToPoi={handleNavigateToPoi}
-                  onPoiUpdated={(updated) => {
-                    setSelectedPoi(updated);
-                    setPois((prev) =>
-                      prev.some((p) => p.id === updated.id)
-                        ? prev.map((p) => (p.id === updated.id ? updated : p))
-                        : [...prev, updated]
-                    );
-                  }}
+                  onPoiUpdated={handlePoiUpdated}
+                  onDeletePoi={handleDeletePoi}
                   onNotify={showToast}
                 />
               </div>
@@ -5905,16 +5905,18 @@ export const App: React.FC = () => {
                 {mobileSheetExpanded &&
                   (nearbyPois.length > 0 ? (
                     <div className="flex gap-2 overflow-x-auto no-scrollbar pb-0.5">
-                      {nearbyPois.map(({ poi, distKm }) => {
-                        const meta = POI_CATEGORY_META[poi.category] || POI_CATEGORY_META.heritage;
-                        return (
+                      {nearbyPois.map(({ poi, distKm }) => (
                           <button
                             key={poi.id}
                             onClick={() => handleSelectPoi(poi)}
                             className={`shrink-0 w-44 text-right p-2.5 rounded-2xl border hover:border-emerald-500 transition-all space-y-1 ${t.subCard}`}
                           >
                             <div className="flex items-center justify-between text-xs">
-                              <span>{meta.emoji}</span>
+                              <PoiCategoryIcon
+                                category={poi.category}
+                                subcategory={poi.subcategory}
+                                size={18}
+                              />
                               <span className={`font-mono ${t.muted}`}>{distKm.toFixed(1)} ק״מ</span>
                             </div>
                             <div className="text-xs font-bold truncate" dir="auto">
@@ -5924,8 +5926,7 @@ export const App: React.FC = () => {
                               גובה {poi.ele !== null ? `${poi.ele}m` : '---'}
                             </div>
                           </button>
-                        );
-                      })}
+                      ))}
                     </div>
                   ) : (
                     <div className={`text-xs py-2 ${t.muted}`}>טוען נקודות עניין באזור...</div>
@@ -6047,14 +6048,8 @@ export const App: React.FC = () => {
                 setMobileSheetExpanded(true);
               }}
               onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
-              onPoiUpdated={(updated) => {
-                setSelectedPoi(updated);
-                setPois((prev) =>
-                  prev.some((p) => p.id === updated.id)
-                    ? prev.map((p) => (p.id === updated.id ? updated : p))
-                    : [...prev, updated]
-                );
-              }}
+              onPoiUpdated={handlePoiUpdated}
+              onDeletePoi={handleDeletePoi}
               onNotify={showToast}
             />
           ) : (

@@ -36,6 +36,7 @@ import type { RouteMapDisplayMode } from '../../core/navigation/RouteDisplayPoli
 import { PLANNING_MODE_META } from '../../core/routing/RoutingProfiles';
 import { MilitaryGridService } from '../../core/navigation/MilitaryGridService';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from '../ui/themeTokens';
+import { PoiCategoryIcon } from '../pois/PoiCategoryIcon';
 
 const KM_PER_DEG_LAT = 111.32;
 const DEFAULT_VISIBLE_ROUTES_BATCH = 35;
@@ -104,6 +105,8 @@ interface RoutePointOption extends RouteChartPoint {
   label: string;
   emoji: string;
   kind: 'start' | 'end' | 'peak' | 'wpt';
+  poiCategory?: PoiRecord['category'];
+  subcategory?: string;
 }
 
 interface ElevationProfileDrawerProps {
@@ -403,6 +406,8 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             label: poi.nameHe || poi.name,
             emoji: meta.emoji,
             kind: 'wpt',
+            poiCategory: poi.category,
+            subcategory: poi.subcategory,
             lon: poi.lon,
             lat: poi.lat,
             ele: poi.ele ?? bestSample.ele,
@@ -642,8 +647,17 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               {nearestNamedWpt ? (
                 <>
                   <span className="opacity-30">•</span>
-                  <span className="font-semibold truncate max-w-[110px]" dir="auto">
-                    {nearestNamedWpt.emoji} {nearestNamedWpt.label}
+                  <span className="inline-flex items-center gap-1 font-semibold truncate max-w-[125px]" dir="auto">
+                    {nearestNamedWpt.poiCategory ? (
+                      <PoiCategoryIcon
+                        category={nearestNamedWpt.poiCategory}
+                        subcategory={nearestNamedWpt.subcategory}
+                        size={14}
+                      />
+                    ) : (
+                      <span>{nearestNamedWpt.emoji}</span>
+                    )}
+                    <span className="truncate">{nearestNamedWpt.label}</span>
                   </span>
                 </>
               ) : (
@@ -1576,7 +1590,15 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                       className={`w-full px-3 py-2 text-right text-xs flex items-center justify-between gap-2 transition-colors ${t.hoverRow}`}
                     >
                       <span className="flex items-center gap-2 min-w-0">
-                        <span className="shrink-0">{ptOpt.emoji}</span>
+                        {ptOpt.poiCategory ? (
+                          <PoiCategoryIcon
+                            category={ptOpt.poiCategory}
+                            subcategory={ptOpt.subcategory}
+                            size={16}
+                          />
+                        ) : (
+                          <span className="shrink-0">{ptOpt.emoji}</span>
+                        )}
                         <span className="font-semibold truncate" dir="auto">
                           {ptOpt.label}
                         </span>

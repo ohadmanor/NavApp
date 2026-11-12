@@ -1,5 +1,22 @@
-import { db, type PoiRecord, type PoiCategory } from '../db/NavDatabase';
+import { db, type PoiRecord, type PoiCategory, type PoiOverrideRecord } from '../db/NavDatabase';
 import { bundledDataUrl } from '../dataUrls';
+import { isValidPoiCategory, normalizeSubcategoryForCategory, resolvePoiSymbolId } from './poiTaxonomy';
+import { classifyPoiWithText } from './poiClassifier';
+
+export interface DeletedPoiSignature {
+  id: string;
+  normName: string;
+  lon: number;
+  lat: number;
+}
+
+export interface DeletedPoiUndoSnapshot {
+  poi: PoiRecord;
+  hadRecordInDb: boolean;
+  hadRecordInOffroadCache: boolean;
+  offroadCacheIndex: number;
+  previousOverride?: PoiOverrideRecord;
+}
 
 /**
  * Computes default deterministic display & collision sort priority for POIs.
@@ -48,13 +65,16 @@ function hydrateGeojsonFeature(
   const id = String(props.id || f.id || `poi-${coords[0]}-${coords[1]}`);
   const nameHe = props.nameHe || props.name || props.nameEn || 'נקודת עניין';
   const nameEn = props.nameEn || props.name || props.nameHe || 'Point of Interest';
+  const rawCat = isValidPoiCategory(props.category) ? props.category : 'heritage';
+  const rawSub = String(props.subcategory || '').trim();
+  const normalizedSub = normalizeSubcategoryForCategory(rawCat, rawSub);
   return {
     id,
     name: nameHe,
     nameHe,
     nameEn,
-    category: (props.category as PoiCategory) || 'heritage',
-    subcategory: props.subcategory || 'poi',
+    category: rawCat,
+    subcategory: normalizedSub,
     lon: Number(coords[0]),
     lat: Number(coords[1]),
     ele: typeof props.ele === 'number' ? props.ele : null,
@@ -144,6 +164,50 @@ function mergeMatchingPoiMetadata(canonical: PoiRecord, community: PoiRecord): P
   };
 }
 
+function normalizeLegacyPoiRecord(p: PoiRecord): PoiRecord {
+  const validCat: PoiCategory = isValidPoiCategory(p.category) ? p.category : 'heritage';
+  const rawSub = String(p.subcategory || '').trim().toLowerCase();
+  if (
+    rawSub === 'offroad_poi' ||
+    rawSub === 'offroad_photo' ||
+    rawSub === 'imported_wpt' ||
+    rawSub === 'imported_kml' ||
+    rawSub === 'imported_geojson' ||
+    rawSub === 'imported_twl'
+  ) {
+    const cls = classifyPoiWithText({
+      nameHe: p.nameHe || p.name,
+      nameEn: p.nameEn,
+      descHe: p.descHe,
+      descEn: p.descEn,
+      waterStatus: p.waterStatus,
+      difficulty4x4: p.difficulty4x4,
+      existingCategory: validCat,
+      existingSubcategory: rawSub,
+      source: p.source,
+      ele: p.ele,
+      wikipedia: p.wikipedia,
+    });
+    return {
+      ...p,
+      category: cls.category,
+      subcategory: cls.subcategory,
+    };
+  }
+  const normalizedSub =
+    rawSub === 'user_waypoint'
+      ? normalizeSubcategoryForCategory(validCat, validCat === 'user' ? 'custom_pin' : '')
+      : normalizeSubcategoryForCategory(validCat, rawSub);
+  if (normalizedSub === p.subcategory && validCat === p.category) {
+    return p;
+  }
+  return {
+    ...p,
+    category: validCat,
+    subcategory: normalizedSub,
+  };
+}
+
 /**
  * Manages the unified Israeli Outdoor Points of Interest (Springs, Caves, Ruins, Campsites, 4x4 Passes, Peaks)
  * merging OpenStreetMap / IsraelHiking with Off-Road.io community POIs into one categorized list:
@@ -152,26 +216,80 @@ function mergeMatchingPoiMetadata(canonical: PoiRecord, community: PoiRecord): P
  */
 export class PoiManager {
   private static offroadPoisCache: PoiRecord[] = [];
+  private static deletedSignatures = new Map<string, DeletedPoiSignature>();
+  private static overriddenPoiIds = new Set<string>();
+  private static originalBaseById = new Map<
+    string,
+    { category: PoiCategory; subcategory: string; priority?: number }
+  >();
 
-  private static mergeWithOffroadCache(dbPois: PoiRecord[]): PoiRecord[] {
-    if (PoiManager.offroadPoisCache.length === 0) {
-      const sorted = [...dbPois];
-      sorted.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b) || a.id.localeCompare(b.id));
-      return sorted;
+  private static mergeWithOffroadCache(
+    dbPois: PoiRecord[],
+    overrides: PoiOverrideRecord[] = []
+  ): PoiRecord[] {
+    const overrideMap = new Map<string, PoiOverrideRecord>();
+    PoiManager.deletedSignatures.clear();
+    PoiManager.overriddenPoiIds.clear();
+    for (const ov of overrides) {
+      overrideMap.set(ov.id, ov);
+      if (!ov.deleted && isValidPoiCategory(ov.category)) {
+        PoiManager.overriddenPoiIds.add(ov.id);
+      }
     }
 
     const dbById = new Map<string, PoiRecord>();
-    const merged: PoiRecord[] = [];
+    const combinedRaw: PoiRecord[] = [];
+    const deletedCanonicalGrid = new Set<number>();
     const step = 0.001;
-    const canonicalGrid = new Map<string, Array<{ index: number; normName: string; poi: PoiRecord }>>();
+    const canonicalGrid = new Map<
+      string,
+      Array<{ index: number; normName: string; baseCategory: PoiCategory; deleted: boolean }>
+    >();
 
-    for (const p of dbPois) {
-      const copy = { ...p };
-      const idx = merged.length;
-      merged.push(copy);
+    for (const rawPoi of dbPois) {
+      const copy = { ...normalizeLegacyPoiRecord(rawPoi) };
+      if (!PoiManager.originalBaseById.has(copy.id)) {
+        PoiManager.originalBaseById.set(copy.id, {
+          category: copy.category,
+          subcategory: copy.subcategory,
+          priority: copy.priority,
+        });
+      }
+
+      const ov = overrideMap.get(copy.id);
+      const isDeleted = Boolean(ov?.deleted);
+      if (isDeleted) {
+        PoiManager.deletedSignatures.set(copy.id, {
+          id: copy.id,
+          normName: normalizePoiNameForMerge(copy.nameHe || copy.name),
+          lon: copy.lon,
+          lat: copy.lat,
+        });
+      } else if (ov && isValidPoiCategory(ov.category)) {
+        const nextCat = ov.category;
+        const nextSub = normalizeSubcategoryForCategory(nextCat, ov.subcategory);
+        copy.category = nextCat;
+        copy.subcategory = nextSub;
+        copy.waterStatus = nextCat === 'water' ? copy.waterStatus : null;
+        copy.difficulty4x4 = nextCat === 'offroad' ? copy.difficulty4x4 : null;
+        copy.priority = getPoiSortPriority({
+          ...copy,
+          category: nextCat,
+          subcategory: nextSub,
+          priority: copy.id.startsWith('il-poi-') ? copy.priority : undefined,
+        });
+        if (ov.updatedAt) copy.updatedAt = ov.updatedAt;
+      }
+
+      const idx = combinedRaw.length;
+      combinedRaw.push(copy);
       dbById.set(copy.id, copy);
+      if (isDeleted) {
+        deletedCanonicalGrid.add(idx);
+      }
 
       if (copy.id.startsWith('osm-') || copy.id.startsWith('il-poi-')) {
+        const baseCat = PoiManager.originalBaseById.get(copy.id)?.category || copy.category;
         const gk = `${Math.floor(copy.lon / step)},${Math.floor(copy.lat / step)}`;
         let bucket = canonicalGrid.get(gk);
         if (!bucket) {
@@ -181,35 +299,79 @@ export class PoiManager {
         bucket.push({
           index: idx,
           normName: normalizePoiNameForMerge(copy.nameHe || copy.name),
-          poi: copy,
+          baseCategory: baseCat,
+          deleted: isDeleted,
         });
       }
     }
 
-    for (const orPoi of PoiManager.offroadPoisCache) {
-      if (dbById.has(orPoi.id)) {
+    for (const orRaw of PoiManager.offroadPoisCache) {
+      const orPoiBase = normalizeLegacyPoiRecord(orRaw);
+      if (!PoiManager.originalBaseById.has(orPoiBase.id)) {
+        PoiManager.originalBaseById.set(orPoiBase.id, {
+          category: orPoiBase.category,
+          subcategory: orPoiBase.subcategory,
+          priority: orPoiBase.priority,
+        });
+      }
+
+      const ov = overrideMap.get(orPoiBase.id);
+      if (ov?.deleted) {
+        PoiManager.deletedSignatures.set(orPoiBase.id, {
+          id: orPoiBase.id,
+          normName: normalizePoiNameForMerge(orPoiBase.nameHe || orPoiBase.name),
+          lon: orPoiBase.lon,
+          lat: orPoiBase.lat,
+        });
         continue;
+      }
+
+      if (dbById.has(orPoiBase.id)) {
+        continue;
+      }
+
+      const orPoi = { ...orPoiBase };
+      if (ov && isValidPoiCategory(ov.category)) {
+        const nextCat = ov.category;
+        const nextSub = normalizeSubcategoryForCategory(nextCat, ov.subcategory);
+        orPoi.category = nextCat;
+        orPoi.subcategory = nextSub;
+        orPoi.waterStatus = nextCat === 'water' ? orPoi.waterStatus : null;
+        orPoi.difficulty4x4 = nextCat === 'offroad' ? orPoi.difficulty4x4 : null;
+        orPoi.priority = getPoiSortPriority({
+          ...orPoi,
+          category: nextCat,
+          subcategory: nextSub,
+          priority: undefined,
+        });
+        if (ov.updatedAt) orPoi.updatedAt = ov.updatedAt;
       }
 
       const gx = Math.floor(orPoi.lon / step);
       const gy = Math.floor(orPoi.lat / step);
       const orNorm = normalizePoiNameForMerge(orPoi.nameHe || orPoi.name);
       let matchedIndex = -1;
+      let matchedDeletedCanonical = false;
 
       if (orNorm) {
-        for (let dx = -1; dx <= 1 && matchedIndex === -1; dx++) {
-          for (let dy = -1; dy <= 1 && matchedIndex === -1; dy++) {
+        for (let dx = -1; dx <= 1 && matchedIndex === -1 && !matchedDeletedCanonical; dx++) {
+          for (let dy = -1; dy <= 1 && matchedIndex === -1 && !matchedDeletedCanonical; dy++) {
             const bucket = canonicalGrid.get(`${gx + dx},${gy + dy}`);
             if (!bucket) continue;
             for (const cand of bucket) {
-              const currentCanon = merged[cand.index];
-              if (currentCanon.category !== orPoi.category) continue;
+              const currentCanon = combinedRaw[cand.index];
+              const matchCat = cand.deleted ? cand.baseCategory : currentCanon.category;
+              if (matchCat !== orPoi.category) continue;
               const dMeters = Math.hypot(
                 (currentCanon.lon - orPoi.lon) * 95000,
                 (currentCanon.lat - orPoi.lat) * 111320
               );
               if (dMeters <= 85 && arePoiNamesEquivalentForMerge(cand.normName, orNorm)) {
-                matchedIndex = cand.index;
+                if (cand.deleted) {
+                  matchedDeletedCanonical = true;
+                } else {
+                  matchedIndex = cand.index;
+                }
                 break;
               }
             }
@@ -217,12 +379,21 @@ export class PoiManager {
         }
       }
 
+      if (matchedDeletedCanonical) {
+        continue;
+      }
+
       if (matchedIndex !== -1) {
-        merged[matchedIndex] = mergeMatchingPoiMetadata(merged[matchedIndex], orPoi);
+        combinedRaw[matchedIndex] = mergeMatchingPoiMetadata(combinedRaw[matchedIndex], orPoi);
       } else {
-        merged.push(orPoi);
+        combinedRaw.push(orPoi);
       }
     }
+
+    const merged =
+      deletedCanonicalGrid.size === 0
+        ? combinedRaw
+        : combinedRaw.filter((_, idx) => !deletedCanonicalGrid.has(idx));
 
     merged.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b) || a.id.localeCompare(b.id));
     return merged;
@@ -262,6 +433,11 @@ export class PoiManager {
         const changedOrMissing: PoiRecord[] = [];
         for (const r of records) {
           osmNextIds.add(r.id);
+          PoiManager.originalBaseById.set(r.id, {
+            category: r.category,
+            subcategory: r.subcategory,
+            priority: r.priority,
+          });
           const prev = existingById.get(r.id);
           if (
             !prev ||
@@ -312,6 +488,11 @@ export class PoiManager {
                 defaultSource: 'Off-Road.io (קהילת השטח)',
                 basePriority: 220,
               });
+              PoiManager.originalBaseById.set(rec.id, {
+                category: rec.category,
+                subcategory: rec.subcategory,
+                priority: rec.priority,
+              });
               parsedOffroad.push(rec);
             }
             PoiManager.offroadPoisCache = parsedOffroad;
@@ -331,13 +512,212 @@ export class PoiManager {
       console.warn('[PoiManager] Offline mode — loading POIs from local IndexedDB cache:', err);
     }
 
-    const all = await db.pois.toArray();
-    return PoiManager.mergeWithOffroadCache(all);
+    const [all, overrides] = await Promise.all([db.pois.toArray(), db.poiOverrides.toArray()]);
+    return PoiManager.mergeWithOffroadCache(all, overrides);
   }
 
   static async getAllPois(): Promise<PoiRecord[]> {
-    const all = await db.pois.toArray();
-    return PoiManager.mergeWithOffroadCache(all);
+    const [all, overrides] = await Promise.all([db.pois.toArray(), db.poiOverrides.toArray()]);
+    return PoiManager.mergeWithOffroadCache(all, overrides);
+  }
+
+  static getDeletedSignatures(): DeletedPoiSignature[] {
+    return Array.from(PoiManager.deletedSignatures.values());
+  }
+
+  static getDeletedPoiIdsSnapshot(): string[] {
+    return Array.from(PoiManager.deletedSignatures.keys());
+  }
+
+  static getOverriddenPoiIdsSnapshot(): string[] {
+    return Array.from(PoiManager.overriddenPoiIds);
+  }
+
+  static async getOverrides(): Promise<PoiOverrideRecord[]> {
+    return await db.poiOverrides.toArray();
+  }
+
+  static async getOverride(poiId: string): Promise<PoiOverrideRecord | undefined> {
+    return await db.poiOverrides.get(poiId);
+  }
+
+  static async updatePoiCategory(
+    poi: PoiRecord,
+    nextCategory: PoiCategory,
+    nextSubcategory?: string
+  ): Promise<PoiRecord> {
+    const updatedAt = new Date().toISOString();
+    if (!PoiManager.originalBaseById.has(poi.id)) {
+      PoiManager.originalBaseById.set(poi.id, {
+        category: poi.category,
+        subcategory: poi.subcategory,
+        priority: poi.priority,
+      });
+    }
+
+    const normalizedSub = normalizeSubcategoryForCategory(nextCategory, nextSubcategory);
+    await db.poiOverrides.put({
+      id: poi.id,
+      deleted: false,
+      category: nextCategory,
+      subcategory: normalizedSub,
+      updatedAt,
+    });
+    PoiManager.deletedSignatures.delete(poi.id);
+    PoiManager.overriddenPoiIds.add(poi.id);
+
+    const updated: PoiRecord = {
+      ...poi,
+      category: nextCategory,
+      subcategory: normalizedSub,
+      waterStatus:
+        nextCategory === 'water'
+          ? poi.waterStatus || (poi.id.startsWith('user-poi-') ? 'דיווח משתמש בשטח' : null)
+          : null,
+      difficulty4x4:
+        nextCategory === 'offroad'
+          ? poi.difficulty4x4 || (poi.id.startsWith('user-poi-') ? 'דיווח עבירות 4x4' : null)
+          : null,
+      priority: getPoiSortPriority({
+        ...poi,
+        category: nextCategory,
+        subcategory: normalizedSub,
+        priority: poi.id.startsWith('il-poi-') ? poi.priority : undefined,
+      }),
+      updatedAt,
+    };
+
+    if (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
+      await db.pois.put(updated);
+    }
+
+    const cachedIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poi.id);
+    if (cachedIdx >= 0) {
+      PoiManager.offroadPoisCache[cachedIdx] = {
+        ...PoiManager.offroadPoisCache[cachedIdx],
+        category: nextCategory,
+        subcategory: normalizedSub,
+        waterStatus: updated.waterStatus,
+        difficulty4x4: updated.difficulty4x4,
+        priority: updated.priority,
+        updatedAt,
+      };
+    }
+
+    return updated;
+  }
+
+  static async resetPoiOverride(poiId: string): Promise<PoiRecord | undefined> {
+    await db.poiOverrides.delete(poiId);
+    PoiManager.deletedSignatures.delete(poiId);
+    PoiManager.overriddenPoiIds.delete(poiId);
+
+    const base = PoiManager.originalBaseById.get(poiId);
+    const dbRec = await db.pois.get(poiId);
+    if (dbRec && base && (poiId.startsWith('user-poi-') || poiId.startsWith('import-'))) {
+      const restored: PoiRecord = {
+        ...dbRec,
+        category: base.category,
+        subcategory: base.subcategory,
+        priority: base.priority,
+      };
+      await db.pois.put(restored);
+      return restored;
+    }
+
+    if (dbRec) {
+      return normalizeLegacyPoiRecord(dbRec);
+    }
+    const cached = PoiManager.offroadPoisCache.find((p) => p.id === poiId);
+    if (cached && base) {
+      const idx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poiId);
+      const restored: PoiRecord = {
+        ...cached,
+        category: base.category,
+        subcategory: base.subcategory,
+        priority: base.priority,
+      };
+      if (idx >= 0) PoiManager.offroadPoisCache[idx] = restored;
+      return restored;
+    }
+    return cached ? normalizeLegacyPoiRecord(cached) : undefined;
+  }
+
+  static async deletePoi(poi: PoiRecord): Promise<DeletedPoiUndoSnapshot> {
+    const updatedAt = new Date().toISOString();
+    const [existingInDb, previousOverride] = await Promise.all([
+      db.pois.get(poi.id),
+      db.poiOverrides.get(poi.id),
+    ]);
+    const offroadIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poi.id);
+
+    await db.poiOverrides.put({
+      id: poi.id,
+      deleted: true,
+      category: previousOverride?.category,
+      subcategory: previousOverride?.subcategory,
+      updatedAt,
+    });
+
+    if (existingInDb && (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-'))) {
+      await db.pois.delete(poi.id);
+    }
+
+    PoiManager.deletedSignatures.set(poi.id, {
+      id: poi.id,
+      normName: normalizePoiNameForMerge(poi.nameHe || poi.name),
+      lon: poi.lon,
+      lat: poi.lat,
+    });
+    PoiManager.overriddenPoiIds.delete(poi.id);
+
+    return {
+      poi: { ...poi },
+      hadRecordInDb: Boolean(existingInDb),
+      hadRecordInOffroadCache: offroadIdx >= 0,
+      offroadCacheIndex: offroadIdx,
+      previousOverride,
+    };
+  }
+
+  static async restoreDeletedPoi(snapshot: DeletedPoiUndoSnapshot): Promise<PoiRecord> {
+    const { poi, hadRecordInDb, previousOverride } = snapshot;
+    if (previousOverride) {
+      await db.poiOverrides.put({
+        ...previousOverride,
+        deleted: false,
+      });
+      if (isValidPoiCategory(previousOverride.category)) {
+        PoiManager.overriddenPoiIds.add(poi.id);
+      }
+    } else {
+      await db.poiOverrides.delete(poi.id);
+      PoiManager.overriddenPoiIds.delete(poi.id);
+    }
+
+    if (hadRecordInDb) {
+      await db.pois.put(poi);
+    }
+
+    PoiManager.deletedSignatures.delete(poi.id);
+    return poi;
+  }
+
+  static async applyRemoteOverrides(remoteOverrides: PoiOverrideRecord[]): Promise<void> {
+    if (!Array.isArray(remoteOverrides) || remoteOverrides.length === 0) return;
+    const localRows = await db.poiOverrides.toArray();
+    const localById = new Map(localRows.map((r) => [r.id, r]));
+    const toWrite: PoiOverrideRecord[] = [];
+    for (const remote of remoteOverrides) {
+      if (!remote?.id || !remote.updatedAt) continue;
+      const local = localById.get(remote.id);
+      if (!local || remote.updatedAt > local.updatedAt) {
+        toWrite.push(remote);
+      }
+    }
+    if (toWrite.length > 0) {
+      await db.poiOverrides.bulkPut(toWrite);
+    }
   }
 
   static async searchPois(query: string, categoryFilter?: PoiCategory | 'all'): Promise<PoiRecord[]> {
@@ -392,25 +772,30 @@ export class PoiManager {
 
   static clearOffroadCacheForTesting(): void {
     PoiManager.offroadPoisCache = [];
+    PoiManager.deletedSignatures.clear();
+    PoiManager.overriddenPoiIds.clear();
+    PoiManager.originalBaseById.clear();
   }
 
   static async addCustomUserPoi(params: {
     nameHe: string;
     nameEn?: string;
     category: PoiCategory;
+    subcategory?: string;
     lon: number;
     lat: number;
     ele: number | null;
     descHe: string;
     userNotes?: string;
   }): Promise<PoiRecord> {
+    const normalizedSub = normalizeSubcategoryForCategory(params.category, params.subcategory);
     const record: PoiRecord = {
       id: `user-poi-${Date.now()}`,
       name: params.nameHe,
       nameHe: params.nameHe,
       nameEn: params.nameEn || params.nameHe,
       category: params.category,
-      subcategory: 'user_waypoint',
+      subcategory: normalizedSub,
       lon: Number(params.lon.toFixed(6)),
       lat: Number(params.lat.toFixed(6)),
       ele: params.ele,
@@ -496,6 +881,7 @@ export class PoiManager {
           nameHe: p.nameHe || p.name,
           category: p.category,
           subcategory: p.subcategory,
+          symbolId: resolvePoiSymbolId(p.category, p.subcategory),
           priority: getPoiSortPriority(p),
         },
       })),

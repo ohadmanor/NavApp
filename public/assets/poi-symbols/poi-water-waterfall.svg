@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><defs>
+        <filter id="badgeShadow" x="-15%" y="-15%" width="130%" height="135%">
+          <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" flood-color="#0f172a" flood-opacity="0.38"/>
+        </filter>
+      </defs><g filter="url(#badgeShadow)">
+        <circle cx="18" cy="18" r="14.2" fill="#0284C7" stroke="#ffffff" stroke-width="2.3"/>
+        <circle cx="18" cy="18" r="11.8" fill="none" stroke="#0369A1" stroke-opacity="0.35" stroke-width="1"/>
+      </g>
+      <path d="M12.5 11H22C23.4 11 24.2 11.9 24.2 13.4V20.5" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M19.8 13.5V21" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+      <path d="M15.2 14V21.2" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+      <path d="M11 24.3C12.7 23 14.5 23 16.2 24.3C17.9 25.6 19.7 25.6 21.4 24.3C22.8 23.2 24.1 23.2 25.2 24.3" fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round"/>
+    </svg>

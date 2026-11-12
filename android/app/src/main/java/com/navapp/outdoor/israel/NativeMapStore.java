@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,6 +48,7 @@ public final class NativeMapStore {
     private static final String FILE_ACTIVE_ROUTE = "active_route.json";
     private static final String FILE_SAVED_ROUTES = "saved_routes.json";
     private static final String FILE_USER_POIS = "user_pois.json";
+    private static final String FILE_DELETED_POI_IDS = "deleted_poi_ids.json";
     private static final String FILE_CAR_STATE = "car_state.json";
     private static final String FILE_COMPACT_POIS_GEOJSON = "compact_pois.geojson";
 
@@ -176,6 +178,7 @@ public final class NativeMapStore {
     private volatile List<CarPoi> bundledCorePois = Collections.emptyList();
     private volatile List<CarPoi> offroadPois = Collections.emptyList();
     private volatile List<CarPoi> userPois = Collections.emptyList();
+    private volatile Set<String> deletedPoiIds = Collections.emptySet();
     private volatile boolean compactGeoJsonBuilt = false;
 
     private NativeMapStore(Context context) {
@@ -360,6 +363,16 @@ public final class NativeMapStore {
         String userPoisJson,
         String carStateJson
     ) throws IOException {
+        syncCarData(activeRouteJson, savedRoutesJson, userPoisJson, null, carStateJson);
+    }
+
+    public void syncCarData(
+        String activeRouteJson,
+        String savedRoutesJson,
+        String userPoisJson,
+        String deletedPoiIdsJson,
+        String carStateJson
+    ) throws IOException {
         synchronized (stateLock) {
             if (activeRouteJson != null) {
                 writeUtf8Atomic(new File(carSyncDir, FILE_ACTIVE_ROUTE), activeRouteJson);
@@ -373,14 +386,24 @@ public final class NativeMapStore {
                 compactGeoJsonBuilt = false;
                 poiRevision.incrementAndGet();
             }
+            if (deletedPoiIdsJson != null) {
+                writeUtf8Atomic(new File(carSyncDir, FILE_DELETED_POI_IDS), deletedPoiIdsJson);
+                reloadDeletedPoiIdsLocked();
+                compactGeoJsonBuilt = false;
+                poiRevision.incrementAndGet();
+            }
             if (carStateJson != null) {
                 writeUtf8Atomic(new File(carSyncDir, FILE_CAR_STATE), carStateJson);
             }
         }
-        if (userPoisJson != null) {
+        if (userPoisJson != null || deletedPoiIdsJson != null) {
             ensurePoisLoadedAsync();
         }
         notifyStateUpdated();
+    }
+
+    public long getPoiRevision() {
+        return poiRevision.get();
     }
 
     public void writeUtf8Atomic(File target, String content) throws IOException {
@@ -688,8 +711,38 @@ public final class NativeMapStore {
         }
     }
 
+    private void ensureDeletedPoiIdsLoaded() {
+        if (deletedPoiIds.isEmpty() && new File(carSyncDir, FILE_DELETED_POI_IDS).exists()) {
+            synchronized (stateLock) {
+                reloadDeletedPoiIdsLocked();
+            }
+        }
+    }
+
+    private void reloadDeletedPoiIdsLocked() {
+        String json = readUtf8OrNull(new File(carSyncDir, FILE_DELETED_POI_IDS));
+        if (json == null || json.trim().isEmpty()) {
+            deletedPoiIds = Collections.emptySet();
+            return;
+        }
+        try {
+            JSONArray arr = new JSONArray(json);
+            Set<String> ids = new HashSet<>(arr.length());
+            for (int i = 0; i < arr.length(); i++) {
+                String id = arr.optString(i, "");
+                if (!id.isEmpty()) {
+                    ids.add(id);
+                }
+            }
+            deletedPoiIds = Collections.unmodifiableSet(ids);
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed parsing deleted_poi_ids.json", ex);
+        }
+    }
+
     public void ensurePoisLoadedAsync() {
         ensureUserPoisLoaded();
+        ensureDeletedPoiIdsLoaded();
         if (basePoisLoaded.get() && offroadPoisLoaded.get() && compactGeoJsonBuilt) {
             return;
         }
@@ -725,10 +778,6 @@ public final class NativeMapStore {
 
     private void writeCompactPoiGeoJsonFile() {
         List<CarPoi> merged = getAllLoadedPoisSnapshot();
-        if (merged.isEmpty()) {
-            compactGeoJsonBuilt = true;
-            return;
-        }
         // Keep up to 18,000 highest-priority POIs for fast native C++ GeoJsonSource tiling
         List<CarPoi> sorted = new ArrayList<>(merged);
         Collections.sort(sorted, Comparator.comparingInt(p -> p.priority));
@@ -905,13 +954,27 @@ public final class NativeMapStore {
 
     public List<CarPoi> getAllLoadedPoisSnapshot() {
         ensureUserPoisLoaded();
+        ensureDeletedPoiIdsLoaded();
         List<CarPoi> u = userPois;
         List<CarPoi> b = bundledCorePois;
         List<CarPoi> o = offroadPois;
+        Set<String> deleted = deletedPoiIds;
+        Set<String> seenIds = new HashSet<>(u.size() + 32);
         List<CarPoi> merged = new ArrayList<>(u.size() + b.size() + o.size());
-        merged.addAll(u);
-        merged.addAll(b);
-        merged.addAll(o);
+        for (CarPoi p : u) {
+            if (deleted.contains(p.id) || !seenIds.add(p.id)) continue;
+            merged.add(p);
+        }
+        for (CarPoi p : b) {
+            if (deleted.contains(p.id) || seenIds.contains(p.id)) continue;
+            seenIds.add(p.id);
+            merged.add(p);
+        }
+        for (CarPoi p : o) {
+            if (deleted.contains(p.id) || seenIds.contains(p.id)) continue;
+            seenIds.add(p.id);
+            merged.add(p);
+        }
         return merged;
     }
 

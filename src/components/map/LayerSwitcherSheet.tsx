@@ -11,6 +11,9 @@ import {
 } from '../../core/style/israelOutdoorStyle';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 import { getAppVersion } from '../../core/appVersion';
+import { PoiCategoryIcon } from '../pois/PoiCategoryIcon';
+import type { PoiCategory } from '../../core/db/NavDatabase';
+import { POI_CATEGORY_SPECS } from '../../core/pois/poiTaxonomy';
 
 interface LayerSwitcherSheetProps {
   isOpen: boolean;
@@ -63,13 +66,13 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard', hiddenOnSatellite: true },
   ];
 
-  const poiToggles: Array<{ key: PoiLayerKey; label: string; activeCls: string }> = [
-    { key: 'poiWater', label: '💧 מעיינות וגבים', activeCls: 'border-sky-500 bg-sky-500/15 text-sky-500' },
-    { key: 'poiOffroad', label: '🚙 מעלות 4x4', activeCls: 'border-red-500 bg-red-500/15 text-red-500' },
-    { key: 'poiHeritage', label: '🏛️ תצפיות ומערות', activeCls: 'border-amber-500 bg-amber-500/15 text-amber-500' },
-    { key: 'poiCampsites', label: '⛺ חניוני לילה', activeCls: 'border-emerald-500 bg-emerald-500/15 text-emerald-500' },
-    { key: 'poiPeaks', label: '🏔️ פסגות ונ.ג.', activeCls: 'border-purple-500 bg-purple-500/15 text-purple-500' },
-    { key: 'poiUser', label: '📍 נקודות שטח', activeCls: 'border-teal-500 bg-teal-500/15 text-teal-500' },
+  const poiToggles: Array<{ key: PoiLayerKey; cat: PoiCategory; label: string; activeCls: string }> = [
+    { key: 'poiWater', cat: 'water', label: POI_CATEGORY_SPECS.water.labelHe, activeCls: 'border-sky-500 bg-sky-500/15 text-sky-500' },
+    { key: 'poiOffroad', cat: 'offroad', label: POI_CATEGORY_SPECS.offroad.shortLabelHe + ' ומהלכים', activeCls: 'border-red-500 bg-red-500/15 text-red-500' },
+    { key: 'poiHeritage', cat: 'heritage', label: POI_CATEGORY_SPECS.heritage.shortLabelHe, activeCls: 'border-amber-500 bg-amber-500/15 text-amber-500' },
+    { key: 'poiCampsites', cat: 'campsite', label: POI_CATEGORY_SPECS.campsite.labelHe, activeCls: 'border-emerald-500 bg-emerald-500/15 text-emerald-500' },
+    { key: 'poiPeaks', cat: 'peak', label: POI_CATEGORY_SPECS.peak.labelHe, activeCls: 'border-indigo-500 bg-indigo-500/15 text-indigo-500' },
+    { key: 'poiUser', cat: 'user', label: POI_CATEGORY_SPECS.user.labelHe, activeCls: 'border-violet-500 bg-violet-500/15 text-violet-500' },
   ];
 
   const activeSubCount = countActivePoiCategories(visibility);
@@ -284,11 +287,12 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
                         onChangeVisibility(togglePoiCategoryVisibility(visibility, item.key))
                       }
                       aria-pressed={isOn}
-                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
                         isOn ? item.activeCls : `${t.subCard} opacity-55`
                       }`}
                     >
-                      {item.label}
+                      <PoiCategoryIcon category={item.cat} size={16} />
+                      <span>{item.label}</span>
                     </button>
                   );
                 })}
