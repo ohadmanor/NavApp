@@ -21,6 +21,7 @@ import { OpfsStorageAdapter } from '../../core/pmtiles/OpfsStorageAdapter';
 import { NativeOfflineStorage } from '../../core/pmtiles/NativeOfflineStorage';
 import { CommunityPoiImporter } from '../../core/pois/CommunityPoiImporter';
 import { RouteManager } from '../../core/navigation/RouteManager';
+import type { NavUser } from '../../core/firebase/AuthService';
 import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 
@@ -31,6 +32,7 @@ interface MapStorageModalProps {
   osmInfo: MountedArchiveInfo | null;
   theme?: MapTheme;
   embedded?: boolean;
+  currentUser?: NavUser | null;
   onArchivesUpdated: (dem: MountedArchiveInfo | null, osm: MountedArchiveInfo | null) => void;
   onPoisAndRoutesImported: (
     poiCount: number,
@@ -46,6 +48,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   osmInfo,
   theme = 'topo-dark',
   embedded = false,
+  currentUser = null,
   onArchivesUpdated,
   onPoisAndRoutesImported,
 }) => {
@@ -296,6 +299,9 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
           segmentElevations: track.pointElevations,
           sourceFormat,
           color: '#ec4899',
+          ownerUid: currentUser?.uid ?? null,
+          ownerEmail: currentUser?.email ?? null,
+          ownerDisplayName: currentUser?.displayName ?? null,
         });
         createdRoutes.push(savedRoute);
       }

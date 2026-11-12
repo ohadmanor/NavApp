@@ -120,21 +120,28 @@ public final class CarMenuScreen extends Screen {
                 .build()
         );
 
-        Header header = new Header.Builder()
-            .setStartHeaderAction(Action.BACK)
-            .setTitle("NavApp שטח")
-            .addEndHeaderAction(
-                new Action.Builder()
-                    .setIcon(carIcon(ctx, R.drawable.ic_car_heritage))
-                    .setOnClickListener(() -> getScreenManager().push(new CarSearchScreen(ctx, session, "heritage")))
-                    .build()
-            )
-            .build();
+        ListTemplate.Builder templateBuilder = new ListTemplate.Builder()
+            .setSingleList(list.build());
 
-        return new ListTemplate.Builder()
-            .setHeader(header)
-            .setSingleList(list.build())
-            .build();
+        if (ctx.getCarAppApiLevel() >= 5) {
+            Header header = new Header.Builder()
+                .setStartHeaderAction(Action.BACK)
+                .setTitle("NavApp שטח")
+                .addEndHeaderAction(
+                    new Action.Builder()
+                        .setIcon(carIcon(ctx, R.drawable.ic_car_heritage))
+                        .setOnClickListener(() -> getScreenManager().push(new CarSearchScreen(ctx, session, "heritage")))
+                        .build()
+                )
+                .build();
+            templateBuilder.setHeader(header);
+        } else {
+            templateBuilder
+                .setHeaderAction(Action.BACK)
+                .setTitle("NavApp שטח");
+        }
+
+        return templateBuilder.build();
     }
 
     private static CarIcon carIcon(CarContext ctx, int resId) {

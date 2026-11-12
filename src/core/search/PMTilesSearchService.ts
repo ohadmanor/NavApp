@@ -257,6 +257,17 @@ function matchesPoiFilter(poi: PoiRecord, filter: SearchFilterCategory): boolean
 }
 
 function computeRouteCentroid(route: SavedRouteRecord): [number, number] | null {
+  if (Array.isArray(route.bounds) && route.bounds.length === 4) {
+    const [minLon, minLat, maxLon, maxLat] = route.bounds;
+    if (
+      Number.isFinite(minLon) &&
+      Number.isFinite(minLat) &&
+      Number.isFinite(maxLon) &&
+      Number.isFinite(maxLat)
+    ) {
+      return [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+    }
+  }
   const pts = route.elevationProfile || [];
   if (pts.length > 0) {
     const mid = pts[Math.floor(pts.length / 2)];

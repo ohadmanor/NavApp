@@ -68,15 +68,22 @@ public final class CarRoutesScreen extends Screen {
             );
         }
 
-        Header header = new Header.Builder()
-            .setStartHeaderAction(Action.BACK)
-            .setTitle("מסלולים שמורים")
-            .build();
+        ListTemplate.Builder templateBuilder = new ListTemplate.Builder()
+            .setSingleList(list.build());
 
-        return new ListTemplate.Builder()
-            .setHeader(header)
-            .setSingleList(list.build())
-            .build();
+        if (ctx.getCarAppApiLevel() >= 5) {
+            Header header = new Header.Builder()
+                .setStartHeaderAction(Action.BACK)
+                .setTitle("מסלולים שמורים")
+                .build();
+            templateBuilder.setHeader(header);
+        } else {
+            templateBuilder
+                .setHeaderAction(Action.BACK)
+                .setTitle("מסלולים שמורים");
+        }
+
+        return templateBuilder.build();
     }
 
     private static CarIcon carIcon(CarContext ctx, int resId) {

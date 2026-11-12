@@ -72,6 +72,10 @@ if exist "%SIGNED_APK%" (
     echo ============================================================================
     echo   [SUCCESS] Signed Android APK ready for phone installation:
     echo   %CD%\dist\NavApp-Israel-Signed-Release.apk
+    echo.
+    echo   NOTE for Android Auto: Sideloading via file manager hides Car apps
+    echo   unless installed via ADB with Play Store attribution:
+    echo     devops\install-android-auto-apk.bat
     echo ============================================================================
 ) else (
     echo [INFO] Check android\app\build\outputs\apk\release\ for the generated APK.

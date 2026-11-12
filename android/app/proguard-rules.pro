@@ -19,3 +19,9 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Android Auto Car App Library keep rules
+-keep public class com.navapp.outdoor.israel.car.NavCarAppService extends androidx.car.app.CarAppService
+-keep class com.navapp.outdoor.israel.car.** { *; }
+-keep class androidx.car.app.** { *; }
+-keepattributes *Annotation*

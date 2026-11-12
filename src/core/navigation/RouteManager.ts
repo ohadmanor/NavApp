@@ -3,6 +3,9 @@ import {
   db,
   type CloudSyncStatus,
   type PlannedWaypoint,
+  type RouteOwnership,
+  type RoutePayloadRecord,
+  type RouteShareRecipient,
   type SavedRouteRecord,
 } from '../db/NavDatabase';
 import {
@@ -11,6 +14,61 @@ import {
   type PlanningMode,
 } from '../routing/RoutingProfiles';
 import { ElevationService } from './ElevationService';
+
+const MAX_HYDRATED_CACHE = 25;
+const hydratedRouteCache = new Map<string, SavedRouteRecord>();
+
+function touchHydratedCache(record: SavedRouteRecord): void {
+  hydratedRouteCache.delete(record.id);
+  hydratedRouteCache.set(record.id, record);
+  while (hydratedRouteCache.size > MAX_HYDRATED_CACHE) {
+    const oldestKey = hydratedRouteCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    hydratedRouteCache.delete(oldestKey);
+  }
+}
+
+export function computeRouteBounds(
+  geojson?: GeoJSON.FeatureCollection | null,
+  elevationProfile?: SavedRouteRecord['elevationProfile']
+): [number, number, number, number] | undefined {
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+
+  const visit = (lon: number, lat: number) => {
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  };
+
+  for (const f of geojson?.features || []) {
+    const geom = f.geometry;
+    if (!geom) continue;
+    if (geom.type === 'LineString') {
+      for (const c of geom.coordinates) visit(Number(c[0]), Number(c[1]));
+    } else if (geom.type === 'MultiLineString') {
+      for (const ring of geom.coordinates) {
+        for (const c of ring) visit(Number(c[0]), Number(c[1]));
+      }
+    } else if (geom.type === 'Point') {
+      visit(Number(geom.coordinates[0]), Number(geom.coordinates[1]));
+    }
+  }
+
+  if (!Number.isFinite(minLon) && elevationProfile?.length) {
+    for (const p of elevationProfile) {
+      visit(p.lon, p.lat);
+    }
+  }
+
+  return Number.isFinite(minLon) && Number.isFinite(minLat)
+    ? [minLon, minLat, maxLon, maxLat]
+    : undefined;
+}
 
 const LEGACY_TEST_ROUTE_IDS = [
   'route-nahal-aqev-ein-aqev',
@@ -183,12 +241,247 @@ function extractLineStringsFromRoute(
 }
 
 export class RouteManager {
-  static async initializeStarterRoutes(): Promise<SavedRouteRecord[]> {
+  static clearHydratedCache(): void {
+    hydratedRouteCache.clear();
+  }
+
+  static clearHydratedCacheForTesting(): void {
+    hydratedRouteCache.clear();
+  }
+
+  static isRouteVisibleForUser(
+    route: SavedRouteRecord | null | undefined,
+    uid?: string | null
+  ): boolean {
+    if (!route) return false;
+    if (!uid) {
+      // Signed-out users see ONLY unowned local routes, never signed-in or shared routes
+      return route.ownership !== 'shared' && !route.ownerUid;
+    }
+    if (route.ownership === 'shared') {
+      return !route.sharedForUid || route.sharedForUid === uid;
+    }
+    return !route.ownerUid || route.ownerUid === uid;
+  }
+
+  static getCachedFullRoute(routeId: string): SavedRouteRecord | undefined {
+    const hit = hydratedRouteCache.get(routeId);
+    if (hit) {
+      touchHydratedCache(hit);
+    }
+    return hit;
+  }
+
+  static isHydratedRoute(route: SavedRouteRecord | null | undefined): boolean {
+    if (!route) return false;
+    return Boolean(
+      route.hasFullPayload ||
+        (route.geojson?.features && route.geojson.features.length > 0) ||
+        (route.elevationProfile && route.elevationProfile.length > 0)
+    );
+  }
+
+  static splitRouteRecord(record: SavedRouteRecord): {
+    summary: SavedRouteRecord;
+    payload: RoutePayloadRecord;
+  } {
+    const updatedAt = record.updatedAt || record.createdAt || new Date().toISOString();
+    const bounds =
+      record.bounds || computeRouteBounds(record.geojson, record.elevationProfile);
+
+    const payload: RoutePayloadRecord = {
+      id: record.id,
+      geojson: record.geojson || { type: 'FeatureCollection', features: [] },
+      elevationProfile: record.elevationProfile || [],
+      waypoints: record.waypoints,
+      gpxXml: record.gpxXml,
+      updatedAt,
+    };
+
+    const summary: SavedRouteRecord = {
+      ...record,
+      bounds,
+      ownership: record.ownership || 'mine',
+      hasFullPayload: false,
+      geojson: { type: 'FeatureCollection', features: [] },
+      elevationProfile: [],
+      waypoints: undefined,
+      gpxXml: undefined,
+      updatedAt,
+    };
+
+    return { summary, payload };
+  }
+
+  static async persistFullRoute(record: SavedRouteRecord): Promise<SavedRouteRecord> {
+    const updatedAt = record.updatedAt || record.createdAt || new Date().toISOString();
+    const bounds =
+      record.bounds || computeRouteBounds(record.geojson, record.elevationProfile);
+    const fullRecord: SavedRouteRecord = {
+      ...record,
+      bounds,
+      ownership: record.ownership || 'mine',
+      hasFullPayload: true,
+      updatedAt,
+    };
+
+    touchHydratedCache(fullRecord);
+    const { summary, payload } = this.splitRouteRecord(fullRecord);
+
+    try {
+      await db.routePayloads.put(payload);
+      await db.routes.put(summary);
+    } catch {
+      // Fallback for mocked Node/Vitest environments where db.routePayloads has no IndexedDB backend
+      await db.routes.put(fullRecord);
+    }
+
+    return fullRecord;
+  }
+
+  static async persistRoutesBulk(records: SavedRouteRecord[]): Promise<SavedRouteRecord[]> {
+    if (records.length === 0) return [];
+    const summaries: SavedRouteRecord[] = [];
+    const payloads: RoutePayloadRecord[] = [];
+    const fullRecords: SavedRouteRecord[] = [];
+
+    for (const r of records) {
+      const updatedAt = r.updatedAt || r.createdAt || new Date().toISOString();
+      const bounds = r.bounds || computeRouteBounds(r.geojson, r.elevationProfile);
+      const fullRec: SavedRouteRecord = {
+        ...r,
+        bounds,
+        ownership: r.ownership || 'mine',
+        hasFullPayload: true,
+        updatedAt,
+      };
+      fullRecords.push(fullRec);
+      if (hydratedRouteCache.has(r.id)) {
+        touchHydratedCache(fullRec);
+      }
+      const split = this.splitRouteRecord(fullRec);
+      summaries.push(split.summary);
+      payloads.push(split.payload);
+    }
+
+    try {
+      await db.routePayloads.bulkPut(payloads);
+      await db.routes.bulkPut(summaries);
+      return summaries;
+    } catch {
+      // Fallback for mocked Node/Vitest environments
+      await db.routes.bulkPut(fullRecords);
+      return fullRecords;
+    }
+  }
+
+  static async listRouteSummaries(forUid?: string | null): Promise<SavedRouteRecord[]> {
+    const all = await db.routes.toArray();
+    const normalized = all.map((r) =>
+      r.ownership ? r : { ...r, ownership: 'mine' as RouteOwnership }
+    );
+    if (forUid === undefined) {
+      return normalized;
+    }
+    return normalized.filter((r) => this.isRouteVisibleForUser(r, forUid));
+  }
+
+  static async loadFullRoute(
+    routeOrId: SavedRouteRecord | string | null | undefined
+  ): Promise<SavedRouteRecord | undefined> {
+    if (!routeOrId) return undefined;
+    const inputSummary = typeof routeOrId === 'string' ? undefined : routeOrId;
+    const routeId = typeof routeOrId === 'string' ? routeOrId : routeOrId.id;
+
+    if (inputSummary && this.isHydratedRoute(inputSummary)) {
+      const bounds =
+        inputSummary.bounds ||
+        computeRouteBounds(inputSummary.geojson, inputSummary.elevationProfile);
+      const normalized: SavedRouteRecord = {
+        ...inputSummary,
+        bounds,
+        ownership: inputSummary.ownership || 'mine',
+        hasFullPayload: true,
+      };
+      touchHydratedCache(normalized);
+      return normalized;
+    }
+
+    const cached = hydratedRouteCache.get(routeId);
+    if (cached && this.isHydratedRoute(cached)) {
+      const latestSummary =
+        inputSummary || (await db.routes.get(routeId).catch(() => undefined));
+      const merged: SavedRouteRecord = latestSummary
+        ? {
+            ...cached,
+            ...latestSummary,
+            geojson: cached.geojson,
+            elevationProfile: cached.elevationProfile,
+            waypoints: cached.waypoints,
+            gpxXml: cached.gpxXml,
+            bounds: latestSummary.bounds || cached.bounds,
+            ownership: latestSummary.ownership || cached.ownership || 'mine',
+            hasFullPayload: true,
+          }
+        : cached;
+      touchHydratedCache(merged);
+      return merged;
+    }
+
+    const [dbSummary, payload] = await Promise.all([
+      inputSummary
+        ? Promise.resolve(inputSummary)
+        : db.routes.get(routeId).catch(() => undefined),
+      db.routePayloads.get(routeId).catch(() => undefined),
+    ]);
+
+    if (!dbSummary) return undefined;
+
+    const geojson = payload?.geojson ?? dbSummary.geojson ?? {
+      type: 'FeatureCollection',
+      features: [],
+    };
+    const elevationProfile =
+      payload?.elevationProfile ?? dbSummary.elevationProfile ?? [];
+    const waypoints = payload?.waypoints ?? dbSummary.waypoints;
+    const gpxXml = payload?.gpxXml ?? dbSummary.gpxXml;
+    const hasFull = Boolean(
+      payload ||
+        (geojson?.features && geojson.features.length > 0) ||
+        elevationProfile.length > 0
+    );
+
+    const fullRecord: SavedRouteRecord = {
+      ...dbSummary,
+      geojson,
+      elevationProfile,
+      waypoints,
+      gpxXml,
+      bounds: dbSummary.bounds || computeRouteBounds(geojson, elevationProfile),
+      ownership: dbSummary.ownership || 'mine',
+      hasFullPayload: hasFull,
+    };
+
+    if (hasFull) {
+      touchHydratedCache(fullRecord);
+    }
+    return fullRecord;
+  }
+
+  static async initializeStarterRoutes(
+    forUid?: string | null
+  ): Promise<SavedRouteRecord[]> {
     // Purge any legacy test/starter routes from IndexedDB
     await db.routes.bulkDelete(LEGACY_TEST_ROUTE_IDS);
+    try {
+      await db.routePayloads.bulkDelete(LEGACY_TEST_ROUTE_IDS);
+    } catch {
+      // Ignore in mocked Node/Vitest runs
+    }
     const all = await db.routes.toArray();
     const migrated: SavedRouteRecord[] = [];
     const normalized = all.map((r) => {
+      const baseOwnership: RouteOwnership = r.ownership || 'mine';
       if (
         r.sourceFormat === 'planned' &&
         !r.colorCustomized &&
@@ -197,6 +490,7 @@ export class RouteManager {
       ) {
         const updated: SavedRouteRecord = {
           ...r,
+          ownership: baseOwnership,
           color: PLANNING_ROUTE_COLOR,
           geojson: r.geojson
             ? {
@@ -214,12 +508,169 @@ export class RouteManager {
         migrated.push(updated);
         return updated;
       }
-      return r;
+      return r.ownership ? r : { ...r, ownership: baseOwnership };
     });
     if (migrated.length > 0) {
       await db.routes.bulkPut(migrated);
+      try {
+        await Promise.all(
+          migrated.map(async (m) => {
+            const p = await db.routePayloads.get(m.id);
+            if (!p?.geojson?.features?.length) return;
+            await db.routePayloads.put({
+              ...p,
+              geojson: {
+                ...p.geojson,
+                features: p.geojson.features.map((f) => ({
+                  ...f,
+                  properties: {
+                    ...(f.properties || {}),
+                    color: PLANNING_ROUTE_COLOR,
+                  },
+                })),
+              },
+            });
+          })
+        );
+      } catch {
+        // Ignore in mocked Node/Vitest runs
+      }
     }
-    return normalized;
+    if (forUid === undefined) {
+      return normalized;
+    }
+    return normalized.filter((r) => this.isRouteVisibleForUser(r, forUid));
+  }
+
+  /**
+   * Binds unowned local routes (imported/created before first sign-in) to the active user
+   * so switching to another account later isolates them cleanly.
+   */
+  static async claimUnownedRoutesForUser(user: {
+    uid: string;
+    email?: string | null;
+    displayName?: string | null;
+  }): Promise<number> {
+    if (!user?.uid) return 0;
+    const all = await db.routes.toArray();
+    const toClaim = all.filter((r) => r.ownership !== 'shared' && !r.ownerUid);
+    if (toClaim.length === 0) return 0;
+
+    const updatedRows: SavedRouteRecord[] = toClaim.map((r) => {
+      const updated: SavedRouteRecord = {
+        ...r,
+        ownership: 'mine',
+        ownerUid: user.uid,
+        ownerEmail: r.ownerEmail ?? user.email ?? null,
+        ownerDisplayName: r.ownerDisplayName ?? user.displayName ?? null,
+      };
+      const cached = hydratedRouteCache.get(r.id);
+      if (cached) {
+        touchHydratedCache({
+          ...cached,
+          ownership: 'mine',
+          ownerUid: user.uid,
+          ownerEmail: cached.ownerEmail ?? user.email ?? null,
+          ownerDisplayName: cached.ownerDisplayName ?? user.displayName ?? null,
+        });
+      }
+      return updated;
+    });
+
+    await db.routes.bulkPut(updatedRows);
+    return updatedRows.length;
+  }
+
+  /**
+   * Purges cached shared inbox routes and cloud-synced routes belonging to other accounts
+   * when switching users or signing out so previous user's tracks never leak.
+   */
+  static async purgeOtherUsersCachedRoutes(activeUid: string | null): Promise<string[]> {
+    const all = await db.routes.toArray();
+    const toRemoveIds: string[] = [];
+
+    for (const r of all) {
+      if (r.ownership === 'shared') {
+        if (!activeUid || r.sharedForUid !== activeUid) {
+          toRemoveIds.push(r.id);
+        }
+        continue;
+      }
+      if (
+        r.ownerUid &&
+        r.ownerUid !== activeUid &&
+        (r.cloudSyncStatus === 'synced' || activeUid !== null)
+      ) {
+        toRemoveIds.push(r.id);
+      }
+    }
+
+    hydratedRouteCache.clear();
+    if (toRemoveIds.length === 0) return [];
+
+    await db.routes.bulkDelete(toRemoveIds);
+    try {
+      await db.routePayloads.bulkDelete(toRemoveIds);
+    } catch {
+      // Ignore in mocked Node/Vitest environments
+    }
+    return toRemoveIds;
+  }
+
+  static async duplicateRouteToMine(
+    sourceRoute: SavedRouteRecord,
+    currentUser?: { uid?: string | null; email?: string | null; displayName?: string | null } | null
+  ): Promise<SavedRouteRecord> {
+    const full = (await this.loadFullRoute(sourceRoute)) || sourceRoute;
+    const nowIso = new Date().toISOString();
+    const nextId = `route-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const nextName = full.name.includes('(עותק)') ? full.name : `${full.name} (עותק)`;
+    const clonedGeojson: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: (full.geojson?.features || []).map((f, idx) => ({
+        ...f,
+        properties: {
+          ...(f.properties || {}),
+          id: `${nextId}-seg-${idx}`,
+          routeId: nextId,
+          name: nextName,
+        },
+      })),
+    };
+
+    const cloned: SavedRouteRecord = {
+      ...full,
+      id: nextId,
+      name: nextName,
+      geojson: clonedGeojson,
+      waypoints: full.waypoints ? full.waypoints.map((wp) => ({ ...wp })) : undefined,
+      elevationProfile: (full.elevationProfile || []).map((pt) => ({ ...pt })),
+      ownership: 'mine',
+      ownerUid: currentUser?.uid ?? null,
+      ownerEmail: currentUser?.email ?? null,
+      ownerDisplayName: currentUser?.displayName ?? null,
+      sharedByUid: undefined,
+      sharedByName: undefined,
+      sharedByEmail: undefined,
+      sharedWith: undefined,
+      sharedWithUids: undefined,
+      sharedWithEmails: undefined,
+      cloudStoragePath: undefined,
+      cloudJsonPath: undefined,
+      cloudDownloadUrl: undefined,
+      cloudError: undefined,
+      cloudSyncStatus: full.sourceFormat === 'planned' ? 'pending' : 'local-only',
+      visible: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      hasFullPayload: true,
+    };
+
+    if (cloned.sourceFormat === 'planned') {
+      cloned.gpxXml = this.exportRouteAsGpx(cloned);
+    }
+
+    return await this.persistFullRoute(cloned);
   }
 
   static async createAndSaveRoute(params: {
@@ -234,8 +685,16 @@ export class RouteManager {
     visible?: boolean;
     planningMode?: PlanningMode;
     waypoints?: PlannedWaypoint[];
+    ownership?: RouteOwnership;
     ownerUid?: string | null;
     ownerEmail?: string | null;
+    ownerDisplayName?: string | null;
+    sharedByUid?: string | null;
+    sharedByName?: string | null;
+    sharedByEmail?: string | null;
+    sharedWith?: RouteShareRecipient[];
+    sharedWithUids?: string[];
+    sharedWithEmails?: string[];
     cloudSyncStatus?: CloudSyncStatus;
   }): Promise<SavedRouteRecord> {
     const rawSegments =
@@ -300,6 +759,21 @@ export class RouteManager {
       summarizeElevationProfile(elevationProfile);
 
     const nowIso = new Date().toISOString();
+    const geojson: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: lines.map((line, idx) => ({
+        type: 'Feature',
+        properties: {
+          id: `${routeId}-seg-${idx}`,
+          routeId,
+          name: params.name,
+          color: routeColor,
+          planningMode: params.planningMode,
+        },
+        geometry: line.geometry,
+      })),
+    };
+
     const record: SavedRouteRecord = {
       id: routeId,
       name: params.name,
@@ -314,23 +788,20 @@ export class RouteManager {
       color: routeColor,
       colorCustomized: params.colorCustomized,
       visible: params.visible ?? true,
-      geojson: {
-        type: 'FeatureCollection',
-        features: lines.map((line, idx) => ({
-          type: 'Feature',
-          properties: {
-            id: `${routeId}-seg-${idx}`,
-            routeId,
-            name: params.name,
-            color: routeColor,
-            planningMode: params.planningMode,
-          },
-          geometry: line.geometry,
-        })),
-      },
+      bounds: computeRouteBounds(geojson, elevationProfile),
+      hasFullPayload: true,
+      geojson,
       elevationProfile,
+      ownership: params.ownership || 'mine',
       ownerUid: params.ownerUid ?? null,
       ownerEmail: params.ownerEmail ?? null,
+      ownerDisplayName: params.ownerDisplayName ?? null,
+      sharedByUid: params.sharedByUid ?? undefined,
+      sharedByName: params.sharedByName ?? undefined,
+      sharedByEmail: params.sharedByEmail ?? undefined,
+      sharedWith: params.sharedWith,
+      sharedWithUids: params.sharedWithUids,
+      sharedWithEmails: params.sharedWithEmails,
       cloudSyncStatus:
         params.cloudSyncStatus ?? (params.sourceFormat === 'planned' ? 'pending' : 'local-only'),
       createdAt: nowIso,
@@ -341,8 +812,7 @@ export class RouteManager {
       record.gpxXml = this.exportRouteAsGpx(record);
     }
 
-    await db.routes.put(record);
-    return record;
+    return await this.persistFullRoute(record);
   }
 
   static async createAndSavePlannedRoute(params: {
@@ -356,6 +826,7 @@ export class RouteManager {
     visible?: boolean;
     ownerUid?: string | null;
     ownerEmail?: string | null;
+    ownerDisplayName?: string | null;
   }): Promise<SavedRouteRecord> {
     const flattened = params.segments.flat();
     const enrichedWaypoints: PlannedWaypoint[] = await Promise.all(
@@ -377,8 +848,10 @@ export class RouteManager {
       visible: params.visible,
       planningMode: params.mode,
       waypoints: enrichedWaypoints,
+      ownership: 'mine',
       ownerUid: params.ownerUid ?? null,
       ownerEmail: params.ownerEmail ?? null,
+      ownerDisplayName: params.ownerDisplayName ?? null,
       cloudSyncStatus: 'pending',
     });
   }
@@ -393,9 +866,10 @@ export class RouteManager {
       color?: string;
       ownerUid?: string | null;
       ownerEmail?: string | null;
+      ownerDisplayName?: string | null;
     }
   ): Promise<SavedRouteRecord> {
-    const existing = await db.routes.get(routeId);
+    const existing = await this.loadFullRoute(routeId);
     const nextColor = params.color || existing?.color || PLANNING_MODE_META[params.mode].color;
     const saved = await this.createAndSavePlannedRoute({
       id: routeId,
@@ -408,10 +882,15 @@ export class RouteManager {
       visible: existing?.visible ?? true,
       ownerUid: params.ownerUid ?? existing?.ownerUid ?? null,
       ownerEmail: params.ownerEmail ?? existing?.ownerEmail ?? null,
+      ownerDisplayName: params.ownerDisplayName ?? existing?.ownerDisplayName ?? null,
     });
 
     const merged: SavedRouteRecord = {
       ...saved,
+      ownership: existing?.ownership || saved.ownership || 'mine',
+      sharedWith: existing?.sharedWith,
+      sharedWithUids: existing?.sharedWithUids,
+      sharedWithEmails: existing?.sharedWithEmails,
       createdAt: existing?.createdAt || saved.createdAt,
       cloudStoragePath: existing?.cloudStoragePath,
       cloudJsonPath: existing?.cloudJsonPath,
@@ -420,15 +899,14 @@ export class RouteManager {
       cloudError: undefined,
     };
     merged.gpxXml = this.exportRouteAsGpx(merged);
-    await db.routes.put(merged);
-    return merged;
+    return await this.persistFullRoute(merged);
   }
 
   static async updateRouteDetails(
     routeId: string,
     patch: { name?: string; color?: string; visible?: boolean }
   ): Promise<SavedRouteRecord | undefined> {
-    const existing = await db.routes.get(routeId);
+    const existing = await this.loadFullRoute(routeId);
     if (!existing) return undefined;
 
     const trimmedName = patch.name !== undefined ? patch.name.trim() : undefined;
@@ -471,8 +949,7 @@ export class RouteManager {
       updated.gpxXml = this.exportRouteAsGpx(updated);
     }
 
-    await db.routes.put(updated);
-    return updated;
+    return await this.persistFullRoute(updated);
   }
 
   static async toggleRouteVisibility(routeId: string): Promise<SavedRouteRecord | undefined> {
@@ -482,7 +959,7 @@ export class RouteManager {
   }
 
   static async reverseRoute(routeId: string): Promise<SavedRouteRecord | undefined> {
-    const existing = await db.routes.get(routeId);
+    const existing = await this.loadFullRoute(routeId);
     if (!existing) return undefined;
 
     const lineFeatures = extractLineStringsFromRoute(existing);
@@ -550,8 +1027,7 @@ export class RouteManager {
       updated.gpxXml = this.exportRouteAsGpx(updated);
     }
 
-    await db.routes.put(updated);
-    return updated;
+    return await this.persistFullRoute(updated);
   }
 
   static async updateRouteCloudSync(
@@ -566,15 +1042,28 @@ export class RouteManager {
         | 'cloudError'
         | 'ownerUid'
         | 'ownerEmail'
+        | 'ownerDisplayName'
+        | 'sharedWith'
+        | 'sharedWithUids'
+        | 'sharedWithEmails'
         | 'updatedAt'
       >
     >
   ): Promise<SavedRouteRecord | undefined> {
+    const updatedAt = patch.updatedAt || new Date().toISOString();
     await db.routes.update(routeId, {
       ...patch,
-      updatedAt: patch.updatedAt || new Date().toISOString(),
+      updatedAt,
     });
-    return await db.routes.get(routeId);
+    const cached = hydratedRouteCache.get(routeId);
+    if (cached) {
+      touchHydratedCache({
+        ...cached,
+        ...patch,
+        updatedAt,
+      });
+    }
+    return cached ? hydratedRouteCache.get(routeId) : await db.routes.get(routeId);
   }
 
   /**
@@ -583,10 +1072,14 @@ export class RouteManager {
    * preserves GPX/KML `<ele>` profiles when DEM is not mounted.
    */
   static async refreshRouteElevationsFromDem(route: SavedRouteRecord): Promise<SavedRouteRecord> {
-    const segments = extractLineStringsFromRoute(route).map(
+    const fullRoute = this.isHydratedRoute(route)
+      ? route
+      : (await this.loadFullRoute(route)) || route;
+
+    const segments = extractLineStringsFromRoute(fullRoute).map(
       (f) => f.geometry.coordinates as Array<[number, number]>
     );
-    if (segments.length === 0) return route;
+    if (segments.length === 0) return fullRoute;
 
     const lines = segments.map((seg) => turf.lineString(seg));
     const segmentLengths = lines.map((l) => turf.length(l, { units: 'kilometers' }));
@@ -624,16 +1117,16 @@ export class RouteManager {
 
     // If DEM is not loaded / returned nothing (e.g. offline without DEM or offshore), keep existing profile & metadata intact
     if (validDemCount === 0) {
-      return route;
+      return fullRoute;
     }
 
     const elevationProfile = fillMissingElevations(rawSamples);
     const { ascentMeters, descentMeters, minEle, maxEle } =
       summarizeElevationProfile(elevationProfile);
 
-    const enrichedWaypoints = route.waypoints
+    const enrichedWaypoints = fullRoute.waypoints
       ? await Promise.all(
-          route.waypoints.map(async (wp) => {
+          fullRoute.waypoints.map(async (wp) => {
             const wpEle = await ElevationService.getElevationAt(wp.lon, wp.lat, 11);
             return wpEle !== null ? { ...wp, ele: wpEle } : wp;
           })
@@ -641,27 +1134,27 @@ export class RouteManager {
       : undefined;
 
     const merged: SavedRouteRecord = {
-      ...route,
+      ...fullRoute,
       waypoints: enrichedWaypoints,
       distanceKm: Number(totalLengthKm.toFixed(2)),
       ascentMeters,
       descentMeters,
       minEle,
       maxEle,
+      bounds: computeRouteBounds(fullRoute.geojson, elevationProfile),
       elevationProfile,
-      visible: route.visible,
-      color: route.color,
-      colorCustomized: route.colorCustomized,
-      createdAt: route.createdAt,
-      updatedAt: route.updatedAt,
+      visible: fullRoute.visible,
+      color: fullRoute.color,
+      colorCustomized: fullRoute.colorCustomized,
+      createdAt: fullRoute.createdAt,
+      updatedAt: fullRoute.updatedAt,
     };
 
-    if (route.sourceFormat === 'planned') {
+    if (fullRoute.sourceFormat === 'planned') {
       merged.gpxXml = this.exportRouteAsGpx(merged);
     }
 
-    await db.routes.put(merged);
-    return merged;
+    return await this.persistFullRoute(merged);
   }
 
   /**
@@ -741,7 +1234,13 @@ export class RouteManager {
   }
 
   static async deleteRoute(id: string): Promise<void> {
+    hydratedRouteCache.delete(id);
     await db.routes.delete(id);
+    try {
+      await db.routePayloads.delete(id);
+    } catch {
+      // Ignore in mocked Node/Vitest environments
+    }
   }
 
   private static escapeXml(str: string): string {

@@ -126,11 +126,12 @@ function configureAndroidManifest() {
     <!-- Android Auto Car App Library (Navigation) -->
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
-    <uses-permission android:name="androidx.car.app.MAP_TEMPLATES" />
 `;
 
   if (!xml.includes('androidx.car.app.ACCESS_SURFACE')) {
     xml = xml.replace('</manifest>', `${carPermissionsBlock}\n</manifest>`);
+  } else {
+    xml = xml.replace(/\s*<uses-permission android:name="androidx\.car\.app\.MAP_TEMPLATES"\s*\/>/g, '');
   }
 
   const carAppApplicationBlock = `
@@ -144,6 +145,7 @@ function configureAndroidManifest() {
         <service
             android:name=".car.NavCarAppService"
             android:exported="true"
+            android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />
@@ -159,6 +161,11 @@ function configureAndroidManifest() {
 
   if (!xml.includes('.car.NavCarAppService')) {
     xml = xml.replace('</application>', `${carAppApplicationBlock}\n    </application>`);
+  } else if (!xml.includes('android:icon="@mipmap/ic_launcher"\n            android:label="@string/app_name"')) {
+    xml = xml.replace(
+      /(<service\s+android:name="\.car\.NavCarAppService"\s+android:exported="true")(\s+android:label="@string\/app_name">)/,
+      '$1\n            android:icon="@mipmap/ic_launcher"$2'
+    );
   }
 
   fs.writeFileSync(manifestPath, xml, 'utf-8');
@@ -262,9 +269,22 @@ subprojects {
   }
 }
 
+function removeAccidentalBundledApks() {
+  const publicAssetsDir = path.join(ANDROID_DIR, 'app', 'src', 'main', 'assets', 'public');
+  if (!fs.existsSync(publicAssetsDir)) return;
+  for (const entry of fs.readdirSync(publicAssetsDir)) {
+    if (entry.toLowerCase().endsWith('.apk')) {
+      const target = path.join(publicAssetsDir, entry);
+      fs.unlinkSync(target);
+      console.log(`[Android Security] Removed accidental bundled APK from assets/public: ${entry}`);
+    }
+  }
+}
+
 function main() {
   ensureSigningKeystore();
   if (fs.existsSync(ANDROID_DIR)) {
+    removeAccidentalBundledApks();
     configureLocalProperties();
     configureRootGradleToolchain();
     configureNetworkSecurityXml();

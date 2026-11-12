@@ -84,39 +84,43 @@ public final class NavCarMapScreen extends Screen {
             topStrip.addAction(searchAction);
         }
 
-        // 2. Map ActionStrip (4 icon-only controls matching ACTIONS_CONSTRAINTS_MAP)
-        ActionStrip mapStrip = new ActionStrip.Builder()
-            .addAction(Action.PAN)
-            .addAction(
-                new Action.Builder()
-                    .setIcon(carIcon(ctx, R.drawable.ic_car_recenter))
-                    .setOnClickListener(() -> {
-                        map.recenter();
-                        invalidate();
-                    })
-                    .build()
-            )
-            .addAction(
-                new Action.Builder()
-                    .setIcon(carIcon(ctx, R.drawable.ic_car_zoom_in))
-                    .setOnClickListener(map::zoomIn)
-                    .build()
-            )
-            .addAction(
-                new Action.Builder()
-                    .setIcon(carIcon(ctx, R.drawable.ic_car_zoom_out))
-                    .setOnClickListener(map::zoomOut)
-                    .build()
-            )
-            .build();
-
         NavigationTemplate.Builder builder = new NavigationTemplate.Builder()
-            .setActionStrip(topStrip.build())
-            .setMapActionStrip(mapStrip)
-            .setPanModeListener(isPanMode -> {
-                map.setPanMode(isPanMode);
-                invalidate();
-            });
+            .setActionStrip(topStrip.build());
+
+        if (ctx.getCarAppApiLevel() >= 2) {
+            // 2. Map ActionStrip (4 icon-only controls matching ACTIONS_CONSTRAINTS_MAP, Car API 2+)
+            ActionStrip mapStrip = new ActionStrip.Builder()
+                .addAction(Action.PAN)
+                .addAction(
+                    new Action.Builder()
+                        .setIcon(carIcon(ctx, R.drawable.ic_car_recenter))
+                        .setOnClickListener(() -> {
+                            map.recenter();
+                            invalidate();
+                        })
+                        .build()
+                )
+                .addAction(
+                    new Action.Builder()
+                        .setIcon(carIcon(ctx, R.drawable.ic_car_zoom_in))
+                        .setOnClickListener(map::zoomIn)
+                        .build()
+                )
+                .addAction(
+                    new Action.Builder()
+                        .setIcon(carIcon(ctx, R.drawable.ic_car_zoom_out))
+                        .setOnClickListener(map::zoomOut)
+                        .build()
+                )
+                .build();
+
+            builder
+                .setMapActionStrip(mapStrip)
+                .setPanModeListener(isPanMode -> {
+                    map.setPanMode(isPanMode);
+                    invalidate();
+                });
+        }
 
         // 3. Optional Navigation HUD / Permission Prompt Card
         if (t != null && !t.hasLocationPermission) {

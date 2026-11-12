@@ -66,3 +66,16 @@ C:\dev\NavApp\devops\build-android-apk.bat
 - **Granular Permissions (`AndroidManifest.xml`)**: Configures `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `FOREGROUND_SERVICE`, and `FOREGROUND_SERVICE_LOCATION`.
 - **Transferring Map Files to Phone**: Copy `Israel.dem.pmtiles` and `Israel.osm.pmtiles` to your phone (or SD card) and select them once inside the app's **PMTiles Storage Manager (`מפות וייבוא`)**.
 
+### Installing for Android Auto (Sideloading)
+Android Auto hides sideloaded `CarAppService` navigation apps installed from a file manager/browser. To make Android Auto recognize the sideloaded APK on your phone:
+1. Connect your phone via USB (with USB Debugging enabled) and run:
+   ```bat
+   C:\Develop\github\NavApp\devops\install-android-auto-apk.bat
+   ```
+   *(Runs `adb install -i "com.android.vending" -r dist\NavApp-Israel-Signed-Release.apk` so Android registers Google Play installer provenance, and refreshes Android Auto.)*
+2. On your phone, enable **Android Auto Developer Mode** (one-time):
+   - Open **Settings → Android Auto** → scroll to **Version** and tap it **10 times**.
+   - Open the top-right **⋮ menu → Developer settings** → enable **Unknown sources** (and set **Application mode** to **Developer**).
+3. Open **NavApp** once on the phone before connecting to your car or Desktop Head Unit (DHU).
+
+

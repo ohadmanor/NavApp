@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import * as turf from '@turf/turf';
 import {
   TrendingUp,
   Download,
@@ -17,9 +16,15 @@ import {
   Pencil,
   Eye,
   EyeOff,
+  Pin,
+  PinOff,
   Palette,
   ArrowLeftRight,
   PenTool,
+  Search,
+  Copy,
+  Users,
+  Share2,
 } from 'lucide-react';
 import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
 import {
@@ -27,9 +32,64 @@ import {
   RouteManager,
   resolveRouteDisplayColor,
 } from '../../core/navigation/RouteManager';
+import type { RouteMapDisplayMode } from '../../core/navigation/RouteDisplayPolicy';
 import { PLANNING_MODE_META } from '../../core/routing/RoutingProfiles';
 import { MilitaryGridService } from '../../core/navigation/MilitaryGridService';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from '../ui/themeTokens';
+
+const KM_PER_DEG_LAT = 111.32;
+const DEFAULT_VISIBLE_ROUTES_BATCH = 35;
+
+type OwnershipTab = 'mine' | 'shared';
+type RouteFilterKind = 'all' | '4x4' | 'foot' | 'bicycle' | 'imported';
+type RouteSortKey = 'updated' | 'name' | 'distance' | 'ascent';
+
+function approxDistKmPointToSegment(
+  pLon: number,
+  pLat: number,
+  aLon: number,
+  aLat: number,
+  bLon: number,
+  bLat: number,
+  kmPerDegLon: number
+): number {
+  const ax = (aLon - pLon) * kmPerDegLon;
+  const ay = (aLat - pLat) * KM_PER_DEG_LAT;
+  const bx = (bLon - pLon) * kmPerDegLon;
+  const by = (bLat - pLat) * KM_PER_DEG_LAT;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= 1e-12) {
+    return Math.hypot(ax, ay);
+  }
+  const t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lenSq));
+  const cx = ax + t * dx;
+  const cy = ay + t * dy;
+  return Math.hypot(cx, cy);
+}
+
+function approxDistKmPointToCoordList(
+  lon: number,
+  lat: number,
+  coords: Array<[number, number]>,
+  kmPerDegLon: number
+): number {
+  if (coords.length === 0) return Infinity;
+  if (coords.length === 1) {
+    return Math.hypot((coords[0][0] - lon) * kmPerDegLon, (coords[0][1] - lat) * KM_PER_DEG_LAT);
+  }
+  let minKm = Infinity;
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1];
+    const b = coords[i];
+    const d = approxDistKmPointToSegment(lon, lat, a[0], a[1], b[0], b[1], kmPerDegLon);
+    if (d < minKm) {
+      minKm = d;
+    }
+  }
+  return minKm;
+}
 
 export interface RouteChartPoint {
   lon: number;
@@ -52,15 +112,24 @@ interface ElevationProfileDrawerProps {
   pois?: PoiRecord[];
   theme?: MapTheme;
   isNavigating?: boolean;
+  routeDisplayMode?: RouteMapDisplayMode;
+  backgroundRouteIds?: string[];
+  unseenSharedCount?: number;
   onSelectRoute?: (route: SavedRouteRecord | null) => void;
   onStartNavigation?: (route: SavedRouteRecord) => void;
   onStopNavigation?: () => void;
   onOpenImporter?: () => void;
   onOpenRoutePlanner?: () => void;
   onDeleteRoute?: (routeId: string) => void;
+  onShareRoute?: (route: SavedRouteRecord) => void;
+  onViewSharedTab?: () => void;
+  onDuplicateSharedRoute?: (route: SavedRouteRecord) => void | Promise<void>;
+  onDismissSharedRoute?: (routeId: string) => void | Promise<void>;
   onRenameRoute?: (routeId: string, nextName: string) => void | Promise<void>;
   onChangeRouteColor?: (routeId: string, color: string) => void | Promise<void>;
   onToggleRouteVisibility?: (routeId: string) => void | Promise<void>;
+  onToggleBackgroundRoute?: (routeId: string) => void;
+  onClearBackgroundRoutes?: () => void;
   onReverseRoute?: (routeId: string) => void | Promise<void>;
   onEditRouteInPlanner?: (route: SavedRouteRecord) => void;
   onClose: () => void;
@@ -77,15 +146,24 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   pois = [],
   theme = 'topo-dark',
   isNavigating = false,
+  routeDisplayMode,
+  backgroundRouteIds = [],
+  unseenSharedCount = 0,
   onSelectRoute,
   onStartNavigation,
   onStopNavigation,
   onOpenImporter,
   onOpenRoutePlanner,
   onDeleteRoute,
+  onShareRoute,
+  onViewSharedTab,
+  onDuplicateSharedRoute,
+  onDismissSharedRoute,
   onRenameRoute,
   onChangeRouteColor,
   onToggleRouteVisibility,
+  onToggleBackgroundRoute,
+  onClearBackgroundRoutes,
   onReverseRoute,
   onEditRouteInPlanner,
   onClose,
@@ -97,11 +175,17 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
 }) => {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [pinnedIdx, setPinnedIdx] = useState<number | null>(null);
-  const [isRoutesMenuOpen, setIsRoutesMenuOpen] = useState(false);
   const [isPointsMenuOpen, setIsPointsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  const [ownershipTab, setOwnershipTab] = useState<OwnershipTab>(() =>
+    route?.ownership === 'shared' ? 'shared' : 'mine'
+  );
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterKind, setFilterKind] = useState<RouteFilterKind>('all');
+  const [sortKey, setSortKey] = useState<RouteSortKey>('updated');
+  const [visibleCount, setVisibleCount] = useState<number>(DEFAULT_VISIBLE_ROUTES_BATCH);
   const t = getSurfaceTheme(theme);
 
   // Synchronous guard prevents out-of-bounds crash during the first render after switching routes
@@ -116,7 +200,75 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
     setPinnedIdx(null);
     setIsRenaming(false);
     setIsColorPickerOpen(false);
-  }, [route?.id]);
+    if (route?.ownership === 'shared') {
+      setOwnershipTab('shared');
+    } else if (route) {
+      setOwnershipTab('mine');
+    }
+  }, [route?.id, route?.ownership]);
+
+  useEffect(() => {
+    setVisibleCount(DEFAULT_VISIBLE_ROUTES_BATCH);
+  }, [ownershipTab, searchQuery, filterKind, sortKey]);
+
+  const { mineRoutes, sharedRoutes } = useMemo(() => {
+    const mine: SavedRouteRecord[] = [];
+    const shared: SavedRouteRecord[] = [];
+    for (const r of routes) {
+      if (r.ownership === 'shared') {
+        shared.push(r);
+      } else {
+        mine.push(r);
+      }
+    }
+    return { mineRoutes: mine, sharedRoutes: shared };
+  }, [routes]);
+
+  const tabRoutes = ownershipTab === 'shared' ? sharedRoutes : mineRoutes;
+
+  const filteredRoutes = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const matched = tabRoutes.filter((r) => {
+      if (filterKind === '4x4' && r.planningMode !== '4x4') return false;
+      if (filterKind === 'foot' && r.planningMode !== 'foot') return false;
+      if (filterKind === 'bicycle' && r.planningMode !== 'bicycle') return false;
+      if (filterKind === 'imported' && r.sourceFormat === 'planned') return false;
+
+      if (q) {
+        const nameHit = (r.name || '').toLowerCase().includes(q);
+        const senderHit =
+          (r.sharedByName || '').toLowerCase().includes(q) ||
+          (r.sharedByEmail || '').toLowerCase().includes(q) ||
+          (r.ownerDisplayName || '').toLowerCase().includes(q);
+        if (!nameHit && !senderHit) return false;
+      }
+      return true;
+    });
+
+    const sorted = [...matched];
+    sorted.sort((a, b) => {
+      if (sortKey === 'name') {
+        return (a.name || '').localeCompare(b.name || '', 'he');
+      }
+      if (sortKey === 'distance') {
+        return (b.distanceKm || 0) - (a.distanceKm || 0);
+      }
+      if (sortKey === 'ascent') {
+        return (b.ascentMeters || 0) - (a.ascentMeters || 0);
+      }
+      const bTs = Date.parse(b.updatedAt || b.createdAt || '') || 0;
+      const aTs = Date.parse(a.updatedAt || a.createdAt || '') || 0;
+      return bTs - aTs;
+    });
+    return sorted;
+  }, [tabRoutes, filterKind, searchQuery, sortKey]);
+
+  const displayedRoutes = useMemo(
+    () => filteredRoutes.slice(0, visibleCount),
+    [filteredRoutes, visibleCount]
+  );
+
+  const isSharedRoute = route?.ownership === 'shared';
 
   const getDisplayColor = (r: SavedRouteRecord | null) => resolveRouteDisplayColor(r);
 
@@ -134,64 +286,114 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
       ...first,
     });
 
-    // Support both LineString & MultiLineString features when scanning POIs along route
-    const lineFeatures: Array<GeoJSON.Feature<GeoJSON.LineString>> = [];
-    for (const f of route.geojson?.features || []) {
-      if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 2) {
-        lineFeatures.push(f as GeoJSON.Feature<GeoJSON.LineString>);
-      } else if (f.geometry?.type === 'MultiLineString') {
-        for (const ring of f.geometry.coordinates) {
-          if (Array.isArray(ring) && ring.length >= 2) {
-            lineFeatures.push({
-              type: 'Feature',
-              properties: f.properties || {},
-              geometry: { type: 'LineString', coordinates: ring },
-            });
-          }
-        }
-      }
+    // Build spatially-chunked polyline segments so scanning 3,000+ POIs along a 100+ km track runs in <2ms
+    interface PolyChunk {
+      coords: Array<[number, number]>;
+      minLon: number;
+      maxLon: number;
+      minLat: number;
+      maxLat: number;
     }
+    const chunks: PolyChunk[] = [];
+    let minLon = Infinity;
+    let minLat = Infinity;
+    let maxLon = -Infinity;
+    let maxLat = -Infinity;
 
-    if (lineFeatures.length > 0 && pois.length > 0) {
-      let minLon = Infinity;
-      let minLat = Infinity;
-      let maxLon = -Infinity;
-      let maxLat = -Infinity;
-      for (const lf of lineFeatures) {
-        for (const [lon, lat] of lf.geometry.coordinates) {
+    const pushCoordChunks = (rawCoords: GeoJSON.Position[]) => {
+      if (rawCoords.length < 2) return;
+      const CHUNK_SIZE = 80;
+      for (let start = 0; start < rawCoords.length - 1; start += CHUNK_SIZE - 1) {
+        const slice = rawCoords.slice(start, Math.min(rawCoords.length, start + CHUNK_SIZE));
+        if (slice.length < 2) break;
+        const coords: Array<[number, number]> = [];
+        let cMinLon = Infinity;
+        let cMinLat = Infinity;
+        let cMaxLon = -Infinity;
+        let cMaxLat = -Infinity;
+        for (const c of slice) {
+          const lon = Number(c[0]);
+          const lat = Number(c[1]);
+          if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+          coords.push([lon, lat]);
+          if (lon < cMinLon) cMinLon = lon;
+          if (lon > cMaxLon) cMaxLon = lon;
+          if (lat < cMinLat) cMinLat = lat;
+          if (lat > cMaxLat) cMaxLat = lat;
           if (lon < minLon) minLon = lon;
           if (lon > maxLon) maxLon = lon;
           if (lat < minLat) minLat = lat;
           if (lat > maxLat) maxLat = lat;
         }
+        if (coords.length >= 2) {
+          chunks.push({
+            coords,
+            minLon: cMinLon,
+            maxLon: cMaxLon,
+            minLat: cMinLat,
+            maxLat: cMaxLat,
+          });
+        }
       }
+    };
+
+    for (const f of route.geojson?.features || []) {
+      if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 2) {
+        pushCoordChunks(f.geometry.coordinates);
+      } else if (f.geometry?.type === 'MultiLineString') {
+        for (const ring of f.geometry.coordinates) {
+          if (Array.isArray(ring) && ring.length >= 2) {
+            pushCoordChunks(ring);
+          }
+        }
+      }
+    }
+
+    if (chunks.length > 0 && pois.length > 0 && Number.isFinite(minLon)) {
       const padDeg = 0.02;
-      minLon -= padDeg;
-      maxLon += padDeg;
-      minLat -= padDeg;
-      maxLat += padDeg;
+      const gMinLon = minLon - padDeg;
+      const gMaxLon = maxLon + padDeg;
+      const gMinLat = minLat - padDeg;
+      const gMaxLat = maxLat + padDeg;
+      const midLat = (minLat + maxLat) / 2;
+      const kmPerDegLon = KM_PER_DEG_LAT * Math.max(0.2, Math.cos((midLat * Math.PI) / 180));
 
       const nearbyWpts: RoutePointOption[] = [];
       for (const poi of pois) {
-        if (poi.lon < minLon || poi.lon > maxLon || poi.lat < minLat || poi.lat > maxLat) {
+        if (
+          poi.lon < gMinLon ||
+          poi.lon > gMaxLon ||
+          poi.lat < gMinLat ||
+          poi.lat > gMaxLat
+        ) {
           continue;
         }
-        const pt = turf.point([poi.lon, poi.lat]);
-        let minLineKm = Infinity;
-        for (const lf of lineFeatures) {
-          const d = turf.pointToLineDistance(pt, lf, { units: 'kilometers' });
-          if (d < minLineKm) minLineKm = d;
-        }
+
         const maxRadiusKm = poi.subcategory?.startsWith('imported_') ? 1.5 : 0.35;
+        let minLineKm = Infinity;
+        for (const chunk of chunks) {
+          if (
+            poi.lon < chunk.minLon - padDeg ||
+            poi.lon > chunk.maxLon + padDeg ||
+            poi.lat < chunk.minLat - padDeg ||
+            poi.lat > chunk.maxLat + padDeg
+          ) {
+            continue;
+          }
+          const d = approxDistKmPointToCoordList(poi.lon, poi.lat, chunk.coords, kmPerDegLon);
+          if (d < minLineKm) minLineKm = d;
+          if (minLineKm <= 0.03) break;
+        }
+
         if (minLineKm <= maxRadiusKm) {
           let bestSample = pts[0];
-          let bestSampleDist = Infinity;
+          let bestSampleDistSq = Infinity;
           for (const sample of pts) {
-            const d = turf.distance(pt, turf.point([sample.lon, sample.lat]), {
-              units: 'kilometers',
-            });
-            if (d < bestSampleDist) {
-              bestSampleDist = d;
+            const dx = (sample.lon - poi.lon) * kmPerDegLon;
+            const dy = (sample.lat - poi.lat) * KM_PER_DEG_LAT;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < bestSampleDistSq) {
+              bestSampleDistSq = dSq;
               bestSample = sample;
             }
           }
@@ -208,6 +410,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
           });
         }
       }
+
       nearbyWpts.sort((a, b) => a.distKm - b.distKm);
       const dedupedWpts: RoutePointOption[] = [];
       for (const wp of nearbyWpts) {
@@ -252,19 +455,22 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
     return options;
   }, [route, pois]);
 
-  const handleExportGpx = (r: SavedRouteRecord) => {
-    const gpxXml = RouteManager.exportRouteAsGpx(r);
+  const handleExportGpx = async (r: SavedRouteRecord) => {
+    const full = RouteManager.isHydratedRoute(r)
+      ? r
+      : (await RouteManager.loadFullRoute(r)) || r;
+    const gpxXml = RouteManager.exportRouteAsGpx(full);
     const blob = new Blob([gpxXml], { type: 'application/gpx+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${r.id}.gpx`;
+    a.download = `${full.id}.gpx`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   const handleCommitRename = () => {
-    if (!route || !onRenameRoute) {
+    if (!route || !onRenameRoute || isSharedRoute) {
       setIsRenaming(false);
       return;
     }
@@ -571,7 +777,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   const handleSelectRouteOption = (r: SavedRouteRecord) => {
     setPinnedIdx(null);
     setHoveredIdx(null);
-    setIsRoutesMenuOpen(false);
     setIsPointsMenuOpen(false);
     onSelectRoute?.(r);
   };
@@ -597,9 +802,12 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
 
   const activeColor = getDisplayColor(route);
 
+  const showRoutesLibrary = !isNavigating;
+  const remainingFilteredCount = Math.max(0, filteredRoutes.length - displayedRoutes.length);
+
   const innerContent = (
     <div dir="rtl" className="p-4 space-y-3 overflow-y-auto min-h-0 flex-1">
-      {/* Header with Inline Rename & Visibility */}
+      {/* Header with Inline Rename & Background Pin / Visibility */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2 min-w-0 flex-1">
           <TrendingUp className="w-4 h-4 text-pink-500 shrink-0 mt-1" />
@@ -607,7 +815,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             <span className="text-xs font-bold text-pink-500 block">
               מסלולים ופרופיל גובה (DEM)
             </span>
-            {route && isRenaming ? (
+            {route && isRenaming && !isSharedRoute ? (
               <div className="flex items-center gap-1.5 mt-1">
                 <input
                   id="route-rename-input"
@@ -645,9 +853,9 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             ) : (
               <div className="flex items-center gap-1.5 min-w-0">
                 <h4 className="text-sm font-bold truncate" dir="auto">
-                  {route ? route.name : `מסלולים שמורים (${routes.length})`}
+                  {route ? route.name : `ספריית מסלולים (${routes.length})`}
                 </h4>
-                {route && onRenameRoute && (
+                {route && onRenameRoute && !isSharedRoute && (
                   <button
                     type="button"
                     onClick={() => {
@@ -666,26 +874,62 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {route && onToggleRouteVisibility && (
+          {route && onToggleBackgroundRoute ? (
             <button
               type="button"
-              onClick={() => onToggleRouteVisibility(route.id)}
+              onClick={() => onToggleBackgroundRoute(route.id)}
               className={`p-1.5 rounded-lg border shrink-0 ${
-                route.visible === false ? 'border-amber-500/60 text-amber-500 bg-amber-500/10' : t.pillBtn
+                backgroundRouteIds.includes(route.id)
+                  ? 'border-sky-500/60 text-sky-500 bg-sky-500/10'
+                  : t.pillBtn
               }`}
-              title={route.visible === false ? 'המסלול מוסתר — לחץ להצגה במפה' : 'הסתר מסלול במפה'}
-              aria-label={route.visible === false ? 'הצג מסלול במפה' : 'הסתר מסלול במפה'}
+              title={
+                backgroundRouteIds.includes(route.id)
+                  ? 'הסר מהצגה ברקע לתכנון והשוואה'
+                  : 'השאר מסלול ברקע בזמן בחירה או תכנון'
+              }
+              aria-label={
+                backgroundRouteIds.includes(route.id)
+                  ? 'הסר מסלול מרקע'
+                  : 'השאר מסלול ברקע'
+              }
             >
-              {route.visible === false ? (
-                <EyeOff className="w-4 h-4" />
+              {backgroundRouteIds.includes(route.id) ? (
+                <PinOff className="w-4 h-4" />
               ) : (
-                <Eye className="w-4 h-4" />
+                <Pin className="w-4 h-4" />
               )}
             </button>
+          ) : (
+            route &&
+            onToggleRouteVisibility && (
+              <button
+                type="button"
+                onClick={() => onToggleRouteVisibility(route.id)}
+                className={`p-1.5 rounded-lg border shrink-0 ${
+                  route.visible === false
+                    ? 'border-amber-500/60 text-amber-500 bg-amber-500/10'
+                    : t.pillBtn
+                }`}
+                title={route.visible === false ? 'המסלול מוסתר — לחץ להצגה במפה' : 'הסתר מסלול במפה'}
+                aria-label={route.visible === false ? 'הצג מסלול במפה' : 'הסתר מסלול במפה'}
+              >
+                {route.visible === false ? (
+                  <EyeOff className="w-4 h-4" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
+            )
           )}
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              setHoveredIdx(null);
+              setPinnedIdx(null);
+              onHoverPoint(null);
+              onClose();
+            }}
             className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
             title="סגור"
             aria-label="סגור"
@@ -695,209 +939,403 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
         </div>
       </div>
 
-      {/* Routes Dropdown Selector + Action Buttons */}
-      {routes.length > 0 ? (
-        <div className="space-y-2 relative">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1 min-w-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsRoutesMenuOpen(!isRoutesMenuOpen);
-                  setIsPointsMenuOpen(false);
-                }}
-                aria-expanded={isRoutesMenuOpen}
-                className={`w-full px-3 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 transition-colors ${t.subCard} hover:border-pink-500/70`}
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                      route?.visible === false ? 'opacity-35 ring-1 ring-current' : ''
-                    }`}
-                    style={{ backgroundColor: activeColor }}
-                  />
-                  <span className="font-bold truncate" dir="auto">
-                    {route ? route.name : 'בחר מסלול מהרשימה...'}
+      {/* Ownership Tabs & Always-Visible Routes Library (hidden only while navigating or editing) */}
+      {showRoutesLibrary && (
+        <>
+          <div
+            role="tablist"
+            aria-label="סיווג בעלות מסלולים"
+            className={`grid grid-cols-2 gap-1 p-1 rounded-xl border ${t.subCard}`}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={ownershipTab === 'mine'}
+              onClick={() => {
+                setOwnershipTab('mine');
+                setIsPointsMenuOpen(false);
+              }}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                ownershipTab === 'mine'
+                  ? 'bg-pink-600 text-white shadow-sm'
+                  : `${t.muted} hover:bg-black/5`
+              }`}
+            >
+              <RouteIcon className="w-3.5 h-3.5 shrink-0" />
+              <span>המסלולים שלי ({mineRoutes.length})</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={ownershipTab === 'shared'}
+              onClick={() => {
+                setOwnershipTab('shared');
+                setIsPointsMenuOpen(false);
+                onViewSharedTab?.();
+              }}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                ownershipTab === 'shared'
+                  ? 'bg-violet-600 text-white shadow-sm'
+                  : `${t.muted} hover:bg-black/5`
+              }`}
+            >
+              <Users className="w-3.5 h-3.5 shrink-0" />
+              <span>שותפו איתי ({sharedRoutes.length})</span>
+              {unseenSharedCount > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold leading-none">
+                  +{unseenSharedCount}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {routes.length > 0 ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className={`text-xs font-bold ${t.muted}`}>
+                    {ownershipTab === 'shared' ? 'מסלולים ששותפו איתך' : 'כל המסלולים'}
+                  </span>
+                  <span dir="ltr" className={`text-[11px] font-mono ${t.muted}`}>
+                    ({filteredRoutes.length}/{tabRoutes.length})
                   </span>
                 </div>
+
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {route && (
-                    <span dir="ltr" className={`font-mono ${t.muted}`}>
-                      {route.distanceKm} km ({routes.length})
-                    </span>
-                  )}
-                  <ChevronDown
-                    className={`w-4 h-4 transition-transform ${
-                      isRoutesMenuOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </div>
-              </button>
-            </div>
-
-            {routes.length > 1 && onFitAllRoutes && (
-              <button
-                type="button"
-                onClick={onFitAllRoutes}
-                className={`px-2.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1 shrink-0 ${t.pillBtn}`}
-                title="הצג את כל המסלולים במפה"
-              >
-                <Maximize2 className="w-3.5 h-3.5 text-pink-500" />
-                <span>הכל</span>
-              </button>
-            )}
-
-            {onOpenRoutePlanner && (
-              <button
-                type="button"
-                onClick={onOpenRoutePlanner}
-                className="px-2.5 py-2 rounded-xl border border-blue-500/50 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 text-xs font-bold flex items-center gap-1 shrink-0"
-                title="תכנון מסלול חדש על המפה"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>תכנן</span>
-              </button>
-            )}
-
-            {onOpenImporter && (
-              <button
-                type="button"
-                onClick={onOpenImporter}
-                className="px-2.5 py-2 rounded-xl border border-sky-500/50 bg-sky-500/10 text-sky-500 hover:bg-sky-500/20 text-xs font-bold flex items-center gap-1 shrink-0"
-                title="ייבוא קובץ GPX / KML / TWL"
-              >
-                <FileUp className="w-3.5 h-3.5" />
-                <span>ייבא</span>
-              </button>
-            )}
-          </div>
-
-          {isRoutesMenuOpen && (
-            <div
-              className={`rounded-xl border shadow-lg max-h-48 overflow-y-auto divide-y ${t.panelSolid} ${t.divider}`}
-            >
-              {routes.map((r, idx) => {
-                const isSelected = route?.id === r.id;
-                const isHidden = r.visible === false;
-                return (
-                  <div
-                    key={r.id}
-                    className={`w-full px-2 py-1.5 text-xs flex items-center justify-between gap-1 transition-colors ${
-                      isSelected ? 'bg-pink-500/15 font-bold' : t.hoverRow
-                    }`}
-                  >
+                  {onFitAllRoutes && backgroundRouteIds.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => handleSelectRouteOption(r)}
-                      className="flex-1 min-w-0 text-right px-1.5 py-1 flex items-center gap-2"
+                      onClick={onFitAllRoutes}
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1 shrink-0 ${t.pillBtn}`}
+                      title="התמקד בכל המסלולים המוצגים"
                     >
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                          isHidden ? 'opacity-35 ring-1 ring-current' : ''
-                        }`}
-                        style={{ backgroundColor: getDisplayColor(r) }}
-                      />
-                      <div className="min-w-0">
-                        <div
-                          className={`font-bold break-words ${isHidden ? 'opacity-60' : ''}`}
-                          dir="auto"
-                        >
-                          {r.name}
-                        </div>
-                        <div className={`font-mono text-[11px] ${t.muted}`}>
-                          <span dir="ltr">
-                            #{idx + 1} • {r.distanceKm} km • +{r.ascentMeters}m
-                          </span>{' '}
-                          •{' '}
-                          {r.planningMode
-                            ? PLANNING_MODE_META[r.planningMode]?.shortLabelHe
-                            : r.sourceFormat.toUpperCase()}
-                          {isHidden ? ' • מוסתר' : ''}
-                          {r.cloudSyncStatus === 'synced'
-                            ? ' • ☁️ בענן'
-                            : r.cloudSyncStatus === 'pending'
-                              ? ' • ⏳ ממתין'
-                              : ''}
-                        </div>
-                      </div>
+                      <Maximize2 className="w-3.5 h-3.5 text-pink-500" />
+                      <span>הכל</span>
                     </button>
+                  )}
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      {onToggleRouteVisibility && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void onToggleRouteVisibility(r.id);
-                          }}
-                          className={`p-1.5 rounded-lg ${
-                            isHidden ? 'text-amber-500' : t.muted
-                          } hover:bg-black/10`}
-                          title={isHidden ? 'הצג מסלול במפה' : 'הסתר מסלול במפה'}
-                          aria-label={isHidden ? `הצג ${r.name}` : `הסתר ${r.name}`}
-                        >
-                          {isHidden ? (
-                            <EyeOff className="w-3.5 h-3.5" />
-                          ) : (
-                            <Eye className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      )}
-                      {isSelected && <Check className="w-4 h-4 text-pink-500 shrink-0" />}
+                  {onOpenRoutePlanner && (
+                    <button
+                      type="button"
+                      onClick={onOpenRoutePlanner}
+                      className="px-2.5 py-1.5 rounded-xl border border-blue-500/50 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 text-xs font-bold flex items-center gap-1 shrink-0"
+                      title="תכנון מסלול חדש על המפה"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>תכנן</span>
+                    </button>
+                  )}
+
+                  {onOpenImporter && (
+                    <button
+                      type="button"
+                      onClick={onOpenImporter}
+                      className="px-2.5 py-1.5 rounded-xl border border-sky-500/50 bg-sky-500/10 text-sky-500 hover:bg-sky-500/20 text-xs font-bold flex items-center gap-1 shrink-0"
+                      title="ייבוא קובץ GPX / KML / TWL"
+                    >
+                      <FileUp className="w-3.5 h-3.5" />
+                      <span>ייבא</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {tabRoutes.length === 0 ? (
+                <div className={`p-3 rounded-xl border border-dashed text-center space-y-1.5 ${t.subCard}`}>
+                  <div className="text-xs font-bold">
+                    {ownershipTab === 'shared'
+                      ? 'אין עדיין מסלולים ששותפו איתך'
+                      : 'אין לך עדיין מסלולים אישיים'}
+                  </div>
+                  <p className={`text-[11px] ${t.muted}`}>
+                    {ownershipTab === 'shared'
+                      ? 'כשמשתמשים אחרים ישתפו איתך מסלול לפי כתובת Gmail או שם משתמש, הוא יופיע כאן.'
+                      : 'תכנן מסלול חדש על המפה או ייבא קובץ GPX/KML.'}
+                  </p>
+                </div>
+              ) : (
+                <div className={`rounded-xl border shadow-sm overflow-hidden ${t.panelSolid}`}>
+                  {/* Search, Mode Filter Chips & Sort Controls */}
+                  <div className={`p-2 space-y-1.5 border-b ${t.divider}`}>
+                    <div className="flex items-center gap-1.5">
+                      <div className={`flex-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${t.fieldBox}`}>
+                        <Search className={`w-3.5 h-3.5 shrink-0 ${t.muted}`} />
+                        <input
+                          id="route-library-search"
+                          name="routeLibrarySearch"
+                          type="text"
+                          dir="auto"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          placeholder={
+                            ownershipTab === 'shared'
+                              ? 'חיפוש לפי שם מסלול או שולח...'
+                              : 'חיפוש מסלול לפי שם...'
+                          }
+                          className="w-full min-w-0 bg-transparent text-xs focus:outline-none"
+                        />
+                        {searchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setSearchQuery('')}
+                            className={`p-0.5 rounded hover:bg-black/10 ${t.muted}`}
+                            aria-label="נקה חיפוש מסלולים"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+
+                      <select
+                        id="route-library-sort"
+                        name="routeLibrarySort"
+                        value={sortKey}
+                        onChange={(e) => setSortKey(e.target.value as RouteSortKey)}
+                        aria-label="מיון מסלולים"
+                        className={`px-2 py-1.5 rounded-lg border text-[11px] font-semibold focus:outline-none ${t.fieldBox}`}
+                      >
+                        <option value="updated">עודכן</option>
+                        <option value="name">שם</option>
+                        <option value="distance">מרחק</option>
+                        <option value="ascent">טיפוס</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {(
+                        [
+                          { id: 'all', label: 'הכל' },
+                          { id: '4x4', label: '4x4' },
+                          { id: 'foot', label: 'הליכה' },
+                          { id: 'bicycle', label: 'אופניים' },
+                          { id: 'imported', label: 'מיובא' },
+                        ] as const
+                      ).map((chip) => {
+                        const active = filterKind === chip.id;
+                        return (
+                          <button
+                            key={chip.id}
+                            type="button"
+                            onClick={() => setFilterKind(chip.id)}
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border transition-colors ${
+                              active
+                                ? 'border-pink-500 bg-pink-500/15 text-pink-500'
+                                : t.pillBtn
+                            }`}
+                          >
+                            {chip.label}
+                          </button>
+                        );
+                      })}
+                      <span className={`mr-auto text-[10px] font-mono ${t.muted}`}>
+                        {filteredRoutes.length}/{tabRoutes.length}
+                      </span>
                     </div>
                   </div>
-                );
-              })}
+
+                  {/* Paginated Scrollable List */}
+                  <div
+                    onScroll={(e) => {
+                      const el = e.currentTarget;
+                      if (
+                        remainingFilteredCount > 0 &&
+                        el.scrollTop + el.clientHeight >= el.scrollHeight - 48
+                      ) {
+                        setVisibleCount((c) => c + DEFAULT_VISIBLE_ROUTES_BATCH);
+                      }
+                    }}
+                    className={`${route ? 'max-h-44' : 'max-h-64'} overflow-y-auto divide-y ${t.divider}`}
+                  >
+                    {displayedRoutes.length === 0 ? (
+                      <div className={`px-3 py-4 text-center text-xs ${t.muted}`}>
+                        לא נמצאו מסלולים תואמים לחיפוש ולסינון.
+                      </div>
+                    ) : (
+                      <>
+                        {displayedRoutes.map((r, idx) => {
+                          const isSelected = route?.id === r.id;
+                          const isPinnedBg = backgroundRouteIds.includes(r.id);
+                          const senderLabel = r.sharedByName || r.sharedByEmail;
+                          return (
+                            <div
+                              key={r.id}
+                              className={`w-full px-2 py-1.5 text-xs flex items-center justify-between gap-1 transition-colors ${
+                                isSelected ? 'bg-pink-500/15 font-bold' : t.hoverRow
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleSelectRouteOption(r)}
+                                className="flex-1 min-w-0 text-right px-1.5 py-1 flex items-center gap-2"
+                              >
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                                    isPinnedBg ? 'ring-2 ring-sky-500/70' : ''
+                                  }`}
+                                  style={{ backgroundColor: getDisplayColor(r) }}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-bold break-words" dir="auto">
+                                    {r.name}
+                                  </div>
+                                  <div className={`font-mono text-[11px] ${t.muted}`}>
+                                    <span dir="ltr">
+                                      #{idx + 1} • {r.distanceKm} km • +{r.ascentMeters}m
+                                    </span>{' '}
+                                    •{' '}
+                                    {r.planningMode
+                                      ? PLANNING_MODE_META[r.planningMode]?.shortLabelHe
+                                      : r.sourceFormat.toUpperCase()}
+                                    {isPinnedBg ? ' • 📌 ברקע' : ''}
+                                    {r.ownership === 'shared' && senderLabel
+                                      ? ` • שותף ע״י ${senderLabel}`
+                                      : r.cloudSyncStatus === 'synced'
+                                        ? ' • ☁️ בענן'
+                                        : r.cloudSyncStatus === 'pending'
+                                          ? ' • ⏳ ממתין'
+                                          : ''}
+                                    {r.ownership !== 'shared' && (r.sharedWith?.length || 0) > 0
+                                      ? ` • שותף עם ${r.sharedWith!.length}`
+                                      : ''}
+                                  </div>
+                                </div>
+                              </button>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                {onToggleBackgroundRoute && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onToggleBackgroundRoute(r.id);
+                                    }}
+                                    className={`p-1.5 rounded-lg ${
+                                      isPinnedBg ? 'text-sky-500 bg-sky-500/10' : t.muted
+                                    } hover:bg-black/10`}
+                                    title={isPinnedBg ? 'הסר מרקע' : 'השאר ברקע לתכנון/השוואה'}
+                                    aria-label={isPinnedBg ? `הסר ${r.name} מרקע` : `השאר ${r.name} ברקע`}
+                                  >
+                                    {isPinnedBg ? (
+                                      <PinOff className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Pin className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                )}
+                                {isSelected && <Check className="w-4 h-4 text-pink-500 shrink-0" />}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {remainingFilteredCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setVisibleCount((c) => c + DEFAULT_VISIBLE_ROUTES_BATCH)}
+                            className={`w-full py-2 text-center text-xs font-bold text-pink-500 ${t.hoverRow}`}
+                          >
+                            טען עוד מסלולים ({remainingFilteredCount} נותרו)
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className={`p-4 rounded-xl border border-dashed text-center space-y-2 ${t.subCard}`}>
+              <RouteIcon className="w-6 h-6 text-pink-500 mx-auto" />
+              <div className="text-xs font-bold">אין מסלולים שמורים כרגע</div>
+              <p className={`text-xs ${t.muted}`}>
+                תכנן מסלול על גבי רשת הדרכים והשבילים או ייבא קובץ GPX, KML או TWL.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {onOpenRoutePlanner && (
+                  <button
+                    onClick={onOpenRoutePlanner}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>תכנן מסלול חדש</span>
+                  </button>
+                )}
+                {onOpenImporter && (
+                  <button
+                    onClick={onOpenImporter}
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <FileUp className="w-4 h-4" />
+                    <span>ייבא מסלול למכשיר</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
-        </div>
-      ) : (
-        <div className={`p-4 rounded-xl border border-dashed text-center space-y-2 ${t.subCard}`}>
-          <RouteIcon className="w-6 h-6 text-pink-500 mx-auto" />
-          <div className="text-xs font-bold">אין מסלולים שמורים כרגע</div>
-          <p className={`text-xs ${t.muted}`}>
-            תכנן מסלול על גבי רשת הדרכים והשבילים או ייבא קובץ GPX, KML או TWL.
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            {onOpenRoutePlanner && (
-              <button
-                onClick={onOpenRoutePlanner}
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
-              >
-                <Plus className="w-4 h-4" />
-                <span>תכנן מסלול חדש</span>
-              </button>
-            )}
-            {onOpenImporter && (
-              <button
-                onClick={onOpenImporter}
-                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
-              >
-                <FileUp className="w-4 h-4" />
-                <span>ייבא מסלול למכשיר</span>
-              </button>
-            )}
-          </div>
+        </>
+      )}
+
+      {!route && backgroundRouteIds.length > 0 && onClearBackgroundRoutes && (
+        <div className="flex items-center justify-between gap-2 text-[11px]">
+          <span className="px-2.5 py-1 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-500 font-semibold flex items-center gap-1.5">
+            <span>מוצג ברקע ({backgroundRouteIds.length})</span>
+            <button
+              type="button"
+              onClick={onClearBackgroundRoutes}
+              className="underline font-bold"
+            >
+              נקה רקע
+            </button>
+          </span>
         </div>
       )}
 
-      {/* Selected Route Telemetry, Edit Strip, Waypoints, Elevation Chart & Actions */}
+      {/* Selected Route Telemetry, Shared Attribution, Edit Strip, Waypoints, Elevation Chart & Actions */}
       {route && (
         <>
-          {route.visible === false && (
-            <div className="px-3 py-1.5 rounded-xl border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-semibold flex items-center justify-between gap-2">
-              <span>המסלול מוסתר כרגע על המפה</span>
-              {onToggleRouteVisibility && (
-                <button
-                  type="button"
-                  onClick={() => onToggleRouteVisibility(route.id)}
-                  className="underline font-bold"
-                >
-                  הצג במפה
-                </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span
+                className={`px-2.5 py-1 rounded-full border font-semibold ${
+                  routeDisplayMode === 'navigating'
+                    ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500'
+                    : 'border-pink-500/40 bg-pink-500/10 text-pink-500'
+                }`}
+              >
+                {routeDisplayMode === 'navigating'
+                  ? 'מוצג במפה • ניווט פעיל'
+                  : 'מוצג במפה (יוסתר בסגירת החלונית)'}
+              </span>
+
+              {isSharedRoute && (
+                <span className="px-2.5 py-1 rounded-full border border-violet-500/40 bg-violet-500/10 text-violet-400 font-semibold inline-flex items-center gap-1">
+                  <Users className="w-3 h-3 shrink-0" />
+                  <span>
+                    שותף ע״י:{' '}
+                    {route.sharedByName ||
+                      route.sharedByEmail ||
+                      route.ownerDisplayName ||
+                      route.ownerEmail ||
+                      'משתמש NavApp'}
+                    {' • קריאה בלבד'}
+                  </span>
+                </span>
               )}
             </div>
-          )}
+
+            {backgroundRouteIds.length > 0 && onClearBackgroundRoutes && (
+              <span className="px-2.5 py-1 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-500 font-semibold flex items-center gap-1.5">
+                <span>מוצג ברקע ({backgroundRouteIds.length})</span>
+                <button
+                  type="button"
+                  onClick={onClearBackgroundRoutes}
+                  className="underline font-bold"
+                >
+                  נקה רקע
+                </button>
+              </span>
+            )}
+          </div>
 
           <div className={`grid grid-cols-4 gap-2 text-xs p-2.5 rounded-xl border ${t.subCard}`}>
             <div>
@@ -926,86 +1364,182 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             </div>
           </div>
 
-          {/* Route Editing Bar: Color, Reverse Direction, Edit Waypoints */}
-          {(onChangeRouteColor || onReverseRoute || onEditRouteInPlanner) && (
-            <div className="space-y-1.5">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {onChangeRouteColor && (
-                  <button
-                    type="button"
-                    onClick={() => setIsColorPickerOpen((v) => !v)}
-                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
-                      isColorPickerOpen ? 'border-pink-500/70' : ''
-                    } ${t.pillBtn}`}
-                    title="שנה צבע מסלול"
-                  >
-                    <Palette className="w-3.5 h-3.5" style={{ color: activeColor }} />
-                    <span>צבע</span>
-                    <span
-                      className="w-2.5 h-2.5 rounded-full border border-white/60"
-                      style={{ backgroundColor: activeColor }}
-                    />
-                  </button>
-                )}
-
-                {onReverseRoute && (
-                  <button
-                    type="button"
-                    onClick={() => onReverseRoute(route.id)}
-                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${t.pillBtn}`}
-                    title="הפוך את כיוון המסלול"
-                  >
-                    <ArrowLeftRight className="w-3.5 h-3.5 text-sky-500" />
-                    <span>הפוך כיוון</span>
-                  </button>
-                )}
-
-                {onEditRouteInPlanner &&
-                  (route.sourceFormat === 'planned' ||
-                    (route.waypoints && route.waypoints.length >= 2)) && (
-                    <button
-                      type="button"
-                      onClick={() => onEditRouteInPlanner(route)}
-                      className="px-2.5 py-1.5 rounded-xl border border-blue-500/40 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 text-xs font-bold flex items-center gap-1.5"
-                      title="פתח לעריכת נקודות ציר במתכנן"
-                    >
-                      <PenTool className="w-3.5 h-3.5" />
-                      <span>ערוך נקודות</span>
-                    </button>
-                  )}
-              </div>
-
-              {isColorPickerOpen && onChangeRouteColor && (
-                <div
-                  className={`p-2 rounded-xl border flex items-center justify-between gap-2 ${t.subCard}`}
+          {/* Route Action Bar: Shared Read-Only Actions OR Personal Route Editing Strip */}
+          {isSharedRoute ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {onDuplicateSharedRoute && (
+                <button
+                  type="button"
+                  onClick={() => void onDuplicateSharedRoute(route)}
+                  className="px-3 py-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25 text-xs font-bold flex items-center gap-1.5"
+                  title="צור עותק אישי הניתן לעריכה במסלולים שלי"
                 >
-                  <span className={`text-xs font-semibold ${t.muted}`}>צבע במפה:</span>
-                  <div className="flex items-center gap-1.5">
-                    {ROUTE_COLOR_PALETTE.map((hex) => {
-                      const selected = activeColor.toLowerCase() === hex.toLowerCase();
-                      return (
-                        <button
-                          key={hex}
-                          type="button"
-                          onClick={() => {
-                            void onChangeRouteColor(route.id, hex);
-                            setIsColorPickerOpen(false);
-                          }}
-                          className={`w-6 h-6 rounded-full flex items-center justify-center border-2 transition-transform hover:scale-110 ${
-                            selected ? 'border-white ring-2 ring-pink-500' : 'border-white/40'
-                          }`}
-                          style={{ backgroundColor: hex }}
-                          title={`בחר צבע ${hex}`}
-                          aria-label={`בחר צבע ${hex}`}
-                        >
-                          {selected && <Check className="w-3 h-3 text-white stroke-[3]" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>שמור עותק אצלי</span>
+                </button>
+              )}
+
+              {onToggleBackgroundRoute && (
+                <button
+                  type="button"
+                  onClick={() => onToggleBackgroundRoute(route.id)}
+                  className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
+                    backgroundRouteIds.includes(route.id)
+                      ? 'border-sky-500/60 bg-sky-500/10 text-sky-500'
+                      : t.pillBtn
+                  }`}
+                  title="השאר מסלול זה מוצג ברקע בעת בחירת מסלול אחר או תכנון"
+                >
+                  {backgroundRouteIds.includes(route.id) ? (
+                    <PinOff className="w-3.5 h-3.5" />
+                  ) : (
+                    <Pin className="w-3.5 h-3.5 text-sky-500" />
+                  )}
+                  <span>
+                    {backgroundRouteIds.includes(route.id) ? 'הסר מרקע' : 'השאר ברקע'}
+                  </span>
+                </button>
+              )}
+
+              {onDismissSharedRoute && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHoveredIdx(null);
+                    setPinnedIdx(null);
+                    onHoverPoint(null);
+                    void onDismissSharedRoute(route.id);
+                  }}
+                  className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1 text-red-400 ${t.pillBtn}`}
+                  title="הסר מסלול משותף זה מהרשימה המקומית שלך"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>הסר מהרשימה</span>
+                </button>
               )}
             </div>
+          ) : (
+            (onChangeRouteColor ||
+              onReverseRoute ||
+              onEditRouteInPlanner ||
+              onToggleBackgroundRoute ||
+              onShareRoute) && (
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {onShareRoute && (
+                    <button
+                      type="button"
+                      onClick={() => onShareRoute(route)}
+                      className="px-2.5 py-1.5 rounded-xl border border-indigo-500/50 bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25 text-xs font-bold flex items-center gap-1.5"
+                      title="שתף מסלול עם משתמש NavApp או כתובת Gmail"
+                    >
+                      <Share2 className="w-3.5 h-3.5" />
+                      <span>
+                        {(route.sharedWith?.length || 0) > 0
+                          ? `שתף (${route.sharedWith!.length})`
+                          : 'שתף'}
+                      </span>
+                    </button>
+                  )}
+                  {onChangeRouteColor && (
+                    <button
+                      type="button"
+                      onClick={() => setIsColorPickerOpen((v) => !v)}
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
+                        isColorPickerOpen ? 'border-pink-500/70' : ''
+                      } ${t.pillBtn}`}
+                      title="שנה צבע מסלול"
+                    >
+                      <Palette className="w-3.5 h-3.5" style={{ color: activeColor }} />
+                      <span>צבע</span>
+                      <span
+                        className="w-2.5 h-2.5 rounded-full border border-white/60"
+                        style={{ backgroundColor: activeColor }}
+                      />
+                    </button>
+                  )}
+
+                  {onReverseRoute && (
+                    <button
+                      type="button"
+                      onClick={() => onReverseRoute(route.id)}
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${t.pillBtn}`}
+                      title="הפוך את כיוון המסלול"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5 text-sky-500" />
+                      <span>הפוך כיוון</span>
+                    </button>
+                  )}
+
+                  {onToggleBackgroundRoute && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleBackgroundRoute(route.id)}
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
+                        backgroundRouteIds.includes(route.id)
+                          ? 'border-sky-500/60 bg-sky-500/10 text-sky-500'
+                          : t.pillBtn
+                      }`}
+                      title="השאר מסלול זה מוצג ברקע בעת בחירת מסלול אחר או תכנון"
+                    >
+                      {backgroundRouteIds.includes(route.id) ? (
+                        <PinOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Pin className="w-3.5 h-3.5 text-sky-500" />
+                      )}
+                      <span>
+                        {backgroundRouteIds.includes(route.id) ? 'הסר מרקע' : 'השאר ברקע'}
+                      </span>
+                    </button>
+                  )}
+
+                  {onEditRouteInPlanner &&
+                    (route.sourceFormat === 'planned' ||
+                      (route.waypoints && route.waypoints.length >= 2)) && (
+                      <button
+                        type="button"
+                        onClick={() => onEditRouteInPlanner(route)}
+                        className="px-2.5 py-1.5 rounded-xl border border-blue-500/40 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 text-xs font-bold flex items-center gap-1.5"
+                        title="פתח לעריכת נקודות ציר במתכנן"
+                      >
+                        <PenTool className="w-3.5 h-3.5" />
+                        <span>ערוך נקודות</span>
+                      </button>
+                    )}
+                </div>
+
+                {isColorPickerOpen && onChangeRouteColor && (
+                  <div
+                    className={`p-2 rounded-xl border flex items-center justify-between gap-2 ${t.subCard}`}
+                  >
+                    <span className={`text-xs font-semibold ${t.muted}`}>צבע במפה:</span>
+                    <div className="flex items-center gap-1.5">
+                      {ROUTE_COLOR_PALETTE.map((hex) => {
+                        const selected = activeColor.toLowerCase() === hex.toLowerCase();
+                        return (
+                          <button
+                            key={hex}
+                            type="button"
+                            onClick={() => {
+                              void onChangeRouteColor(route.id, hex);
+                              setIsColorPickerOpen(false);
+                            }}
+                            className={`w-6 h-6 rounded-full flex items-center justify-center border-2 transition-transform hover:scale-110 ${
+                              selected ? 'border-white ring-2 ring-pink-500' : 'border-white/40'
+                            }`}
+                            style={{ backgroundColor: hex }}
+                            title={`בחר צבע ${hex}`}
+                            aria-label={`בחר צבע ${hex}`}
+                          >
+                            {selected && <Check className="w-3 h-3 text-white stroke-[3]" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
           )}
 
           {/* Route Points / Waypoints Dropdown List */}
@@ -1015,7 +1549,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                 type="button"
                 onClick={() => {
                   setIsPointsMenuOpen(!isPointsMenuOpen);
-                  setIsRoutesMenuOpen(false);
                 }}
                 aria-expanded={isPointsMenuOpen}
                 className={`w-full px-3 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 transition-colors ${t.subCard} hover:border-pink-500/70`}
@@ -1091,7 +1624,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             </button>
 
             <button
-              onClick={() => handleExportGpx(route)}
+              onClick={() => void handleExportGpx(route)}
               className={`px-3 py-2.5 rounded-xl border text-xs font-bold flex items-center gap-1 ${t.pillBtn}`}
               title="ייצא כקובץ GPX"
             >
@@ -1099,7 +1632,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               <span>GPX</span>
             </button>
 
-            {onDeleteRoute && (
+            {!isSharedRoute && onDeleteRoute && (
               <button
                 onClick={() => {
                   setHoveredIdx(null);

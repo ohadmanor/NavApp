@@ -11,6 +11,7 @@ import {
 } from '../preferences/UserStateSyncService';
 import { DEFAULT_LAYER_VISIBILITY } from '../style/israelOutdoorStyle';
 import { BUILT_IN_USER_ICONS } from '../navigation/UserLocationIconService';
+import { isCapacitorNativePlatform } from '../firebase/AuthService';
 
 function createMemoryLocalStorage(): Storage {
   const store = new Map<string, string>();
@@ -203,5 +204,28 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
 
     const rules = fs.readFileSync('firestore.rules', 'utf-8');
     expect(rules).toContain('/planing_tracks/{userId}/settings/{settingId}');
+  });
+
+  it('configures Android WebView multi-window OAuth popup handling without navigating main WebView to blank handler', () => {
+    vi.stubGlobal('window', {});
+    expect(isCapacitorNativePlatform()).toBe(false);
+    vi.stubGlobal('window', { Capacitor: { isNativePlatform: () => true } });
+    expect(isCapacitorNativePlatform()).toBe(true);
+
+    const mainActivitySrc = fs.readFileSync(
+      'android/app/src/main/java/com/navapp/outdoor/israel/MainActivity.java',
+      'utf-8'
+    );
+    expect(mainActivitySrc).toContain('setSupportMultipleWindows(true)');
+    expect(mainActivitySrc).toContain('setAcceptThirdPartyCookies');
+    expect(mainActivitySrc).toContain('new NavAppWebChromeClient');
+
+    const chromeClientSrc = fs.readFileSync(
+      'android/app/src/main/java/com/navapp/outdoor/israel/NavAppWebChromeClient.java',
+      'utf-8'
+    );
+    expect(chromeClientSrc).toContain('onCreateWindow');
+    expect(chromeClientSrc).toContain('onCloseWindow');
+    expect(chromeClientSrc).toContain('WebViewTransport');
   });
 });

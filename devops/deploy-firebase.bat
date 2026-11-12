@@ -31,8 +31,8 @@ if exist "data\Israel.offroad.pois.geojson" copy /Y "data\Israel.offroad.pois.ge
 if exist "data\Israel.search.idx" copy /Y "data\Israel.search.idx" "dist\data\Israel.search.idx" >nul
 echo       [OK] Ready to deploy web app code.
 
-echo [4/4] Deploying Web App to Firebase Hosting (Code only - Map data is independent)...
-call npx.cmd firebase-tools deploy --only hosting:app
+echo [4/4] Deploying Firestore Rules/Indexes + Web App to Firebase Hosting...
+call npx.cmd firebase-tools deploy --only firestore,hosting:app
 if errorlevel 1 (
     echo.
     echo [INFO] If you are not logged into Firebase CLI yet, run:

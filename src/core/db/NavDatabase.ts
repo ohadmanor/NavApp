@@ -50,6 +50,24 @@ export interface PlannedWaypoint {
 }
 
 export type CloudSyncStatus = 'local-only' | 'pending' | 'synced' | 'error';
+export type RouteOwnership = 'mine' | 'shared';
+
+export interface RouteShareRecipient {
+  uid?: string | null;
+  email: string;
+  displayName?: string | null;
+  photoURL?: string | null;
+  sharedAt: string;
+}
+
+export interface RoutePayloadRecord {
+  id: string;
+  geojson: GeoJSON.FeatureCollection;
+  elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
+  waypoints?: PlannedWaypoint[];
+  gpxXml?: string;
+  updatedAt: string;
+}
 
 export interface SavedRouteRecord {
   id: string;
@@ -65,11 +83,22 @@ export interface SavedRouteRecord {
   color: string;
   colorCustomized?: boolean;
   visible: boolean;
+  bounds?: [number, number, number, number];
+  hasFullPayload?: boolean;
   geojson: GeoJSON.FeatureCollection;
   elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
   gpxXml?: string;
+  ownership?: RouteOwnership;
   ownerUid?: string | null;
   ownerEmail?: string | null;
+  ownerDisplayName?: string | null;
+  sharedByUid?: string | null;
+  sharedByName?: string | null;
+  sharedByEmail?: string | null;
+  sharedForUid?: string | null;
+  sharedWith?: RouteShareRecipient[];
+  sharedWithUids?: string[];
+  sharedWithEmails?: string[];
   cloudSyncStatus?: CloudSyncStatus;
   cloudStoragePath?: string;
   cloudJsonPath?: string;
@@ -96,10 +125,48 @@ export interface SearchIndexCacheRecord {
   totalFeatures: number;
 }
 
+function computeGeoJsonBounds(
+  geojson?: GeoJSON.FeatureCollection | null
+): [number, number, number, number] | undefined {
+  if (!geojson?.features?.length) return undefined;
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+
+  const visitCoord = (c: unknown) => {
+    if (!Array.isArray(c) || c.length < 2) return;
+    const lon = Number(c[0]);
+    const lat = Number(c[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  };
+
+  for (const f of geojson.features) {
+    const geom = f.geometry;
+    if (!geom) continue;
+    if (geom.type === 'LineString') {
+      geom.coordinates.forEach(visitCoord);
+    } else if (geom.type === 'MultiLineString') {
+      geom.coordinates.forEach((ring) => ring.forEach(visitCoord));
+    } else if (geom.type === 'Point') {
+      visitCoord(geom.coordinates);
+    }
+  }
+
+  return Number.isFinite(minLon) && Number.isFinite(minLat)
+    ? [minLon, minLat, maxLon, maxLat]
+    : undefined;
+}
+
 export class NavDatabase extends Dexie {
   mapRegistry!: Table<MapArchiveRecord, string>;
   pois!: Table<PoiRecord, string>;
   routes!: Table<SavedRouteRecord, string>;
+  routePayloads!: Table<RoutePayloadRecord, string>;
   tracks!: Table<RecordedTrackRecord, string>;
   searchIndexCache!: Table<SearchIndexCacheRecord, string>;
 
@@ -124,6 +191,61 @@ export class NavDatabase extends Dexie {
       tracks: 'id, startedAt',
       searchIndexCache: 'fingerprint, createdUtc',
     });
+    this.version(4)
+      .stores({
+        mapRegistry: 'id, role, storageKind, createdUtc',
+        pois: 'id, category, subcategory, nameHe, nameEn, source',
+        routes:
+          'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
+        routePayloads: 'id, updatedAt',
+        tracks: 'id, startedAt',
+        searchIndexCache: 'fingerprint, createdUtc',
+      })
+      .upgrade(async (tx) => {
+        const routesTable = tx.table<SavedRouteRecord, string>('routes');
+        const payloadsTable = tx.table<RoutePayloadRecord, string>('routePayloads');
+        const existing = await routesTable.toArray();
+        if (existing.length === 0) return;
+
+        const payloads: RoutePayloadRecord[] = [];
+        const leanRoutes: SavedRouteRecord[] = [];
+
+        for (const r of existing) {
+          const bounds = r.bounds || computeGeoJsonBounds(r.geojson);
+          const updatedAt = r.updatedAt || r.createdAt || new Date().toISOString();
+          if (
+            (r.geojson?.features && r.geojson.features.length > 0) ||
+            (r.elevationProfile && r.elevationProfile.length > 0) ||
+            r.gpxXml ||
+            (r.waypoints && r.waypoints.length > 0)
+          ) {
+            payloads.push({
+              id: r.id,
+              geojson: r.geojson || { type: 'FeatureCollection', features: [] },
+              elevationProfile: r.elevationProfile || [],
+              waypoints: r.waypoints,
+              gpxXml: r.gpxXml,
+              updatedAt,
+            });
+          }
+          leanRoutes.push({
+            ...r,
+            bounds,
+            ownership: r.ownership || 'mine',
+            hasFullPayload: false,
+            geojson: { type: 'FeatureCollection', features: [] },
+            elevationProfile: [],
+            waypoints: undefined,
+            gpxXml: undefined,
+            updatedAt,
+          });
+        }
+
+        if (payloads.length > 0) {
+          await payloadsTable.bulkPut(payloads);
+        }
+        await routesTable.bulkPut(leanRoutes);
+      });
   }
 }
 

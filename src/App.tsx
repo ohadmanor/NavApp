@@ -35,6 +35,10 @@ import {
 } from './core/style/israelOutdoorStyle';
 import { PoiManager, getPoiSortPriority } from './core/pois/PoiManager';
 import { RouteManager, resolveRouteDisplayColor } from './core/navigation/RouteManager';
+import {
+  resolveMapRouteDisplay,
+  type RouteDisplayContext,
+} from './core/navigation/RouteDisplayPolicy';
 import { carSyncService } from './core/car/CarSyncService';
 import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsService';
 import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
@@ -64,6 +68,7 @@ import type { SearchFilterCategory } from './core/search/searchTaxonomy';
 import {
   db,
   type PoiRecord,
+  type RouteShareRecipient,
   type SavedRouteRecord,
   type PlannedWaypoint,
 } from './core/db/NavDatabase';
@@ -81,11 +86,14 @@ import {
   PlannedTracksCloudService,
   getDeletedPlannedRouteIds,
   markPlannedRouteDeleted,
+  markSharedRouteDismissed,
 } from './core/firebase/PlannedTracksCloudService';
+import { UserDirectoryService } from './core/firebase/UserDirectoryService';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
 import { MapStorageModal } from './components/maps-manager/MapStorageModal';
 import { ElevationProfileDrawer } from './components/navigation/ElevationProfileDrawer';
+import { ShareRouteModal } from './components/navigation/ShareRouteModal';
 import { TrackRecorderPanel, formatDuration } from './components/navigation/TrackRecorderPanel';
 import {
   RoutePlannerPanel,
@@ -111,6 +119,26 @@ type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
 type MobileOverlayMode = 'poi' | 'layers' | 'add-poi' | 'plan-route' | 'user-icon' | null;
 type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'user-icon' | null;
+
+const LAST_AUTH_UID_STORAGE_KEY = 'navapp.lastAuthUid.v1';
+
+function readStoredLastAuthUid(): string | null {
+  try {
+    return window.localStorage.getItem(LAST_AUTH_UID_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredLastAuthUid(uid: string | null): void {
+  try {
+    if (uid) {
+      window.localStorage.setItem(LAST_AUTH_UID_STORAGE_KEY, uid);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 interface PlanOverlayState {
   active: boolean;
@@ -238,6 +266,8 @@ export const App: React.FC = () => {
   // Routes & Active Navigation
   const [routes, setRoutes] = useState<SavedRouteRecord[]>([]);
   const [activeRoute, setActiveRoute] = useState<SavedRouteRecord | null>(null);
+  const [shareModalRouteId, setShareModalRouteId] = useState<string | null>(null);
+  const [unseenSharedCount, setUnseenSharedCount] = useState(0);
   const [isNavigatingRoute, setIsNavigatingRoute] = useState(false);
   const [offRouteWarning, setOffRouteWarning] = useState<number | null>(null);
   const [remainingDistKm, setRemainingDistKm] = useState<number | null>(null);
@@ -308,6 +338,9 @@ export const App: React.FC = () => {
   const [isRoutingLeg, setIsRoutingLeg] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  const [pinnedBackgroundRouteIds, setPinnedBackgroundRouteIds] = useState<string[]>([]);
+  const [showBackgroundInPlanner, setShowBackgroundInPlanner] = useState<boolean>(true);
+  const [bgHydrationSeq, setBgHydrationSeq] = useState<number>(0);
   const [planElevStats, setPlanElevStats] = useState<{ ascent: number; descent: number }>({
     ascent: 0,
     descent: 0,
@@ -332,6 +365,42 @@ export const App: React.FC = () => {
   const isPlanningRouteMode =
     (!isMobile && desktopDrawer === 'plan-route') ||
     (isMobile && mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'plan-route');
+
+  const isRoutesUiOpen =
+    (!isMobile && desktopDrawer === 'routes') ||
+    (isMobile &&
+      mobileDisplayMode === 'planning' &&
+      !mobilePlanningOverlay &&
+      mobileTab === 'routes');
+
+  const routeDisplayContext = useMemo<RouteDisplayContext>(
+    () => ({
+      isPlanning: isPlanningRouteMode,
+      isEditing: isPlanningRouteMode && Boolean(editingRouteId),
+      isSelecting: isRoutesUiOpen,
+      isNavigating: isNavigatingRoute && Boolean(activeRoute),
+      editingRouteId,
+      pinnedBackgroundIds: pinnedBackgroundRouteIds,
+      showBackgroundWhilePlanning: showBackgroundInPlanner,
+    }),
+    [
+      isPlanningRouteMode,
+      editingRouteId,
+      isRoutesUiOpen,
+      isNavigatingRoute,
+      activeRoute,
+      pinnedBackgroundRouteIds,
+      showBackgroundInPlanner,
+    ]
+  );
+
+  const resolvedRouteDisplay = useMemo(
+    () => resolveMapRouteDisplay(routes, activeRoute, routeDisplayContext),
+    [routes, activeRoute, routeDisplayContext]
+  );
+
+  const routeDisplayContextRef = useRef<RouteDisplayContext>(routeDisplayContext);
+  routeDisplayContextRef.current = routeDisplayContext;
 
   const editingRouteColor = useMemo(() => {
     if (!editingRouteId) return undefined;
@@ -633,17 +702,97 @@ export const App: React.FC = () => {
   }, [recordCameraIfChanged]);
 
   // Sync pending planned routes and cross-platform user position/config when signed in & online
+  const resetRouteSessionState = useCallback(() => {
+    RouteManager.clearHydratedCache();
+    setActiveRoute(null);
+    setShareModalRouteId(null);
+    setUnseenSharedCount(0);
+    setIsNavigatingRoute(false);
+    setOffRouteWarning(null);
+    setRemainingDistKm(null);
+    setPinnedBackgroundRouteIds([]);
+    editingRouteIdRef.current = null;
+    setEditingRouteId(null);
+    setPlanRouteName('');
+    setPlanWaypoints([]);
+    setPlanLegs([]);
+    setPlanPreviewPoint(null);
+    setPlanCursorCoord(null);
+    setDisconnectedCandidate(null);
+  }, []);
+
+  // Scoped route ownership isolation + Cloud sync on sign-in / user switch / sign-out
+  const prevAuthUidRef = useRef<string | null>(currentUser?.uid ?? null);
   useEffect(() => {
-    if (!currentUser || !isOnline) return;
     let cancelled = false;
-    setIsSyncingCloud(true);
+    const nextUid = currentUser?.uid ?? null;
+    const prevUid = prevAuthUidRef.current;
+    prevAuthUidRef.current = nextUid;
+    const prevStoredUid = readStoredLastAuthUid();
+
+    if (!currentUser) {
+      // Signed out: immediately hide/purge any signed-in or shared routes
+      if (prevUid) {
+        writeStoredLastAuthUid(prevUid);
+        resetRouteSessionState();
+        setRoutes((prev) => prev.filter((r) => RouteManager.isRouteVisibleForUser(r, null)));
+      }
+      void RouteManager.purgeOtherUsersCachedRoutes(null).then(async () => {
+        if (cancelled) return;
+        const anonRoutes = (await RouteManager.listRouteSummaries(null)).filter(
+          (r) => !deletedRouteIdsRef.current.has(r.id)
+        );
+        if (!cancelled) {
+          setRoutes(anonRoutes);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const switchedFromAnotherUser =
+      (Boolean(prevUid) && prevUid !== nextUid) ||
+      (Boolean(prevStoredUid) && prevStoredUid !== nextUid);
+
+    if (switchedFromAnotherUser) {
+      resetRouteSessionState();
+      deletedRouteIdsRef.current.clear();
+      try {
+        window.localStorage.removeItem('navapp.deletedPlannedRoutes.v1');
+        window.localStorage.removeItem('navapp.dismissedSharedRoutes.v1');
+      } catch {
+        // Ignore storage errors
+      }
+      setRoutes((prev) => prev.filter((r) => RouteManager.isRouteVisibleForUser(r, nextUid)));
+    }
+    writeStoredLastAuthUid(nextUid);
 
     (async () => {
       try {
-        const [mergedState, syncedCount, downloaded] = await Promise.all([
+        if (switchedFromAnotherUser) {
+          await RouteManager.purgeOtherUsersCachedRoutes(nextUid);
+        } else {
+          await RouteManager.claimUnownedRoutesForUser(currentUser);
+        }
+        if (cancelled) return;
+
+        const scopedInitial = (await RouteManager.listRouteSummaries(nextUid)).filter(
+          (r) => !deletedRouteIdsRef.current.has(r.id)
+        );
+        if (!cancelled) {
+          setRoutes(scopedInitial);
+        }
+
+        if (!isOnline) return;
+        setIsSyncingCloud(true);
+
+        const [mergedState, syncedCount, downloaded, sharedRes] = await Promise.all([
           UserStateSyncService.pullAndMergeCloudState(currentUser),
           PlannedTracksCloudService.syncPendingRoutesForUser(currentUser),
           PlannedTracksCloudService.fetchUserPlannedRoutes(currentUser),
+          PlannedTracksCloudService.fetchSharedWithMeRoutes(currentUser),
+          UserDirectoryService.registerCurrentUser(currentUser),
         ]);
         if (cancelled) return;
 
@@ -655,11 +804,18 @@ export const App: React.FC = () => {
           setLastSyncedAt(mergedState.merged.lastSyncedAt || new Date().toISOString());
         }
 
-        if (syncedCount > 0 || downloaded.length > 0) {
+        if (
+          syncedCount > 0 ||
+          downloaded.length > 0 ||
+          sharedRes.newlyArrived.length > 0 ||
+          sharedRes.revokedIds.length > 0
+        ) {
           if (deletedRouteIdsRef.current.size > 0) {
-            await db.routes.bulkDelete(Array.from(deletedRouteIdsRef.current));
+            const delIds = Array.from(deletedRouteIdsRef.current);
+            await db.routes.bulkDelete(delIds);
+            await db.routePayloads.bulkDelete(delIds).catch(() => undefined);
           }
-          const all = (await db.routes.toArray()).filter(
+          const all = (await RouteManager.listRouteSummaries(nextUid)).filter(
             (r) => !deletedRouteIdsRef.current.has(r.id)
           );
           if (!cancelled) {
@@ -667,7 +823,20 @@ export const App: React.FC = () => {
             if (syncedCount > 0) {
               showToast(`סונכרנו ${syncedCount} מסלולים מתוכננים ל-Firebase`);
             }
+            if (sharedRes.newlyArrived.length > 0) {
+              setUnseenSharedCount((c) => c + sharedRes.newlyArrived.length);
+              const first = sharedRes.newlyArrived[0];
+              const sender = first.sharedByName || first.sharedByEmail || 'משתמש NavApp';
+              showToast(
+                sharedRes.newlyArrived.length === 1
+                  ? `${sender} שיתף איתך מסלול: ${first.name}`
+                  : `התקבלו ${sharedRes.newlyArrived.length} מסלולים משותפים חדשים`
+              );
+            }
           }
+        }
+        if (sharedRes.error && !cancelled) {
+          console.warn('[NavApp] Shared routes fetch error:', sharedRes.error);
         }
       } catch (err) {
         console.warn('[NavApp] Planned tracks cloud sync warning:', err);
@@ -678,16 +847,66 @@ export const App: React.FC = () => {
       }
     })();
 
+    if (!isOnline) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const unsubRemoteState = UserStateSyncService.subscribeRemoteState(currentUser, (remoteRes) => {
       if (cancelled) return;
       applyRemoteMergedState(remoteRes);
     });
 
+    let sharedErrorNotified = false;
+    const unsubSharedRoutes = PlannedTracksCloudService.subscribeSharedWithMeRoutes(
+      currentUser,
+      (event) => {
+        if (cancelled) return;
+        void RouteManager.listRouteSummaries(nextUid).then((all) => {
+          if (cancelled) return;
+          setRoutes(all.filter((r) => !deletedRouteIdsRef.current.has(r.id)));
+        });
+
+        if (
+          event.revokedIds.length > 0 &&
+          activeRouteRef.current &&
+          event.revokedIds.includes(activeRouteRef.current.id) &&
+          !isNavigationActiveRef.current
+        ) {
+          setActiveRoute(null);
+          showToast('הגישה למסלול המשותף בוטלה ע״י הבעלים');
+        }
+
+        if (event.newlyArrived.length > 0) {
+          setUnseenSharedCount((c) => c + event.newlyArrived.length);
+          const first = event.newlyArrived[0];
+          const sender = first.sharedByName || first.sharedByEmail || 'משתמש NavApp';
+          showToast(
+            event.newlyArrived.length === 1
+              ? `${sender} שיתף איתך מסלול: ${first.name}`
+              : `התקבלו ${event.newlyArrived.length} מסלולים משותפים חדשים`
+          );
+        }
+      },
+      (errMsg) => {
+        if (cancelled || sharedErrorNotified) return;
+        sharedErrorNotified = true;
+        console.warn('[NavApp] Shared routes subscription error:', errMsg);
+        if (errMsg.includes('failed-precondition') || errMsg.includes('not ready yet')) {
+          showToast('אינדקס השיתוף ב-Firebase עדיין בבנייה בענן — יתעדכן אוטומטית כשהבנייה תסתיים');
+        } else if (errMsg.includes('permission-denied')) {
+          showToast('שגיאת הרשאות בטעינת מסלולים משותפים מ-Firestore');
+        }
+      }
+    );
+
     return () => {
       cancelled = true;
       unsubRemoteState();
+      unsubSharedRoutes();
     };
-  }, [currentUser, isOnline, showToast, applyRemoteMergedState]);
+  }, [currentUser, isOnline, showToast, applyRemoteMergedState, resetRouteSessionState]);
 
   // Toggle MapLibre doubleClickZoom & crosshair cursor while Route Planning mode is active
   useEffect(() => {
@@ -1291,7 +1510,8 @@ export const App: React.FC = () => {
       liveTrack: Array<[number, number]>,
       currentTheme: MapTheme,
       currentPlan: PlanOverlayState,
-      highlightedPoi: PoiRecord | null
+      highlightedPoi: PoiRecord | null,
+      currentDisplayCtx: RouteDisplayContext
     ) => {
       try {
         if (!map.getStyle()) return;
@@ -1325,9 +1545,13 @@ export const App: React.FC = () => {
           currentTheme === 'topo-dark' ? '#f9a8d4' : '#831843',
         ];
 
+        const resolveOverlayRoute = (r: SavedRouteRecord): SavedRouteRecord =>
+          RouteManager.isHydratedRoute(r) ? r : RouteManager.getCachedFullRoute(r.id) || r;
+
         const normalizeFeaturesForRoute = (r: SavedRouteRecord): GeoJSON.Feature[] => {
-          const feats = r.geojson?.features || [];
-          const resolvedColor = resolveRouteDisplayColor(r);
+          const hydrated = resolveOverlayRoute(r);
+          const feats = hydrated.geojson?.features || [];
+          const resolvedColor = resolveRouteDisplayColor(hydrated);
           return feats.map((f) => ({
             ...f,
             properties: {
@@ -1337,14 +1561,12 @@ export const App: React.FC = () => {
           }));
         };
 
-        const editingHiddenId = currentPlan.active ? currentPlan.editingRouteId : null;
+        const resolvedDisplay = resolveMapRouteDisplay(allRoutes, currentRoute, currentDisplayCtx);
 
-        // Other visible saved routes (renders full multi-route / multi-segment GPX paths clearly)
-        const secondaryFeatures = allRoutes
-          .filter(
-            (r) => r.visible !== false && r.id !== currentRoute?.id && r.id !== editingHiddenId
-          )
-          .flatMap((r) => normalizeFeaturesForRoute(r));
+        // Background reference routes (only rendered while planning/comparing when explicitly pinned)
+        const secondaryFeatures = resolvedDisplay.backgroundRoutesToDisplay.flatMap((r) =>
+          normalizeFeaturesForRoute(r)
+        );
         const savedRoutesGeoJson: GeoJSON.FeatureCollection = {
           type: 'FeatureCollection',
           features: secondaryFeatures,
@@ -1379,17 +1601,20 @@ export const App: React.FC = () => {
           });
         }
 
-        // Active Route (respects route.visible toggle and hides stale copy while editing waypoints)
-        const isActiveRouteVisible = Boolean(
-          currentRoute && currentRoute.visible !== false && currentRoute.id !== editingHiddenId
-        );
-        const routeGeoJson: GeoJSON.FeatureCollection =
-          isActiveRouteVisible && currentRoute
-            ? {
-                type: 'FeatureCollection',
-                features: normalizeFeaturesForRoute(currentRoute),
-              }
-            : { type: 'FeatureCollection', features: [] };
+        // Active Route (deterministic display policy: Planning/Selecting/Editing/Navigating only)
+        const displayActiveRoute = resolvedDisplay.activeRouteToDisplay
+          ? resolveOverlayRoute(resolvedDisplay.activeRouteToDisplay)
+          : null;
+        if (!displayActiveRoute && hoverMarkerRef.current) {
+          hoverMarkerRef.current.remove();
+          hoverMarkerRef.current = null;
+        }
+        const routeGeoJson: GeoJSON.FeatureCollection = displayActiveRoute
+          ? {
+              type: 'FeatureCollection',
+              features: normalizeFeaturesForRoute(displayActiveRoute),
+            }
+          : { type: 'FeatureCollection', features: [] };
 
         const existingRouteSrc = map.getSource('active-route-src') as maplibregl.GeoJSONSource;
         if (existingRouteSrc) {
@@ -1423,9 +1648,9 @@ export const App: React.FC = () => {
 
         // Active Route Start / Finish Endpoint Markers (supports LineString & MultiLineString)
         const endpointFeatures: GeoJSON.Feature[] = [];
-        if (isActiveRouteVisible && currentRoute) {
+        if (displayActiveRoute) {
           const activeCoordLists: Array<Array<GeoJSON.Position>> = [];
-          for (const f of currentRoute.geojson?.features || []) {
+          for (const f of displayActiveRoute.geojson?.features || []) {
             if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 1) {
               activeCoordLists.push(f.geometry.coordinates);
             } else if (f.geometry?.type === 'MultiLineString') {
@@ -2191,7 +2416,8 @@ export const App: React.FC = () => {
         recordedCoordsRef.current,
         themeRef.current,
         planOverlayStateRef.current,
-        selectedPoiRef.current
+        selectedPoiRef.current,
+        routeDisplayContextRef.current
       );
     });
 
@@ -2424,10 +2650,23 @@ export const App: React.FC = () => {
 
     (async () => {
       try {
+        const bootUser = currentUserRef.current ?? AuthService.getCurrentUser();
+        const bootUid = bootUser?.uid ?? null;
+        const prevStoredUid = readStoredLastAuthUid();
+        if (bootUser) {
+          if (prevStoredUid && prevStoredUid !== bootUser.uid) {
+            await RouteManager.purgeOtherUsersCachedRoutes(bootUser.uid);
+          } else {
+            await RouteManager.claimUnownedRoutesForUser(bootUser);
+          }
+          writeStoredLastAuthUid(bootUser.uid);
+        } else {
+          await RouteManager.purgeOtherUsersCachedRoutes(null);
+        }
         const [{ dem, osm }, loadedPois, loadedRoutes] = await Promise.all([
           pmtilesRegistry.initializeDefaultIsraelArchives(),
           PoiManager.initializePois(),
-          RouteManager.initializeStarterRoutes(),
+          RouteManager.initializeStarterRoutes(bootUid),
         ]);
 
         if (isCancelled) return;
@@ -2446,7 +2685,9 @@ export const App: React.FC = () => {
         }
         if (loadedPois.length > 0) setPois(loadedPois);
         if (deletedRouteIdsRef.current.size > 0) {
-          await db.routes.bulkDelete(Array.from(deletedRouteIdsRef.current));
+          const delIds = Array.from(deletedRouteIdsRef.current);
+          await db.routes.bulkDelete(delIds);
+          await db.routePayloads.bulkDelete(delIds).catch(() => undefined);
         }
         const filteredRoutes = loadedRoutes.filter(
           (r) => !deletedRouteIdsRef.current.has(r.id)
@@ -2543,7 +2784,8 @@ export const App: React.FC = () => {
         recordedCoordsRef.current,
         themeRef.current,
         planOverlayStateRef.current,
-        selectedPoiRef.current
+        selectedPoiRef.current,
+        routeDisplayContextRef.current
       );
     };
 
@@ -2580,7 +2822,8 @@ export const App: React.FC = () => {
       recordedCoords,
       theme,
       planOverlayState,
-      selectedPoi
+      selectedPoi,
+      routeDisplayContext
     );
   }, [
     isMapReady,
@@ -2592,6 +2835,8 @@ export const App: React.FC = () => {
     recordedCoords,
     theme,
     planOverlayState,
+    routeDisplayContext,
+    bgHydrationSeq,
     syncOverlaySourcesToMap,
   ]);
 
@@ -2790,47 +3035,65 @@ export const App: React.FC = () => {
     (targetRoutes: SavedRouteRecord[]) => {
       const map = mapRef.current;
       if (!map || targetRoutes.length === 0) return;
+      const hydratedTargets = targetRoutes.map(
+        (r) => (RouteManager.isHydratedRoute(r) ? r : RouteManager.getCachedFullRoute(r.id) || r)
+      );
       try {
-        const allFeatures = targetRoutes.flatMap((r) => r.geojson?.features || []);
+        const allFeatures = hydratedTargets.flatMap((r) => r.geojson?.features || []);
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
         if (allFeatures.length > 0) {
           const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: allFeatures };
-          const [minX, minY, maxX, maxY] = turf.bbox(fc);
-          if (
-            Number.isFinite(minX) &&
-            Number.isFinite(minY) &&
-            Number.isFinite(maxX) &&
-            Number.isFinite(maxY)
-          ) {
-            if (Math.abs(maxX - minX) < 0.0005 && Math.abs(maxY - minY) < 0.0005) {
-              beginCameraTransition(1000);
-              map.flyTo({
-                center: [(minX + maxX) / 2, (minY + maxY) / 2],
-                zoom: 15,
-                essential: true,
-              });
-            } else {
-              beginCameraTransition(750);
-              map.fitBounds(
-                [
-                  [minX, minY],
-                  [maxX, maxY],
-                ],
-                {
-                  padding: isMobileRef.current
-                    ? { top: 115, bottom: 70, left: 40, right: 40 }
-                    : { top: 90, bottom: 90, left: 90, right: 430 },
-                  maxZoom: 15,
-                  duration: 750,
-                }
-              );
+          [minX, minY, maxX, maxY] = turf.bbox(fc);
+        } else {
+          for (const r of hydratedTargets) {
+            if (Array.isArray(r.bounds) && r.bounds.length === 4) {
+              if (r.bounds[0] < minX) minX = r.bounds[0];
+              if (r.bounds[1] < minY) minY = r.bounds[1];
+              if (r.bounds[2] > maxX) maxX = r.bounds[2];
+              if (r.bounds[3] > maxY) maxY = r.bounds[3];
             }
-            return;
           }
+        }
+
+        if (
+          Number.isFinite(minX) &&
+          Number.isFinite(minY) &&
+          Number.isFinite(maxX) &&
+          Number.isFinite(maxY)
+        ) {
+          if (Math.abs(maxX - minX) < 0.0005 && Math.abs(maxY - minY) < 0.0005) {
+            beginCameraTransition(1000);
+            map.flyTo({
+              center: [(minX + maxX) / 2, (minY + maxY) / 2],
+              zoom: 15,
+              essential: true,
+            });
+          } else {
+            beginCameraTransition(750);
+            map.fitBounds(
+              [
+                [minX, minY],
+                [maxX, maxY],
+              ],
+              {
+                padding: isMobileRef.current
+                  ? { top: 115, bottom: 70, left: 40, right: 40 }
+                  : { top: 90, bottom: 90, left: 90, right: 430 },
+                maxZoom: 15,
+                duration: 750,
+              }
+            );
+          }
+          return;
         }
       } catch {
         // Fall through to midpoint fallback
       }
-      const pts = targetRoutes[0]?.elevationProfile || [];
+      const pts = hydratedTargets[0]?.elevationProfile || [];
       if (pts.length > 0) {
         const mid = pts[Math.floor(pts.length / 2)];
         beginCameraTransition(1000);
@@ -2849,9 +3112,10 @@ export const App: React.FC = () => {
 
   const handleImportedData = useCallback(
     async (poiCount: number, createdRoutes: SavedRouteRecord[], importedPois: PoiRecord[] = []) => {
+      const activeUid = currentUserRef.current?.uid ?? AuthService.getCurrentUser()?.uid ?? null;
       const [updatedPois, updatedRoutes] = await Promise.all([
         PoiManager.getAllPois(),
-        RouteManager.initializeStarterRoutes(),
+        RouteManager.initializeStarterRoutes(activeUid),
       ]);
       setPois(updatedPois);
       setRoutes(updatedRoutes.filter((r) => !deletedRouteIdsRef.current.has(r.id)));
@@ -3121,16 +3385,32 @@ export const App: React.FC = () => {
         return;
       }
       handleHoverElevationChart(null);
-      setActiveRoute(route);
+
+      const immediateRoute = RouteManager.isHydratedRoute(route)
+        ? route
+        : RouteManager.getCachedFullRoute(route.id) || route;
+      setActiveRoute(immediateRoute);
       if (options?.flyTo !== false) {
-        handleFlyToRoute(route);
+        handleFlyToRoute(immediateRoute);
       }
-      const refreshed = await RouteManager.refreshRouteElevationsFromDem(route);
+
+      const fullRoute = RouteManager.isHydratedRoute(immediateRoute)
+        ? immediateRoute
+        : (await RouteManager.loadFullRoute(route)) || immediateRoute;
       if (selectRouteSeqRef.current !== seq || deletedRouteIdsRef.current.has(route.id)) {
         return;
       }
+      if (!RouteManager.isHydratedRoute(immediateRoute) && RouteManager.isHydratedRoute(fullRoute)) {
+        setActiveRoute((cur) => (cur?.id === fullRoute.id ? fullRoute : cur));
+      }
+
+      const refreshed = await RouteManager.refreshRouteElevationsFromDem(fullRoute);
+      if (selectRouteSeqRef.current !== seq || deletedRouteIdsRef.current.has(route.id)) {
+        return;
+      }
+      const refreshedSummary = RouteManager.splitRouteRecord(refreshed).summary;
       setActiveRoute((cur) => (cur?.id === refreshed.id ? refreshed : cur));
-      setRoutes((prev) => prev.map((r) => (r.id === refreshed.id ? refreshed : r)));
+      setRoutes((prev) => prev.map((r) => (r.id === refreshed.id ? refreshedSummary : r)));
     },
     [handleFlyToRoute, handleHoverElevationChart]
   );
@@ -3153,12 +3433,13 @@ export const App: React.FC = () => {
   const handleStartRouteNavigation = async (route: SavedRouteRecord) => {
     void NavigationHeadingService.requestCompassPermissionIfNeeded();
     const wasAlreadyNavigating = isNavigationActiveRef.current;
-    await handleSelectRoute(route, { flyTo: false });
+    const fullRoute = (await RouteManager.loadFullRoute(route)) || route;
+    await handleSelectRoute(fullRoute, { flyTo: false });
     setIsNavigatingRoute(true);
     setIsFreeNavigation(false);
     setIsFollowingUser(true);
     isFollowingUserRef.current = true;
-    setRemainingDistKm(route.distanceKm);
+    setRemainingDistKm(fullRoute.distanceKm);
     if (wasAlreadyNavigating) {
       const latestFrame = navSmootherRef.current?.getLatestFrame();
       const resolvedHeading = resolveCurrentHeading();
@@ -3219,11 +3500,21 @@ export const App: React.FC = () => {
     activeRouteRef.current = nextActive;
     setRoutes((prev) => prev.filter((r) => r.id !== routeId));
     setActiveRoute((cur) => (cur?.id === routeId ? null : cur));
+    setPinnedBackgroundRouteIds((prev) => prev.filter((id) => id !== routeId));
     if (wasActive) {
       setIsNavigatingRoute(false);
       setOffRouteWarning(null);
       setRemainingDistKm(null);
     }
+
+    const updatedDisplayCtx: RouteDisplayContext = {
+      ...routeDisplayContextRef.current,
+      isNavigating: wasActive ? false : routeDisplayContextRef.current.isNavigating,
+      isEditing:
+        editingRouteIdRef.current === null ? false : routeDisplayContextRef.current.isEditing,
+      editingRouteId: editingRouteIdRef.current,
+      pinnedBackgroundIds: pinnedBackgroundRouteIds.filter((id) => id !== routeId),
+    };
 
     if (mapRef.current && mapRef.current.getStyle()) {
       syncOverlaySourcesToMap(
@@ -3235,7 +3526,8 @@ export const App: React.FC = () => {
         recordedCoordsRef.current,
         themeRef.current,
         planOverlayStateRef.current,
-        selectedPoiRef.current
+        selectedPoiRef.current,
+        updatedDisplayCtx
       );
     }
 
@@ -3249,14 +3541,16 @@ export const App: React.FC = () => {
   const syncMutatedRouteState = useCallback(
     (updated: SavedRouteRecord | undefined, successToast?: string) => {
       if (!updated) return;
-      routesRef.current = routesRef.current.map((r) => (r.id === updated.id ? updated : r));
-      setRoutes((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+      const summary = RouteManager.splitRouteRecord(updated).summary;
+      routesRef.current = routesRef.current.map((r) => (r.id === updated.id ? summary : r));
+      setRoutes((prev) => prev.map((r) => (r.id === updated.id ? summary : r)));
       if (activeRouteRef.current?.id === updated.id) {
         activeRouteRef.current = updated;
         setActiveRoute(updated);
       }
       if (successToast) showToast(successToast);
       if (
+        updated.ownership !== 'shared' &&
         updated.sourceFormat === 'planned' &&
         updated.cloudSyncStatus === 'pending' &&
         currentUser &&
@@ -3267,8 +3561,9 @@ export const App: React.FC = () => {
           (cloudRes) => {
             if (deletedRouteIdsRef.current.has(updated.id)) return;
             const syncedRec = cloudRes.route;
-            setRoutes((prev) => prev.map((r) => (r.id === syncedRec.id ? syncedRec : r)));
-            setActiveRoute((cur) => (cur?.id === syncedRec.id ? syncedRec : cur));
+            const syncedSummary = RouteManager.splitRouteRecord(syncedRec).summary;
+            setRoutes((prev) => prev.map((r) => (r.id === syncedRec.id ? syncedSummary : r)));
+            setActiveRoute((cur) => (cur?.id === syncedRec.id ? { ...cur, ...syncedRec, geojson: cur.geojson, elevationProfile: cur.elevationProfile, waypoints: cur.waypoints, gpxXml: cur.gpxXml } : cur));
           }
         );
       }
@@ -3278,18 +3573,28 @@ export const App: React.FC = () => {
 
   const handleRenameRoute = useCallback(
     async (routeId: string, nextName: string) => {
+      const target = routesRef.current.find((r) => r.id === routeId) || activeRouteRef.current;
+      if (target?.ownership === 'shared') {
+        showToast('מסלול משותף הוא לקריאה בלבד — לחץ "שמור עותק אצלי" כדי לערוך');
+        return;
+      }
       const updated = await RouteManager.updateRouteDetails(routeId, { name: nextName });
       syncMutatedRouteState(updated, updated ? `שם המסלול עודכן ל-"${updated.name}"` : undefined);
     },
-    [syncMutatedRouteState]
+    [showToast, syncMutatedRouteState]
   );
 
   const handleChangeRouteColor = useCallback(
     async (routeId: string, color: string) => {
+      const target = routesRef.current.find((r) => r.id === routeId) || activeRouteRef.current;
+      if (target?.ownership === 'shared') {
+        showToast('מסלול משותף הוא לקריאה בלבד — לחץ "שמור עותק אצלי" כדי לערוך');
+        return;
+      }
       const updated = await RouteManager.updateRouteDetails(routeId, { color });
       syncMutatedRouteState(updated, 'צבע המסלול עודכן');
     },
-    [syncMutatedRouteState]
+    [showToast, syncMutatedRouteState]
   );
 
   const handleToggleRouteVisibility = useCallback(
@@ -3307,13 +3612,130 @@ export const App: React.FC = () => {
     [syncMutatedRouteState]
   );
 
+  const handleToggleBackgroundRoute = useCallback(
+    (routeId: string) => {
+      setPinnedBackgroundRouteIds((prev) => {
+        const exists = prev.includes(routeId);
+        const next = exists ? prev.filter((id) => id !== routeId) : [...prev, routeId];
+        showToast(
+          exists ? 'המסלול הוסר מהצגה ברקע' : 'המסלול נעוץ ברקע לתכנון והשוואת מסלולים'
+        );
+        if (!exists && !RouteManager.getCachedFullRoute(routeId)) {
+          void RouteManager.loadFullRoute(routeId).then((loaded) => {
+            if (loaded) setBgHydrationSeq((s) => s + 1);
+          });
+        }
+        return next;
+      });
+    },
+    [showToast]
+  );
+
+  const handleClearBackgroundRoutes = useCallback(() => {
+    setPinnedBackgroundRouteIds([]);
+    showToast('מסלולי הרקע נוקו מהמפה');
+  }, [showToast]);
+
   const handleReverseRoute = useCallback(
     async (routeId: string) => {
+      const target = routesRef.current.find((r) => r.id === routeId) || activeRouteRef.current;
+      if (target?.ownership === 'shared') {
+        showToast('מסלול משותף הוא לקריאה בלבד — לחץ "שמור עותק אצלי" כדי לערוך');
+        return;
+      }
       handleHoverElevationChart(null);
       const updated = await RouteManager.reverseRoute(routeId);
       syncMutatedRouteState(updated, 'כיוון המסלול הוחלף');
     },
-    [handleHoverElevationChart, syncMutatedRouteState]
+    [handleHoverElevationChart, showToast, syncMutatedRouteState]
+  );
+
+  const handleDuplicateSharedRoute = useCallback(
+    async (route: SavedRouteRecord) => {
+      const cloned = await RouteManager.duplicateRouteToMine(route, currentUser);
+      const summary = RouteManager.splitRouteRecord(cloned).summary;
+      setRoutes((prev) => [summary, ...prev]);
+      setActiveRoute(cloned);
+      showToast(`נשמר עותק אישי "${cloned.name}" בהמסלולים שלי`);
+
+      if (
+        cloned.sourceFormat === 'planned' &&
+        currentUser &&
+        isOnline &&
+        AuthService.isAvailable()
+      ) {
+        void PlannedTracksCloudService.savePlannedRouteToFirebase(cloned, currentUser).then(
+          (cloudRes) => {
+            if (deletedRouteIdsRef.current.has(cloned.id)) return;
+            const syncedSummary = RouteManager.splitRouteRecord(cloudRes.route).summary;
+            setRoutes((prev) => prev.map((r) => (r.id === syncedSummary.id ? syncedSummary : r)));
+          }
+        );
+      }
+    },
+    [currentUser, isOnline, showToast]
+  );
+
+  const handleDismissSharedRoute = useCallback(
+    async (routeId: string) => {
+      const wasActive = activeRouteRef.current?.id === routeId;
+      markSharedRouteDismissed(routeId);
+      handleHoverElevationChart(null);
+      setRoutes((prev) => prev.filter((r) => r.id !== routeId));
+      setPinnedBackgroundRouteIds((prev) => prev.filter((id) => id !== routeId));
+      if (wasActive) {
+        setActiveRoute(null);
+        setIsNavigatingRoute(false);
+        setOffRouteWarning(null);
+        setRemainingDistKm(null);
+      }
+      await RouteManager.deleteRoute(routeId);
+      showToast('המסלול המשותף הוסר מהרשימה המקומית');
+    },
+    [handleHoverElevationChart, showToast]
+  );
+
+  const shareModalRoute = useMemo(() => {
+    if (!shareModalRouteId) return null;
+    return (
+      routes.find((r) => r.id === shareModalRouteId) ||
+      (activeRoute?.id === shareModalRouteId ? activeRoute : null)
+    );
+  }, [shareModalRouteId, routes, activeRoute]);
+
+  const handleOpenShareModal = useCallback(
+    (route: SavedRouteRecord) => {
+      if (route.ownership === 'shared') {
+        showToast('ניתן לשתף רק מסלולים שבבעלותך — לחץ "שמור עותק אצלי" תחילה');
+        return;
+      }
+      setShareModalRouteId(route.id);
+    },
+    [showToast]
+  );
+
+  const handleUpdateRouteSharing = useCallback(
+    async (route: SavedRouteRecord, nextRecipients: RouteShareRecipient[]) => {
+      if (!currentUser) {
+        return {
+          synced: false,
+          route,
+          error: 'יש להתחבר לחשבון Google כדי לשתף מסלול',
+        };
+      }
+      const res = await PlannedTracksCloudService.updateRouteSharing(
+        route,
+        nextRecipients,
+        currentUser
+      );
+      const summary = RouteManager.splitRouteRecord(res.route).summary;
+      setRoutes((prev) => prev.map((r) => (r.id === summary.id ? summary : r)));
+      if (activeRouteRef.current?.id === res.route.id) {
+        setActiveRoute(res.route);
+      }
+      return res;
+    },
+    [currentUser]
   );
 
   const recomputePlanElevationStats = useCallback(
@@ -3561,7 +3983,8 @@ export const App: React.FC = () => {
           cursorCoord: null,
           disconnectedCandidate: null,
         },
-        selectedPoiRef.current
+        selectedPoiRef.current,
+        routeDisplayContextRef.current
       );
     }
   }, [syncOverlaySourcesToMap]);
@@ -3751,7 +4174,12 @@ export const App: React.FC = () => {
   );
 
   const handleEditRouteInPlanner = useCallback(
-    (route: SavedRouteRecord) => {
+    async (rawRoute: SavedRouteRecord) => {
+      if (rawRoute.ownership === 'shared') {
+        showToast('מסלול משותף הוא לקריאה בלבד — לחץ "שמור עותק אצלי" כדי לערוך');
+        return;
+      }
+      const route = (await RouteManager.loadFullRoute(rawRoute)) || rawRoute;
       handleHoverElevationChart(null);
       const mode: PlanningMode = route.planningMode || 'foot';
       const lineFeatures: Array<GeoJSON.Feature<GeoJSON.LineString>> = [];
@@ -3964,6 +4392,7 @@ export const App: React.FC = () => {
             waypoints: wps,
             ownerUid: currentUser?.uid ?? null,
             ownerEmail: currentUser?.email ?? null,
+            ownerDisplayName: currentUser?.displayName ?? null,
           })
         : await RouteManager.createAndSavePlannedRoute({
             name: finalName,
@@ -3972,12 +4401,14 @@ export const App: React.FC = () => {
             waypoints: wps,
             ownerUid: currentUser?.uid ?? null,
             ownerEmail: currentUser?.email ?? null,
+            ownerDisplayName: currentUser?.displayName ?? null,
           });
 
+      const savedSummary = RouteManager.splitRouteRecord(savedLocal).summary;
       setRoutes((prev) =>
-        prev.some((r) => r.id === savedLocal.id)
-          ? prev.map((r) => (r.id === savedLocal.id ? savedLocal : r))
-          : [...prev, savedLocal]
+        prev.some((r) => r.id === savedSummary.id)
+          ? prev.map((r) => (r.id === savedSummary.id ? savedSummary : r))
+          : [...prev, savedSummary]
       );
       setActiveRoute(savedLocal);
 
@@ -4017,8 +4448,11 @@ export const App: React.FC = () => {
               return;
             }
             const finalRecord = cloudRes.route;
-            setRoutes((prev) => prev.map((r) => (r.id === finalRecord.id ? finalRecord : r)));
-            setActiveRoute((cur) => (cur?.id === finalRecord.id ? finalRecord : cur));
+            const finalSummary = RouteManager.splitRouteRecord(finalRecord).summary;
+            setRoutes((prev) => prev.map((r) => (r.id === finalRecord.id ? finalSummary : r)));
+            setActiveRoute((cur) =>
+              cur?.id === finalRecord.id ? RouteManager.getCachedFullRoute(finalRecord.id) || finalRecord : cur
+            );
 
             if (cloudRes.synced) {
               showToast(`המסלול "${finalRecord.name}" נשמר כ-GPX וב-planing_tracks!`);
@@ -4060,16 +4494,28 @@ export const App: React.FC = () => {
   const handleSignOutGoogle = useCallback(async () => {
     setIsAuthBusy(true);
     try {
-      if (currentUser && UserStateSyncService.hasDirtyCloudChanges()) {
-        await UserStateSyncService.flushCloudPush(currentUser);
+      if (currentUser) {
+        writeStoredLastAuthUid(currentUser.uid);
+        if (isOnline) {
+          await PlannedTracksCloudService.syncPendingRoutesForUser(currentUser).catch(
+            () => undefined
+          );
+          if (UserStateSyncService.hasDirtyCloudChanges()) {
+            await UserStateSyncService.flushCloudPush(currentUser);
+          }
+        }
       }
+      resetRouteSessionState();
+      setRoutes((prev) => prev.filter((r) => RouteManager.isRouteVisibleForUser(r, null)));
       await AuthService.signOut();
+      await RouteManager.purgeOtherUsersCachedRoutes(null);
       setCurrentUser(null);
+      setRoutes(await RouteManager.listRouteSummaries(null));
       showToast('התנתקת מחשבון Google');
     } finally {
       setIsAuthBusy(false);
     }
-  }, [currentUser, showToast]);
+  }, [currentUser, isOnline, resetRouteSessionState, showToast]);
 
   const handleSyncPendingNow = useCallback(async () => {
     if (!currentUser) return;
@@ -4096,6 +4542,7 @@ export const App: React.FC = () => {
       const [count, merged] = await Promise.all([
         PlannedTracksCloudService.syncPendingRoutesForUser(currentUser),
         UserStateSyncService.pullAndMergeCloudState(currentUser),
+        UserDirectoryService.registerCurrentUser(currentUser),
       ]);
       if (merged) {
         applyRemoteMergedState(merged);
@@ -4106,7 +4553,9 @@ export const App: React.FC = () => {
           setLastSyncedAt(new Date().toISOString());
         }
       }
-      const all = (await db.routes.toArray()).filter((r) => !deletedRouteIdsRef.current.has(r.id));
+      const all = (await RouteManager.listRouteSummaries(currentUser.uid)).filter(
+        (r) => !deletedRouteIdsRef.current.has(r.id)
+      );
       setRoutes(all);
       showToast(
         count > 0
@@ -4170,8 +4619,11 @@ export const App: React.FC = () => {
       coordinates: recordedCoords,
       sourceFormat: 'drawn',
       color: '#0ea5e9',
+      ownerUid: currentUser?.uid ?? null,
+      ownerEmail: currentUser?.email ?? null,
+      ownerDisplayName: currentUser?.displayName ?? null,
     });
-    setRoutes((prev) => [...prev, saved]);
+    setRoutes((prev) => [...prev, RouteManager.splitRouteRecord(saved).summary]);
     setActiveRoute(saved);
     setIsRecordingTrack(false);
     setIsRecordingPaused(false);
@@ -4420,15 +4872,24 @@ export const App: React.FC = () => {
                       theme={theme}
                       embedded
                       isNavigating={isNavigatingRoute}
+                      routeDisplayMode={resolvedRouteDisplay.mode}
+                      backgroundRouteIds={pinnedBackgroundRouteIds}
+                      unseenSharedCount={unseenSharedCount}
                       onSelectRoute={handleSelectRoute}
                       onStartNavigation={handleStartRouteNavigation}
                       onStopNavigation={handleStopRouteNavigation}
                       onOpenImporter={() => setIsStorageOpen(true)}
                       onOpenRoutePlanner={() => setDesktopDrawer('plan-route')}
                       onDeleteRoute={handleDeleteRoute}
+                      onShareRoute={handleOpenShareModal}
+                      onViewSharedTab={() => setUnseenSharedCount(0)}
+                      onDuplicateSharedRoute={handleDuplicateSharedRoute}
+                      onDismissSharedRoute={handleDismissSharedRoute}
                       onRenameRoute={handleRenameRoute}
                       onChangeRouteColor={handleChangeRouteColor}
                       onToggleRouteVisibility={handleToggleRouteVisibility}
+                      onToggleBackgroundRoute={handleToggleBackgroundRoute}
+                      onClearBackgroundRoutes={handleClearBackgroundRoutes}
                       onReverseRoute={handleReverseRoute}
                       onEditRouteInPlanner={handleEditRouteInPlanner}
                       onClose={() => setDesktopDrawer(null)}
@@ -4437,7 +4898,15 @@ export const App: React.FC = () => {
                         handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
                       }
                       onFlyToRoute={handleFlyToRoute}
-                      onFitAllRoutes={() => fitBoundsToRoutes(routes)}
+                      onFitAllRoutes={() => {
+                        const visibleTargets = [
+                          ...(resolvedRouteDisplay.activeRouteToDisplay
+                            ? [resolvedRouteDisplay.activeRouteToDisplay]
+                            : []),
+                          ...resolvedRouteDisplay.backgroundRoutesToDisplay,
+                        ];
+                        fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
+                      }}
                     />
                   )}
 
@@ -4455,6 +4924,8 @@ export const App: React.FC = () => {
                       isSaving={isSavingPlan}
                       isEditingExisting={Boolean(editingRouteId)}
                       editingRouteColor={editingRouteColor}
+                      backgroundRoutesCount={pinnedBackgroundRouteIds.length}
+                      showBackgroundRoutes={showBackgroundInPlanner}
                       disconnectedCandidate={disconnectedCandidate}
                       currentUser={currentUser}
                       firebaseAvailable={AuthService.isAvailable()}
@@ -4467,6 +4938,8 @@ export const App: React.FC = () => {
                       onUndoLastPoint={handleUndoLastPlanPoint}
                       onRemoveWaypoint={handleRemovePlanWaypoint}
                       onToggleLegType={handleTogglePlanLegType}
+                      onToggleShowBackgroundRoutes={() => setShowBackgroundInPlanner((v) => !v)}
+                      onClearBackgroundRoutes={handleClearBackgroundRoutes}
                       onClearPlan={handleClearPlan}
                       onCancelEdit={handleCancelEditPlan}
                       onFinishAndSave={handleFinishPlanningRoute}
@@ -4514,7 +4987,7 @@ export const App: React.FC = () => {
             </div>
 
             {/* Top-Left (RTL End): Active Nav Alert + Orientation Switch + Offline Readiness + Quick Action Pills */}
-            <div className="absolute top-3 left-3 z-30 flex flex-wrap items-center gap-2 pointer-events-auto">
+            <div className="absolute top-3 left-3 z-30 max-w-[calc(100vw-408px)] flex flex-wrap items-center gap-2 pointer-events-auto">
               {isNavigatingRoute && activeRoute ? (
                 <div
                   className={`px-3.5 py-2 rounded-full border shadow-xl text-xs font-bold flex items-center gap-2 ${
@@ -4599,12 +5072,17 @@ export const App: React.FC = () => {
 
                 <button
                   onClick={() => setDesktopDrawer(desktopDrawer === 'routes' ? null : 'routes')}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors relative ${
                     desktopDrawer === 'routes' ? 'bg-emerald-600 text-white' : t.hoverRow
                   }`}
                 >
                   <RouteIcon className="w-3.5 h-3.5 text-emerald-500" />
                   <span>מסלולים</span>
+                  {unseenSharedCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-violet-600 text-white text-[10px] font-bold leading-none">
+                      +{unseenSharedCount}
+                    </span>
+                  )}
                 </button>
 
                 <button
@@ -5237,6 +5715,8 @@ export const App: React.FC = () => {
                     isSaving={isSavingPlan}
                     isEditingExisting={Boolean(editingRouteId)}
                     editingRouteColor={editingRouteColor}
+                    backgroundRoutesCount={pinnedBackgroundRouteIds.length}
+                    showBackgroundRoutes={showBackgroundInPlanner}
                     disconnectedCandidate={disconnectedCandidate}
                     currentUser={currentUser}
                     firebaseAvailable={AuthService.isAvailable()}
@@ -5249,6 +5729,8 @@ export const App: React.FC = () => {
                     onUndoLastPoint={handleUndoLastPlanPoint}
                     onRemoveWaypoint={handleRemovePlanWaypoint}
                     onToggleLegType={handleTogglePlanLegType}
+                    onToggleShowBackgroundRoutes={() => setShowBackgroundInPlanner((v) => !v)}
+                    onClearBackgroundRoutes={handleClearBackgroundRoutes}
                     onClearPlan={handleClearPlan}
                     onCancelEdit={handleCancelEditPlan}
                     onFinishAndSave={handleFinishPlanningRoute}
@@ -5304,6 +5786,9 @@ export const App: React.FC = () => {
                   theme={theme}
                   embedded
                   isNavigating={isNavigatingRoute}
+                  routeDisplayMode={resolvedRouteDisplay.mode}
+                  backgroundRouteIds={pinnedBackgroundRouteIds}
+                  unseenSharedCount={unseenSharedCount}
                   onSelectRoute={handleSelectRoute}
                   onStartNavigation={handleStartRouteNavigation}
                   onStopNavigation={handleStopRouteNavigation}
@@ -5317,9 +5802,15 @@ export const App: React.FC = () => {
                     setMobileSheetExpanded(true);
                   }}
                   onDeleteRoute={handleDeleteRoute}
+                  onShareRoute={handleOpenShareModal}
+                  onViewSharedTab={() => setUnseenSharedCount(0)}
+                  onDuplicateSharedRoute={handleDuplicateSharedRoute}
+                  onDismissSharedRoute={handleDismissSharedRoute}
                   onRenameRoute={handleRenameRoute}
                   onChangeRouteColor={handleChangeRouteColor}
                   onToggleRouteVisibility={handleToggleRouteVisibility}
+                  onToggleBackgroundRoute={handleToggleBackgroundRoute}
+                  onClearBackgroundRoutes={handleClearBackgroundRoutes}
                   onReverseRoute={handleReverseRoute}
                   onEditRouteInPlanner={handleEditRouteInPlanner}
                   onClose={() => setMobileTab('explore')}
@@ -5328,7 +5819,15 @@ export const App: React.FC = () => {
                     handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
                   }
                   onFlyToRoute={handleFlyToRoute}
-                  onFitAllRoutes={() => fitBoundsToRoutes(routes)}
+                  onFitAllRoutes={() => {
+                    const visibleTargets = [
+                      ...(resolvedRouteDisplay.activeRouteToDisplay
+                        ? [resolvedRouteDisplay.activeRouteToDisplay]
+                        : []),
+                      ...resolvedRouteDisplay.backgroundRoutesToDisplay,
+                    ];
+                    fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
+                  }}
                 />
               </div>
             ) : mobileTab === 'record' ? (
@@ -5355,6 +5854,7 @@ export const App: React.FC = () => {
                 isOpen
                 embedded
                 theme={theme}
+                currentUser={currentUser}
                 onClose={() => setMobileTab('explore')}
                 demInfo={demInfo}
                 osmInfo={osmInfo}
@@ -5440,7 +5940,20 @@ export const App: React.FC = () => {
           >
             {[
               { id: 'explore' as const, label: 'מפה', icon: <MapIcon className="w-5 h-5" /> },
-              { id: 'routes' as const, label: 'מסלולים', icon: <RouteIcon className="w-5 h-5" /> },
+              {
+                id: 'routes' as const,
+                label: 'מסלולים',
+                icon: (
+                  <span className="relative inline-flex">
+                    <RouteIcon className="w-5 h-5" />
+                    {unseenSharedCount > 0 && (
+                      <span className="absolute -top-1 -right-2 px-1 min-w-[16px] h-4 rounded-full bg-violet-600 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+                        {unseenSharedCount}
+                      </span>
+                    )}
+                  </span>
+                ),
+              },
               {
                 id: 'record' as const,
                 label: 'הקלטה',
@@ -5632,6 +6145,7 @@ export const App: React.FC = () => {
         isOpen={!isMobile && isStorageOpen}
         onClose={() => setIsStorageOpen(false)}
         theme={theme}
+        currentUser={currentUser}
         demInfo={demInfo}
         osmInfo={osmInfo}
         onArchivesUpdated={(nextDem, nextOsm) => {
@@ -5640,6 +6154,21 @@ export const App: React.FC = () => {
         }}
         onPoisAndRoutesImported={handleImportedData}
       />
+
+      {/* Route Sharing Modal (Gmail / Registered Users) */}
+      {shareModalRoute && (
+        <ShareRouteModal
+          route={shareModalRoute}
+          theme={theme}
+          currentUser={currentUser}
+          isOnline={isOnline}
+          firebaseAvailable={AuthService.isAvailable()}
+          isAuthBusy={isAuthBusy}
+          onSignInGoogle={handleSignInGoogle}
+          onUpdateRecipients={handleUpdateRouteSharing}
+          onClose={() => setShareModalRouteId(null)}
+        />
+      )}
     </div>
   );
 };

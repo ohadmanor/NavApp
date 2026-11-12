@@ -2,10 +2,13 @@ package com.navapp.outdoor.israel;
 
 import android.os.Build;
 import android.os.Bundle;
+import android.webkit.CookieManager;
 import android.webkit.ServiceWorkerClient;
 import android.webkit.ServiceWorkerController;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -24,6 +27,18 @@ public class MainActivity extends BridgeActivity {
         super.load();
         if (bridge == null) return;
         bridge.setWebViewClient(new NavAppWebViewClient(bridge, this));
+
+        WebView webView = bridge.getWebView();
+        if (webView != null) {
+            CookieManager cookieManager = CookieManager.getInstance();
+            cookieManager.setAcceptCookie(true);
+            cookieManager.setAcceptThirdPartyCookies(webView, true);
+
+            WebSettings settings = webView.getSettings();
+            settings.setSupportMultipleWindows(true);
+            settings.setJavaScriptCanOpenWindowsAutomatically(true);
+            webView.setWebChromeClient(new NavAppWebChromeClient(bridge, this));
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             try {

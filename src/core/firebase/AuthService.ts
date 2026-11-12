@@ -17,12 +17,22 @@ export interface NavUser {
 
 function mapFirebaseUser(user: User | null): NavUser | null {
   if (!user) return null;
+  const fallbackEmail =
+    user.email ||
+    (Array.isArray(user.providerData)
+      ? user.providerData.find((p) => Boolean(p?.email))?.email || null
+      : null);
   return {
     uid: user.uid,
-    email: user.email,
+    email: fallbackEmail,
     displayName: user.displayName,
     photoURL: user.photoURL,
   };
+}
+
+export function isCapacitorNativePlatform(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean((window as any).Capacitor?.isNativePlatform?.());
 }
 
 export class AuthService {
@@ -72,6 +82,9 @@ export class AuthService {
         code === 'auth/popup-blocked' ||
         code === 'auth/operation-not-supported-in-this-environment'
       ) {
+        if (isCapacitorNativePlatform()) {
+          throw new Error('לא ניתן לפתוח את חלון ההתחברות של Google כרגע — נסה שוב');
+        }
         await signInWithRedirect(services.auth, services.googleProvider);
         throw new Error('מפנה להתחברות עם חשבון Google...');
       }

@@ -14,6 +14,7 @@ import {
   LogOut,
   Loader2,
   Route as RouteIcon,
+  Layers,
 } from 'lucide-react';
 import {
   PLANNING_MODE_META,
@@ -44,6 +45,8 @@ interface RoutePlannerPanelProps {
   isSaving: boolean;
   isEditingExisting?: boolean;
   editingRouteColor?: string;
+  backgroundRoutesCount?: number;
+  showBackgroundRoutes?: boolean;
   disconnectedCandidate: SnappedPoint | null;
   currentUser: NavUser | null;
   firebaseAvailable: boolean;
@@ -56,6 +59,8 @@ interface RoutePlannerPanelProps {
   onUndoLastPoint: () => void;
   onRemoveWaypoint?: (index: number) => void;
   onToggleLegType?: (legIndex: number) => void;
+  onToggleShowBackgroundRoutes?: () => void;
+  onClearBackgroundRoutes?: () => void;
   onClearPlan: () => void;
   onCancelEdit?: () => void;
   onFinishAndSave: () => void;
@@ -88,6 +93,8 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
   isSaving,
   isEditingExisting = false,
   editingRouteColor,
+  backgroundRoutesCount = 0,
+  showBackgroundRoutes = true,
   disconnectedCandidate,
   currentUser,
   firebaseAvailable,
@@ -100,6 +107,8 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
   onUndoLastPoint,
   onRemoveWaypoint,
   onToggleLegType,
+  onToggleShowBackgroundRoutes,
+  onClearBackgroundRoutes,
   onClearPlan,
   onCancelEdit,
   onFinishAndSave,
@@ -154,6 +163,38 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Optional Background Reference Routes Toggle Strip */}
+      {backgroundRoutesCount > 0 && (
+        <div
+          className="px-2.5 py-1.5 rounded-xl border border-sky-500/40 bg-sky-500/10 text-xs flex items-center justify-between gap-2"
+        >
+          <span className="flex items-center gap-1.5 font-semibold text-sky-500">
+            <Layers className="w-3.5 h-3.5 shrink-0" />
+            <span>מסלולי ייחוס ברקע ({backgroundRoutesCount})</span>
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            {onToggleShowBackgroundRoutes && (
+              <button
+                type="button"
+                onClick={onToggleShowBackgroundRoutes}
+                className="font-bold text-sky-500 underline"
+              >
+                {showBackgroundRoutes ? 'הסתר' : 'הצג'}
+              </button>
+            )}
+            {onClearBackgroundRoutes && (
+              <button
+                type="button"
+                onClick={onClearBackgroundRoutes}
+                className="font-bold text-red-400 underline"
+              >
+                נקה
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Mode Selector: 4x4 / Foot / Bicycle */}
       <div className="grid grid-cols-3 gap-1.5">
