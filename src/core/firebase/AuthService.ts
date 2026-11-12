@@ -65,12 +65,18 @@ export class AuthService {
       return mapped;
     } catch (err: any) {
       const code = String(err?.code || '');
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        throw new Error('ההתחברות עם Google בוטלה');
+      }
       if (
         code === 'auth/popup-blocked' ||
         code === 'auth/operation-not-supported-in-this-environment'
       ) {
         await signInWithRedirect(services.auth, services.googleProvider);
         throw new Error('מפנה להתחברות עם חשבון Google...');
+      }
+      if (code === 'auth/unauthorized-domain') {
+        throw new Error('הדומיין אינו מורשה ב-Firebase Auth — הוסף אותו ב-Authorized domains');
       }
       throw err;
     }

@@ -323,6 +323,8 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             </label>
             <div className="flex gap-2">
               <input
+                id="poi-field-note"
+                name="poiNote"
                 type="text"
                 dir="auto"
                 value={noteText}

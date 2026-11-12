@@ -109,6 +109,8 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
       </div>
 
       <input
+        id="add-poi-name"
+        name="poiName"
         type="text"
         dir="auto"
         required
@@ -119,6 +121,8 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
       />
 
       <input
+        id="add-poi-desc"
+        name="poiDesc"
         type="text"
         dir="auto"
         value={descHe}

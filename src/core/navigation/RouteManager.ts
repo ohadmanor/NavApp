@@ -18,7 +18,169 @@ const LEGACY_TEST_ROUTE_IDS = [
   'route-arbel-cliff-loop',
 ];
 
-const LEGACY_PLANNED_COLORS = new Set(['#f97316', '#ec4899', '#06b6d4']);
+export const LEGACY_PLANNED_COLORS = new Set(['#f97316', '#ec4899', '#06b6d4']);
+
+export const ROUTE_COLOR_PALETTE = [
+  '#2563eb', // כחול
+  '#ec4899', // ורוד-מג׳נטה
+  '#f59e0b', // כתום-ענבר
+  '#ef4444', // אדום
+  '#9333ea', // סגול
+  '#06b6d4', // תכלת
+  '#14b8a6', // טורקיז
+] as const;
+
+export function resolveRouteDisplayColor(
+  route: Pick<SavedRouteRecord, 'color' | 'sourceFormat' | 'colorCustomized'> | null | undefined
+): string {
+  if (!route) return '#ec4899';
+  if (route.colorCustomized && route.color) {
+    return route.color === '#10b981' ? '#14b8a6' : route.color;
+  }
+  if (route.sourceFormat === 'planned') {
+    if (!route.color || LEGACY_PLANNED_COLORS.has(route.color) || route.color === '#10b981') {
+      return PLANNING_ROUTE_COLOR;
+    }
+    return route.color;
+  }
+  if (!route.color || route.color === '#10b981') {
+    return '#ec4899';
+  }
+  return route.color;
+}
+
+function interpolateSegmentElevationAtDist(
+  segCoords: Array<[number, number]>,
+  segEles: Array<number | null> | undefined,
+  targetLocalDistKm: number
+): number | null {
+  if (!segEles || segEles.length !== segCoords.length || segCoords.length < 2) {
+    return null;
+  }
+
+  const cumDist: number[] = [0];
+  for (let i = 1; i < segCoords.length; i++) {
+    const step = turf.distance(turf.point(segCoords[i - 1]), turf.point(segCoords[i]), {
+      units: 'kilometers',
+    });
+    cumDist.push(cumDist[i - 1] + step);
+  }
+
+  let prevKnownIdx = -1;
+  let nextKnownIdx = -1;
+
+  for (let i = 0; i < segCoords.length; i++) {
+    const ele = segEles[i];
+    if (typeof ele !== 'number' || !Number.isFinite(ele)) continue;
+    if (cumDist[i] <= targetLocalDistKm + 1e-6) {
+      prevKnownIdx = i;
+    }
+    if (cumDist[i] >= targetLocalDistKm - 1e-6 && nextKnownIdx === -1) {
+      nextKnownIdx = i;
+    }
+  }
+
+  if (prevKnownIdx !== -1 && nextKnownIdx !== -1) {
+    if (prevKnownIdx === nextKnownIdx) {
+      return Math.round(segEles[prevKnownIdx]!);
+    }
+    const d0 = cumDist[prevKnownIdx];
+    const d1 = cumDist[nextKnownIdx];
+    const span = d1 - d0;
+    if (span <= 1e-6) return Math.round(segEles[prevKnownIdx]!);
+    const t = Math.max(0, Math.min(1, (targetLocalDistKm - d0) / span));
+    return Math.round(segEles[prevKnownIdx]! + (segEles[nextKnownIdx]! - segEles[prevKnownIdx]!) * t);
+  }
+  if (prevKnownIdx !== -1) return Math.round(segEles[prevKnownIdx]!);
+  if (nextKnownIdx !== -1) return Math.round(segEles[nextKnownIdx]!);
+  return null;
+}
+
+function fillMissingElevations(
+  rawSamples: Array<{ distKm: number; ele: number | null; lon: number; lat: number }>
+): SavedRouteRecord['elevationProfile'] {
+  if (rawSamples.length === 0) return [];
+  const filled = rawSamples.map((s) => ({ ...s }));
+
+  // Forward pass: carry last known value
+  let lastKnown: number | null = null;
+  for (let i = 0; i < filled.length; i++) {
+    if (filled[i].ele !== null) {
+      lastKnown = filled[i].ele;
+    } else if (lastKnown !== null) {
+      filled[i].ele = lastKnown;
+    }
+  }
+
+  // Backward pass for leading nulls
+  let nextKnown: number | null = null;
+  for (let i = filled.length - 1; i >= 0; i--) {
+    if (rawSamples[i].ele !== null) {
+      nextKnown = rawSamples[i].ele;
+    } else if (rawSamples[i].ele === null && filled[i].ele === null && nextKnown !== null) {
+      filled[i].ele = nextKnown;
+    }
+  }
+
+  return filled.map((s) => ({
+    distKm: s.distKm,
+    ele: s.ele ?? 0,
+    lon: s.lon,
+    lat: s.lat,
+  }));
+}
+
+function summarizeElevationProfile(profile: SavedRouteRecord['elevationProfile']): {
+  ascentMeters: number;
+  descentMeters: number;
+  minEle: number;
+  maxEle: number;
+} {
+  let ascentMeters = 0;
+  let descentMeters = 0;
+  let minEle = Infinity;
+  let maxEle = -Infinity;
+
+  for (let i = 0; i < profile.length; i++) {
+    const e = profile[i].ele;
+    if (e < minEle) minEle = e;
+    if (e > maxEle) maxEle = e;
+    if (i > 0) {
+      const diff = e - profile[i - 1].ele;
+      if (diff > 0) ascentMeters += diff;
+      else descentMeters += Math.abs(diff);
+    }
+  }
+
+  return {
+    ascentMeters: Math.round(ascentMeters),
+    descentMeters: Math.round(descentMeters),
+    minEle: isFinite(minEle) ? minEle : 0,
+    maxEle: isFinite(maxEle) ? maxEle : 0,
+  };
+}
+
+function extractLineStringsFromRoute(
+  route: SavedRouteRecord
+): Array<GeoJSON.Feature<GeoJSON.LineString>> {
+  const result: Array<GeoJSON.Feature<GeoJSON.LineString>> = [];
+  for (const f of route.geojson?.features || []) {
+    if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 2) {
+      result.push(f as GeoJSON.Feature<GeoJSON.LineString>);
+    } else if (f.geometry?.type === 'MultiLineString') {
+      for (const ring of f.geometry.coordinates) {
+        if (Array.isArray(ring) && ring.length >= 2) {
+          result.push({
+            type: 'Feature',
+            properties: f.properties || {},
+            geometry: { type: 'LineString', coordinates: ring },
+          });
+        }
+      }
+    }
+  }
+  return result;
+}
 
 export class RouteManager {
   static async initializeStarterRoutes(): Promise<SavedRouteRecord[]> {
@@ -27,7 +189,12 @@ export class RouteManager {
     const all = await db.routes.toArray();
     const migrated: SavedRouteRecord[] = [];
     const normalized = all.map((r) => {
-      if (r.sourceFormat === 'planned' && r.color !== PLANNING_ROUTE_COLOR && (!r.color || LEGACY_PLANNED_COLORS.has(r.color))) {
+      if (
+        r.sourceFormat === 'planned' &&
+        !r.colorCustomized &&
+        r.color !== PLANNING_ROUTE_COLOR &&
+        (!r.color || LEGACY_PLANNED_COLORS.has(r.color))
+      ) {
         const updated: SavedRouteRecord = {
           ...r,
           color: PLANNING_ROUTE_COLOR,
@@ -60,8 +227,11 @@ export class RouteManager {
     name: string;
     coordinates: Array<[number, number]>;
     segments?: Array<Array<[number, number]>>;
+    segmentElevations?: Array<Array<number | null>>;
     sourceFormat: SavedRouteRecord['sourceFormat'];
     color?: string;
+    colorCustomized?: boolean;
+    visible?: boolean;
     planningMode?: PlanningMode;
     waypoints?: PlannedWaypoint[];
     ownerUid?: string | null;
@@ -70,14 +240,21 @@ export class RouteManager {
   }): Promise<SavedRouteRecord> {
     const rawSegments =
       params.segments && params.segments.length > 0 ? params.segments : [params.coordinates];
-    const validSegments = rawSegments.filter((seg) => seg.length >= 2);
+    const validPairs = rawSegments
+      .map((seg, idx) => ({
+        seg,
+        eles: params.segmentElevations?.[idx],
+      }))
+      .filter((item) => item.seg.length >= 2);
+
+    const validSegments = validPairs.map((p) => p.seg);
     const lines = validSegments.map((seg) => turf.lineString(seg));
     const segmentLengths = lines.map((l) => turf.length(l, { units: 'kilometers' }));
     const totalLengthKm = segmentLengths.reduce((sum, len) => sum + len, 0);
 
-    // Resample points proportionally across all segments to compute continuous elevation profile from Israel.dem.pmtiles
+    // Resample points proportionally across all segments to compute continuous elevation profile from Israel.dem.pmtiles or parsed GPX/KML elevations
     const totalSamples = Math.max(12, Math.min(60, Math.ceil(totalLengthKm * 5)));
-    const elevationProfile: SavedRouteRecord['elevationProfile'] = [];
+    const rawSamples: Array<{ distKm: number; ele: number | null; lon: number; lat: number }> = [];
     const routeColor =
       params.color ||
       (params.planningMode ? PLANNING_MODE_META[params.planningMode].color : '#ec4899');
@@ -94,16 +271,23 @@ export class RouteManager {
           : Math.max(2, validSegments[sIdx].length - 1);
 
       for (let i = 0; i <= segSamples; i++) {
-        // Avoid duplicating junction sample if next segment starts very close
         if (sIdx > 0 && i === 0) continue;
         const localDistKm = segSamples > 0 ? (segLen * i) / segSamples : 0;
         const pt = turf.along(segLine, localDistKm, { units: 'kilometers' });
         const [lon, lat] = pt.geometry.coordinates;
-        const sampledEle = await ElevationService.getElevationAt(lon, lat, 11);
-        const fallbackEle = Math.round(350 + Math.sin(elevationProfile.length * 0.4) * 120);
-        elevationProfile.push({
+        const demEle = await ElevationService.getElevationAt(lon, lat, 11);
+        const fileEle =
+          demEle === null
+            ? interpolateSegmentElevationAtDist(
+                validPairs[sIdx].seg,
+                validPairs[sIdx].eles,
+                localDistKm
+              )
+            : null;
+
+        rawSamples.push({
           distKm: Number((cumDistKm + localDistKm).toFixed(2)),
-          ele: sampledEle ?? fallbackEle,
+          ele: demEle ?? fileEle,
           lon,
           lat,
         });
@@ -111,21 +295,9 @@ export class RouteManager {
       cumDistKm += segLen;
     }
 
-    let ascentMeters = 0;
-    let descentMeters = 0;
-    let minEle = Infinity;
-    let maxEle = -Infinity;
-
-    for (let i = 0; i < elevationProfile.length; i++) {
-      const e = elevationProfile[i].ele;
-      if (e < minEle) minEle = e;
-      if (e > maxEle) maxEle = e;
-      if (i > 0) {
-        const diff = e - elevationProfile[i - 1].ele;
-        if (diff > 0) ascentMeters += diff;
-        else descentMeters += Math.abs(diff);
-      }
-    }
+    const elevationProfile = fillMissingElevations(rawSamples);
+    const { ascentMeters, descentMeters, minEle, maxEle } =
+      summarizeElevationProfile(elevationProfile);
 
     const nowIso = new Date().toISOString();
     const record: SavedRouteRecord = {
@@ -135,12 +307,13 @@ export class RouteManager {
       planningMode: params.planningMode,
       waypoints: params.waypoints,
       distanceKm: Number(totalLengthKm.toFixed(2)),
-      ascentMeters: Math.round(ascentMeters),
-      descentMeters: Math.round(descentMeters),
-      minEle: isFinite(minEle) ? minEle : 0,
-      maxEle: isFinite(maxEle) ? maxEle : 0,
+      ascentMeters,
+      descentMeters,
+      minEle,
+      maxEle,
       color: routeColor,
-      visible: true,
+      colorCustomized: params.colorCustomized,
+      visible: params.visible ?? true,
       geojson: {
         type: 'FeatureCollection',
         features: lines.map((line, idx) => ({
@@ -158,7 +331,8 @@ export class RouteManager {
       elevationProfile,
       ownerUid: params.ownerUid ?? null,
       ownerEmail: params.ownerEmail ?? null,
-      cloudSyncStatus: params.cloudSyncStatus ?? (params.sourceFormat === 'planned' ? 'pending' : 'local-only'),
+      cloudSyncStatus:
+        params.cloudSyncStatus ?? (params.sourceFormat === 'planned' ? 'pending' : 'local-only'),
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -172,10 +346,14 @@ export class RouteManager {
   }
 
   static async createAndSavePlannedRoute(params: {
+    id?: string;
     name: string;
     mode: PlanningMode;
     segments: Array<Array<[number, number]>>;
     waypoints: PlannedWaypoint[];
+    color?: string;
+    colorCustomized?: boolean;
+    visible?: boolean;
     ownerUid?: string | null;
     ownerEmail?: string | null;
   }): Promise<SavedRouteRecord> {
@@ -189,17 +367,191 @@ export class RouteManager {
     );
 
     return this.createAndSaveRoute({
+      id: params.id,
       name: params.name,
       coordinates: flattened,
       segments: params.segments,
       sourceFormat: 'planned',
-      color: PLANNING_MODE_META[params.mode].color,
+      color: params.color || PLANNING_MODE_META[params.mode].color,
+      colorCustomized: params.colorCustomized,
+      visible: params.visible,
       planningMode: params.mode,
       waypoints: enrichedWaypoints,
       ownerUid: params.ownerUid ?? null,
       ownerEmail: params.ownerEmail ?? null,
       cloudSyncStatus: 'pending',
     });
+  }
+
+  static async updatePlannedRoute(
+    routeId: string,
+    params: {
+      name: string;
+      mode: PlanningMode;
+      segments: Array<Array<[number, number]>>;
+      waypoints: PlannedWaypoint[];
+      color?: string;
+      ownerUid?: string | null;
+      ownerEmail?: string | null;
+    }
+  ): Promise<SavedRouteRecord> {
+    const existing = await db.routes.get(routeId);
+    const nextColor = params.color || existing?.color || PLANNING_MODE_META[params.mode].color;
+    const saved = await this.createAndSavePlannedRoute({
+      id: routeId,
+      name: params.name,
+      mode: params.mode,
+      segments: params.segments,
+      waypoints: params.waypoints,
+      color: nextColor,
+      colorCustomized: Boolean(params.color || existing?.colorCustomized),
+      visible: existing?.visible ?? true,
+      ownerUid: params.ownerUid ?? existing?.ownerUid ?? null,
+      ownerEmail: params.ownerEmail ?? existing?.ownerEmail ?? null,
+    });
+
+    const merged: SavedRouteRecord = {
+      ...saved,
+      createdAt: existing?.createdAt || saved.createdAt,
+      cloudStoragePath: existing?.cloudStoragePath,
+      cloudJsonPath: existing?.cloudJsonPath,
+      cloudDownloadUrl: existing?.cloudDownloadUrl,
+      cloudSyncStatus: 'pending',
+      cloudError: undefined,
+    };
+    merged.gpxXml = this.exportRouteAsGpx(merged);
+    await db.routes.put(merged);
+    return merged;
+  }
+
+  static async updateRouteDetails(
+    routeId: string,
+    patch: { name?: string; color?: string; visible?: boolean }
+  ): Promise<SavedRouteRecord | undefined> {
+    const existing = await db.routes.get(routeId);
+    if (!existing) return undefined;
+
+    const trimmedName = patch.name !== undefined ? patch.name.trim() : undefined;
+    const nextName = trimmedName && trimmedName.length > 0 ? trimmedName : existing.name;
+    const hasColorChange = typeof patch.color === 'string' && patch.color.length > 0;
+    const nextColor = hasColorChange ? patch.color! : existing.color;
+    const nextColorCustomized = hasColorChange ? true : existing.colorCustomized;
+    const nextVisible = typeof patch.visible === 'boolean' ? patch.visible : existing.visible;
+    const contentEdited =
+      nextName !== existing.name ||
+      nextColor !== existing.color ||
+      nextColorCustomized !== existing.colorCustomized;
+
+    const updatedGeojson: GeoJSON.FeatureCollection = {
+      ...existing.geojson,
+      features: (existing.geojson?.features || []).map((f) => ({
+        ...f,
+        properties: {
+          ...(f.properties || {}),
+          name: nextName,
+          color: nextColor,
+        },
+      })),
+    };
+
+    const updated: SavedRouteRecord = {
+      ...existing,
+      name: nextName,
+      color: nextColor,
+      colorCustomized: nextColorCustomized,
+      visible: nextVisible,
+      geojson: updatedGeojson,
+      updatedAt: new Date().toISOString(),
+      ...(existing.sourceFormat === 'planned' && contentEdited
+        ? { cloudSyncStatus: 'pending' as CloudSyncStatus }
+        : {}),
+    };
+
+    if (updated.sourceFormat === 'planned' && contentEdited) {
+      updated.gpxXml = this.exportRouteAsGpx(updated);
+    }
+
+    await db.routes.put(updated);
+    return updated;
+  }
+
+  static async toggleRouteVisibility(routeId: string): Promise<SavedRouteRecord | undefined> {
+    const existing = await db.routes.get(routeId);
+    if (!existing) return undefined;
+    return this.updateRouteDetails(routeId, { visible: existing.visible === false });
+  }
+
+  static async reverseRoute(routeId: string): Promise<SavedRouteRecord | undefined> {
+    const existing = await db.routes.get(routeId);
+    if (!existing) return undefined;
+
+    const lineFeatures = extractLineStringsFromRoute(existing);
+    if (lineFeatures.length === 0) return existing;
+
+    const reversedFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [...lineFeatures]
+      .reverse()
+      .map((f, idx) => ({
+        ...f,
+        properties: {
+          ...(f.properties || {}),
+          id: `${existing.id}-seg-${idx}`,
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: [...f.geometry.coordinates].reverse(),
+        },
+      }));
+
+    let reversedWaypoints: PlannedWaypoint[] | undefined = existing.waypoints;
+    if (existing.waypoints && existing.waypoints.length >= 2) {
+      const oldWps = existing.waypoints;
+      const n = oldWps.length;
+      reversedWaypoints = [...oldWps].reverse().map((wp, revIdx) => {
+        if (revIdx === 0) {
+          const { legType: _dropped, ...rest } = wp;
+          return rest;
+        }
+        const incomingLegType = oldWps[n - revIdx]?.legType;
+        return {
+          ...wp,
+          ...(incomingLegType ? { legType: incomingLegType } : {}),
+        };
+      });
+    }
+
+    const totalKm = existing.distanceKm;
+    const reversedProfile = [...(existing.elevationProfile || [])]
+      .reverse()
+      .map((pt) => ({
+        ...pt,
+        distKm: Number(Math.max(0, totalKm - pt.distKm).toFixed(2)),
+      }));
+
+    const { ascentMeters, descentMeters, minEle, maxEle } =
+      summarizeElevationProfile(reversedProfile);
+
+    const updated: SavedRouteRecord = {
+      ...existing,
+      waypoints: reversedWaypoints,
+      ascentMeters,
+      descentMeters,
+      minEle,
+      maxEle,
+      geojson: {
+        type: 'FeatureCollection',
+        features: reversedFeatures,
+      },
+      elevationProfile: reversedProfile,
+      updatedAt: new Date().toISOString(),
+      ...(existing.sourceFormat === 'planned' ? { cloudSyncStatus: 'pending' as CloudSyncStatus } : {}),
+    };
+
+    if (updated.sourceFormat === 'planned') {
+      updated.gpxXml = this.exportRouteAsGpx(updated);
+    }
+
+    await db.routes.put(updated);
+    return updated;
   }
 
   static async updateRouteCloudSync(
@@ -227,39 +579,131 @@ export class RouteManager {
 
   /**
    * Re-samples route elevations directly from Israel.dem.pmtiles once mounted.
+   * Preserves user edits (`visible`, `color`, `colorCustomized`, `updatedAt`) and
+   * preserves GPX/KML `<ele>` profiles when DEM is not mounted.
    */
   static async refreshRouteElevationsFromDem(route: SavedRouteRecord): Promise<SavedRouteRecord> {
-    const segments = route.geojson.features
-      .filter((f) => f.geometry?.type === 'LineString')
-      .map((f) => (f.geometry as GeoJSON.LineString).coordinates as Array<[number, number]>)
-      .filter((coords) => coords.length >= 2);
+    const segments = extractLineStringsFromRoute(route).map(
+      (f) => f.geometry.coordinates as Array<[number, number]>
+    );
     if (segments.length === 0) return route;
-    const refreshed = await this.createAndSaveRoute({
-      id: route.id,
-      name: route.name,
-      coordinates: segments[0],
-      segments,
-      sourceFormat: route.sourceFormat,
-      color: route.color,
-      planningMode: route.planningMode,
-      waypoints: route.waypoints,
-      ownerUid: route.ownerUid,
-      ownerEmail: route.ownerEmail,
-      cloudSyncStatus: route.cloudSyncStatus,
-    });
+
+    const lines = segments.map((seg) => turf.lineString(seg));
+    const segmentLengths = lines.map((l) => turf.length(l, { units: 'kilometers' }));
+    const totalLengthKm = segmentLengths.reduce((sum, len) => sum + len, 0);
+    const totalSamples = Math.max(12, Math.min(60, Math.ceil(totalLengthKm * 5)));
+
+    const rawSamples: Array<{ distKm: number; ele: number | null; lon: number; lat: number }> = [];
+    let validDemCount = 0;
+    let cumDistKm = 0;
+
+    for (let sIdx = 0; sIdx < lines.length; sIdx++) {
+      const segLine = lines[sIdx];
+      const segLen = segmentLengths[sIdx];
+      const segSamples =
+        totalLengthKm > 0
+          ? Math.max(3, Math.round((segLen / totalLengthKm) * totalSamples))
+          : Math.max(2, segments[sIdx].length - 1);
+
+      for (let i = 0; i <= segSamples; i++) {
+        if (sIdx > 0 && i === 0) continue;
+        const localDistKm = segSamples > 0 ? (segLen * i) / segSamples : 0;
+        const pt = turf.along(segLine, localDistKm, { units: 'kilometers' });
+        const [lon, lat] = pt.geometry.coordinates;
+        const sampledEle = await ElevationService.getElevationAt(lon, lat, 11);
+        if (sampledEle !== null) validDemCount++;
+        rawSamples.push({
+          distKm: Number((cumDistKm + localDistKm).toFixed(2)),
+          ele: sampledEle,
+          lon,
+          lat,
+        });
+      }
+      cumDistKm += segLen;
+    }
+
+    // If DEM is not loaded / returned nothing (e.g. offline without DEM or offshore), keep existing profile & metadata intact
+    if (validDemCount === 0) {
+      return route;
+    }
+
+    const elevationProfile = fillMissingElevations(rawSamples);
+    const { ascentMeters, descentMeters, minEle, maxEle } =
+      summarizeElevationProfile(elevationProfile);
+
+    const enrichedWaypoints = route.waypoints
+      ? await Promise.all(
+          route.waypoints.map(async (wp) => {
+            const wpEle = await ElevationService.getElevationAt(wp.lon, wp.lat, 11);
+            return wpEle !== null ? { ...wp, ele: wpEle } : wp;
+          })
+        )
+      : undefined;
+
     const merged: SavedRouteRecord = {
-      ...refreshed,
-      cloudStoragePath: route.cloudStoragePath,
-      cloudJsonPath: route.cloudJsonPath,
-      cloudDownloadUrl: route.cloudDownloadUrl,
-      cloudError: route.cloudError,
-      createdAt: route.createdAt || refreshed.createdAt,
+      ...route,
+      waypoints: enrichedWaypoints,
+      distanceKm: Number(totalLengthKm.toFixed(2)),
+      ascentMeters,
+      descentMeters,
+      minEle,
+      maxEle,
+      elevationProfile,
+      visible: route.visible,
+      color: route.color,
+      colorCustomized: route.colorCustomized,
+      createdAt: route.createdAt,
+      updatedAt: route.updatedAt,
     };
+
     if (route.sourceFormat === 'planned') {
       merged.gpxXml = this.exportRouteAsGpx(merged);
     }
+
     await db.routes.put(merged);
     return merged;
+  }
+
+  /**
+   * Computes remaining trail distance (km) along all segments from the user's snapped position to the route finish.
+   */
+  static computeRemainingDistanceKm(
+    route: SavedRouteRecord,
+    userLon: number,
+    userLat: number
+  ): number {
+    const lineFeatures = extractLineStringsFromRoute(route);
+    if (lineFeatures.length === 0) return route.distanceKm || 0;
+
+    const userPt = turf.point([userLon, userLat]);
+    const lengthsKm = lineFeatures.map((lf) => turf.length(lf, { units: 'kilometers' }));
+
+    let bestSegIdx = 0;
+    let minDistMeters = Infinity;
+    let bestAlongKm = 0;
+
+    for (let i = 0; i < lineFeatures.length; i++) {
+      const lf = lineFeatures[i];
+      const distMeters = turf.pointToLineDistance(userPt, lf, { units: 'meters' });
+      if (distMeters < minDistMeters) {
+        minDistMeters = distMeters;
+        bestSegIdx = i;
+        const snapped = turf.nearestPointOnLine(lf, userPt, { units: 'kilometers' });
+        const locKm =
+          typeof snapped.properties?.location === 'number' &&
+          Number.isFinite(snapped.properties.location)
+            ? snapped.properties.location
+            : 0;
+        bestAlongKm = Math.max(0, Math.min(lengthsKm[i], locKm));
+      }
+    }
+
+    let remainingKm = Math.max(0, lengthsKm[bestSegIdx] - bestAlongKm);
+    for (let j = bestSegIdx + 1; j < lengthsKm.length; j++) {
+      remainingKm += lengthsKm[j];
+    }
+
+    return Number(Math.max(0, remainingKm).toFixed(1));
   }
 
   /**
@@ -274,9 +718,7 @@ export class RouteManager {
     isOffRoute: boolean;
     snappedCoord: [number, number];
   } {
-    const lineFeatures = route.geojson.features.filter(
-      (f) => f.geometry?.type === 'LineString'
-    ) as Array<GeoJSON.Feature<GeoJSON.LineString>>;
+    const lineFeatures = extractLineStringsFromRoute(route);
     const userPt = turf.point([userLon, userLat]);
     let minDistMeters = Infinity;
     let bestSnapped: [number, number] = [userLon, userLat];
@@ -352,9 +794,7 @@ export class RouteManager {
             .join('\n') + '\n'
         : '';
 
-    const lineFeatures = (route.geojson?.features || []).filter(
-      (f) => f.geometry?.type === 'LineString'
-    ) as Array<GeoJSON.Feature<GeoJSON.LineString>>;
+    const lineFeatures = extractLineStringsFromRoute(route);
 
     const trksegsXml =
       lineFeatures.length > 0
@@ -395,4 +835,3 @@ ${trksegsXml}
 </gpx>`;
   }
 }
-

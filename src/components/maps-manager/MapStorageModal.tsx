@@ -21,7 +21,7 @@ import { OpfsStorageAdapter } from '../../core/pmtiles/OpfsStorageAdapter';
 import { NativeOfflineStorage } from '../../core/pmtiles/NativeOfflineStorage';
 import { CommunityPoiImporter } from '../../core/pois/CommunityPoiImporter';
 import { RouteManager } from '../../core/navigation/RouteManager';
-import type { SavedRouteRecord } from '../../core/db/NavDatabase';
+import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 
 interface MapStorageModalProps {
@@ -34,7 +34,8 @@ interface MapStorageModalProps {
   onArchivesUpdated: (dem: MountedArchiveInfo | null, osm: MountedArchiveInfo | null) => void;
   onPoisAndRoutesImported: (
     poiCount: number,
-    createdRoutes: SavedRouteRecord[]
+    createdRoutes: SavedRouteRecord[],
+    importedPois?: PoiRecord[]
   ) => void | Promise<void>;
 }
 
@@ -92,8 +93,11 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   useEffect(() => {
     if (isOpen || embedded) {
       checkCloudStatus();
+    } else if (!isBusy) {
+      setStatusMessage(null);
+      setProgressPct(null);
     }
-  }, [isOpen, embedded]);
+  }, [isOpen, embedded, isBusy]);
 
   if (!isOpen && !embedded) return null;
 
@@ -206,6 +210,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     } finally {
       setIsBusy(false);
       setProgressPct(null);
+      e.target.value = '';
     }
   };
 
@@ -228,6 +233,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     } finally {
       setIsBusy(false);
       setProgressPct(null);
+      e.target.value = '';
     }
   };
 
@@ -275,14 +281,19 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
       const createdRoutes: SavedRouteRecord[] = [];
       for (let i = 0; i < tracksToCreate.length; i++) {
-        const track = tracksToCreate[i];
+        const track = tracksToCreate[i] as {
+          name?: string;
+          segments: Array<Array<[number, number]>>;
+          pointElevations?: Array<Array<number | null>>;
+        };
         const fallbackName =
           tracksToCreate.length > 1 ? `${baseName} #${i + 1}` : baseName;
-        const routeName = (track as { name?: string }).name?.trim() || fallbackName;
+        const routeName = track.name?.trim() || fallbackName;
         const savedRoute = await RouteManager.createAndSaveRoute({
           name: routeName,
           coordinates: track.segments[0],
           segments: track.segments,
+          segmentElevations: track.pointElevations,
           sourceFormat,
           color: '#ec4899',
         });
@@ -296,7 +307,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
         return;
       }
 
-      await onPoisAndRoutesImported(importedPois.length, createdRoutes);
+      await onPoisAndRoutesImported(importedPois.length, createdRoutes, importedPois);
       setStatusMessage(
         `✓ יובאו בהצלחה ${importedPois.length} נקודות עניין ו-${createdRoutes.length} מסלולים מתוך ${file.name}!`
       );
@@ -334,22 +345,36 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
       </div>
 
       {/* Status / Progress Banner */}
-      {statusMessage && (
-        <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-xs text-emerald-500 font-semibold space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span>{statusMessage}</span>
-            {progressPct !== null && <span className="font-mono font-bold">{progressPct}%</span>}
-          </div>
-          {progressPct !== null && (
-            <div className="w-full h-2 bg-slate-500/20 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-500 transition-all"
-                style={{ width: `${progressPct}%` }}
-              />
+      {statusMessage && (() => {
+        const isError =
+          statusMessage.startsWith('שגיאה') ||
+          statusMessage.includes('אין מספיק') ||
+          statusMessage.includes('לא נמצאו') ||
+          statusMessage.includes('אינו נתמך');
+        const isSuccess = statusMessage.startsWith('✓');
+        const tone = isError
+          ? 'bg-red-500/15 border-red-500/50 text-red-500'
+          : isSuccess
+            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-500'
+            : 'bg-sky-500/15 border-sky-500/40 text-sky-400';
+        const barTone = isError ? 'bg-red-500' : isSuccess ? 'bg-emerald-500' : 'bg-sky-500';
+        return (
+          <div className={`p-3 rounded-xl border text-xs font-semibold space-y-2 ${tone}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span>{statusMessage}</span>
+              {progressPct !== null && <span className="font-mono font-bold">{progressPct}%</span>}
             </div>
-          )}
-        </div>
-      )}
+            {progressPct !== null && (
+              <div className="w-full h-2 bg-slate-500/20 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all ${barTone}`}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Clean Device Storage Meter */}
       <div className={`p-3 rounded-xl border space-y-2 ${t.subCard}`}>
@@ -513,6 +538,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
           </p>
         </div>
         <input
+          id="community-route-import-file"
+          name="communityRouteImportFile"
           ref={communityFileInputRef}
           type="file"
           accept=".gpx,.kml,.geojson,.json,.twl"
@@ -559,6 +586,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <input
+                id="replace-osm-pmtiles-file"
+                name="replaceOsmPmtilesFile"
                 ref={osmFileInputRef}
                 type="file"
                 accept=".pmtiles"
@@ -575,6 +604,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               </button>
 
               <input
+                id="mount-dem-pmtiles-file"
+                name="mountDemPmtilesFile"
                 ref={demFileInputRef}
                 type="file"
                 accept=".pmtiles"
@@ -593,6 +624,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
             <label className="flex items-center gap-2 cursor-pointer">
               <input
+                id="persist-osm-opfs"
+                name="persistOsmOpfs"
                 type="checkbox"
                 checked={persistOpfs}
                 onChange={(e) => setPersistOpfs(e.target.checked)}
@@ -603,6 +636,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
             <div className="flex gap-2">
               <input
+                id="remote-osm-url"
+                name="remoteOsmUrl"
                 type="url"
                 dir="ltr"
                 value={remoteOsmUrl}

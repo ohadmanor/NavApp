@@ -3,7 +3,6 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import * as turf from '@turf/turf';
 import {
-  Search,
   Layers,
   HardDrive,
   Compass,
@@ -21,7 +20,6 @@ import {
   Satellite,
   Sun,
   Moon,
-  X,
   PenTool,
   Undo2,
   Check,
@@ -36,7 +34,7 @@ import {
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
 import { PoiManager, getPoiSortPriority } from './core/pois/PoiManager';
-import { RouteManager } from './core/navigation/RouteManager';
+import { RouteManager, resolveRouteDisplayColor } from './core/navigation/RouteManager';
 import { carSyncService } from './core/car/CarSyncService';
 import { LiveGpsService, type LiveGpsFix } from './core/navigation/LiveGpsService';
 import { ScreenWakeLockService } from './core/navigation/ScreenWakeLockService';
@@ -62,10 +60,7 @@ import {
   type SearchResultItem,
   type SearchIndexStatus,
 } from './core/search/PMTilesSearchService';
-import {
-  SEARCH_FILTER_TABS,
-  type SearchFilterCategory,
-} from './core/search/searchTaxonomy';
+import type { SearchFilterCategory } from './core/search/searchTaxonomy';
 import {
   db,
   type PoiRecord,
@@ -82,7 +77,11 @@ import {
   type SnappedPoint,
 } from './core/routing/ClientRoutePlannerEngine';
 import { AuthService, type NavUser } from './core/firebase/AuthService';
-import { PlannedTracksCloudService } from './core/firebase/PlannedTracksCloudService';
+import {
+  PlannedTracksCloudService,
+  getDeletedPlannedRouteIds,
+  markPlannedRouteDeleted,
+} from './core/firebase/PlannedTracksCloudService';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
 import { MapStorageModal } from './components/maps-manager/MapStorageModal';
@@ -97,6 +96,14 @@ import {
   UserIconPickerSheet,
   UserLocationIconBadge,
 } from './components/map/UserIconPickerSheet';
+import { SearchBar } from './components/search/SearchBar';
+import { GoogleAccountButton } from './components/auth/GoogleAccountButton';
+import {
+  UserStateSyncService,
+  type MergeUserStateResult,
+  type SavedMapCamera,
+  type SavedUserConfiguration,
+} from './core/preferences/UserStateSyncService';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from './components/ui/themeTokens';
 
 type DesktopDrawerMode = 'poi' | 'routes' | 'record' | 'add-poi' | 'plan-route' | null;
@@ -113,6 +120,8 @@ interface PlanOverlayState {
   previewPoint: SnappedPoint | null;
   cursorCoord: [number, number] | null;
   disconnectedCandidate: SnappedPoint | null;
+  editingRouteId?: string | null;
+  activeColor?: string;
 }
 
 function ensureWaypointBadgeImage(
@@ -192,13 +201,25 @@ export const App: React.FC = () => {
 
   const isMobile = useIsMobile(768);
 
+  // Hydrate persisted last camera position & configuration synchronously before MapLibre initializes
+  const initialSavedStateRef = useRef<ReturnType<typeof UserStateSyncService.getStartupState> | null>(
+    null
+  );
+  if (!initialSavedStateRef.current) {
+    initialSavedStateRef.current = UserStateSyncService.getStartupState();
+  }
+  const initialCamera = initialSavedStateRef.current.camera;
+  const initialConfig = initialSavedStateRef.current.config;
+
   // Core map & archive state
   const [isMapReady, setIsMapReady] = useState(false);
   const [demInfo, setDemInfo] = useState<MountedArchiveInfo | null>(null);
   const [osmInfo, setOsmInfo] = useState<MountedArchiveInfo | null>(null);
-  const [visibility, setVisibility] = useState<OutdoorLayerVisibility>(DEFAULT_LAYER_VISIBILITY);
-  const [theme, setTheme] = useState<MapTheme>('topo-day');
-  const [mapBearing, setMapBearing] = useState(0);
+  const [visibility, setVisibility] = useState<OutdoorLayerVisibility>(
+    () => initialConfig.visibility
+  );
+  const [theme, setTheme] = useState<MapTheme>(() => initialConfig.theme);
+  const [mapBearing, setMapBearing] = useState(() => initialCamera.bearing);
 
   // POIs & Search
   const [pois, setPois] = useState<PoiRecord[]>([]);
@@ -206,6 +227,7 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState<SearchFilterCategory>('all');
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
+  const [executedSearchQuery, setExecutedSearchQuery] = useState('');
   const [searchStatus, setSearchStatus] = useState<SearchIndexStatus>(() =>
     pmtilesSearchService.getStatus()
   );
@@ -232,18 +254,20 @@ export const App: React.FC = () => {
 
   // Connectivity, Crosshair & Continuous Live GPS Coordinates
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [showCenterCrosshair, setShowCenterCrosshair] = useState<boolean>(false);
+  const [showCenterCrosshair, setShowCenterCrosshair] = useState<boolean>(
+    () => initialConfig.showCenterCrosshair
+  );
   const [userLocation, setUserLocation] = useState<LiveGpsFix | null>(null);
   const [isFollowingUser, setIsFollowingUser] = useState<boolean>(false);
   const [gpsWatchRestartSeq, setGpsWatchRestartSeq] = useState<number>(0);
   const [isScreenWakeLockActive, setIsScreenWakeLockActive] = useState<boolean>(false);
   const [isFreeNavigation, setIsFreeNavigation] = useState<boolean>(false);
-  const [navOrientation, setNavOrientation] = useState<MapNavigationOrientation>(() =>
-    NavigationHeadingService.getOrientationPreference()
+  const [navOrientation, setNavOrientation] = useState<MapNavigationOrientation>(
+    () => initialConfig.navOrientation
   );
   const [liveHeading, setLiveHeading] = useState<number | null>(null);
-  const [userIconPref, setUserIconPref] = useState<UserLocationIconPreference>(() =>
-    UserLocationIconService.getPreference()
+  const [userIconPref, setUserIconPref] = useState<UserLocationIconPreference>(
+    () => initialConfig.userIcon
   );
   const [isUserIconPickerOpen, setIsUserIconPickerOpen] = useState<boolean>(false);
   const [cursorCoords, setCursorCoords] = useState<{
@@ -251,7 +275,12 @@ export const App: React.FC = () => {
     lat: number;
     ele: number | null;
     zoom: number;
-  }>({ lon: 34.8134, lat: 30.8281, ele: 390, zoom: 12.6 });
+  }>(() => ({
+    lon: Number(initialCamera.lon.toFixed(4)),
+    lat: Number(initialCamera.lat.toFixed(4)),
+    ele: 390,
+    zoom: Number(initialCamera.zoom.toFixed(1)),
+  }));
 
   // Track Recording State
   const [isRecordingTrack, setIsRecordingTrack] = useState(false);
@@ -265,7 +294,11 @@ export const App: React.FC = () => {
   // Route Planning & Firebase User Sync State
   const [currentUser, setCurrentUser] = useState<NavUser | null>(() => AuthService.getCurrentUser());
   const [isAuthBusy, setIsAuthBusy] = useState(false);
-  const [planningMode, setPlanningMode] = useState<PlanningMode>('4x4');
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(
+    () => initialSavedStateRef.current?.rawState.lastSyncedAt
+  );
+  const [planningMode, setPlanningMode] = useState<PlanningMode>(() => initialConfig.planningMode);
   const [planRouteName, setPlanRouteName] = useState('');
   const [planWaypoints, setPlanWaypoints] = useState<PlannedWaypoint[]>([]);
   const [planLegs, setPlanLegs] = useState<PlannedLeg[]>([]);
@@ -274,6 +307,7 @@ export const App: React.FC = () => {
   const [disconnectedCandidate, setDisconnectedCandidate] = useState<SnappedPoint | null>(null);
   const [isRoutingLeg, setIsRoutingLeg] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [planElevStats, setPlanElevStats] = useState<{ ascent: number; descent: number }>({
     ascent: 0,
     descent: 0,
@@ -299,6 +333,12 @@ export const App: React.FC = () => {
     (!isMobile && desktopDrawer === 'plan-route') ||
     (isMobile && mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'plan-route');
 
+  const editingRouteColor = useMemo(() => {
+    if (!editingRouteId) return undefined;
+    const match = routes.find((r) => r.id === editingRouteId);
+    return match ? resolveRouteDisplayColor(match) : undefined;
+  }, [editingRouteId, routes]);
+
   const planOverlayState = useMemo<PlanOverlayState>(
     () => ({
       active: isPlanningRouteMode,
@@ -308,6 +348,8 @@ export const App: React.FC = () => {
       previewPoint: planPreviewPoint,
       cursorCoord: planCursorCoord,
       disconnectedCandidate,
+      editingRouteId,
+      activeColor: editingRouteColor,
     }),
     [
       isPlanningRouteMode,
@@ -317,6 +359,8 @@ export const App: React.FC = () => {
       planPreviewPoint,
       planCursorCoord,
       disconnectedCandidate,
+      editingRouteId,
+      editingRouteColor,
     ]
   );
 
@@ -351,9 +395,16 @@ export const App: React.FC = () => {
   const clickTimerRef = useRef<number | null>(null);
   const lastPlanSnapTsRef = useRef<number>(0);
   const snapSeqRef = useRef<number>(0);
+  const planElevSeqRef = useRef<number>(0);
+  const selectRouteSeqRef = useRef<number>(0);
+  const editingRouteIdRef = useRef<string | null>(editingRouteId);
+  editingRouteIdRef.current = editingRouteId;
   const activeRoutePromiseRef = useRef<Promise<void> | null>(null);
   const lastPoiSyncRef = useRef<PoiRecord[] | null>(null);
-  const deletedRouteIdsRef = useRef<Set<string>>(new Set());
+  const deletedRouteIdsRef = useRef<Set<string>>(null as any);
+  if (!deletedRouteIdsRef.current) {
+    deletedRouteIdsRef.current = getDeletedPlannedRouteIds();
+  }
   const handlePlanMapClickRef = useRef<(lon: number, lat: number) => Promise<void>>(async () => {});
   const handleFinishPlanningRef = useRef<() => Promise<void>>(async () => {});
   const isStyleLoadedRef = useRef<boolean>(false);
@@ -409,6 +460,102 @@ export const App: React.FC = () => {
     bearing: 0,
   });
   const wasNavigationActiveRef = useRef<boolean>(false);
+  const currentUserRef = useRef<NavUser | null>(currentUser);
+  currentUserRef.current = currentUser;
+  const lastSyncedConfigJsonRef = useRef<string>(JSON.stringify(initialConfig));
+  const lastRecordedCameraRef = useRef<SavedMapCamera>({ ...initialCamera });
+  const lastNavCamPersistTsRef = useRef<number>(0);
+
+  const beginCameraTransition = useCallback((durationHintMs = 1000) => {
+    cameraTransitionInFlightRef.current = true;
+    if (cameraTransitionTimerRef.current !== null) {
+      window.clearTimeout(cameraTransitionTimerRef.current);
+    }
+    cameraTransitionTimerRef.current = window.setTimeout(() => {
+      cameraTransitionInFlightRef.current = false;
+      cameraTransitionTimerRef.current = null;
+    }, Math.max(250, durationHintMs + 150));
+  }, []);
+
+  const hasCameraChangedMeaningfully = useCallback(
+    (prev: SavedMapCamera, next: SavedMapCamera): boolean => {
+      return (
+        Math.abs(prev.lon - next.lon) >= 0.00015 ||
+        Math.abs(prev.lat - next.lat) >= 0.00015 ||
+        Math.abs(prev.zoom - next.zoom) >= 0.05 ||
+        Math.abs(shortestAngleDeltaDeg(prev.bearing, next.bearing)) >= 1.5 ||
+        Math.abs(prev.pitch - next.pitch) >= 1.5
+      );
+    },
+    []
+  );
+
+  const recordCameraIfChanged = useCallback(
+    (nextCamera: SavedMapCamera, debounceMs = 1500) => {
+      if (!hasCameraChangedMeaningfully(lastRecordedCameraRef.current, nextCamera)) {
+        return;
+      }
+      lastRecordedCameraRef.current = { ...nextCamera };
+      UserStateSyncService.recordLocalCamera(nextCamera, currentUserRef.current, debounceMs);
+    },
+    [hasCameraChangedMeaningfully]
+  );
+
+  const applyRemoteMergedState = useCallback(
+    (result: MergeUserStateResult) => {
+      if (result.applyRemoteConfig) {
+        const cfg = result.merged.config;
+        lastSyncedConfigJsonRef.current = JSON.stringify(cfg);
+        NavigationHeadingService.setOrientationPreference(cfg.navOrientation);
+        void UserLocationIconService.setPreference(cfg.userIcon).then((savedIcon) => {
+          setUserIconPref(savedIcon);
+          if (userMarkerRef.current) {
+            UserLocationIconService.renderMarkerElement(
+              userMarkerRef.current.getElement(),
+              savedIcon,
+              liveHeadingRef.current,
+              mapRef.current?.getBearing() ?? 0,
+              isNavigationActiveRef.current
+            );
+          }
+        });
+        setTheme(cfg.theme);
+        setVisibility(cfg.visibility);
+        setNavOrientation(cfg.navOrientation);
+        setShowCenterCrosshair(cfg.showCenterCrosshair);
+        setPlanningMode(cfg.planningMode);
+      }
+
+      if (result.applyRemoteCamera && result.merged.camera) {
+        const cam = result.merged.camera;
+        lastRecordedCameraRef.current = { ...cam };
+        const map = mapRef.current;
+        if (map && !isNavigationActiveRef.current && !isFollowingUserRef.current) {
+          beginCameraTransition(650);
+          map.easeTo({
+            center: [cam.lon, cam.lat],
+            zoom: cam.zoom,
+            bearing: cam.bearing,
+            pitch: cam.pitch,
+            duration: 600,
+            essential: true,
+          });
+          setMapBearing(cam.bearing);
+        }
+        setCursorCoords((prev) => ({
+          ...prev,
+          lon: Number(cam.lon.toFixed(4)),
+          lat: Number(cam.lat.toFixed(4)),
+          zoom: Number(cam.zoom.toFixed(1)),
+        }));
+      }
+
+      if (result.merged.lastSyncedAt) {
+        setLastSyncedAt(result.merged.lastSyncedAt);
+      }
+    },
+    [beginCameraTransition]
+  );
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -425,15 +572,89 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Sync pending planned routes and fetch remote planing_tracks when signed in & online
+  // Persist user configuration changes locally immediately & debounce cross-platform cloud sync
+  useEffect(() => {
+    const snapshot: SavedUserConfiguration = {
+      theme,
+      visibility,
+      navOrientation,
+      showCenterCrosshair,
+      planningMode,
+      userIcon: userIconPref,
+    };
+    const serialized = JSON.stringify(snapshot);
+    if (serialized === lastSyncedConfigJsonRef.current) {
+      return;
+    }
+    lastSyncedConfigJsonRef.current = serialized;
+    UserStateSyncService.recordLocalConfig(snapshot, currentUserRef.current);
+  }, [theme, visibility, navOrientation, showCenterCrosshair, planningMode, userIconPref]);
+
+  // Flush last map position & cloud user state cleanly when backgrounded or leaving page
+  useEffect(() => {
+    const captureAndFlush = () => {
+      const map = mapRef.current;
+      if (map) {
+        try {
+          const c = map.getCenter();
+          recordCameraIfChanged(
+            {
+              lon: c.lng,
+              lat: c.lat,
+              zoom: map.getZoom(),
+              bearing: map.getBearing(),
+              pitch: map.getPitch(),
+            },
+            0
+          );
+        } catch {
+          // Ignore if map was already disposed
+        }
+      }
+      if (currentUserRef.current && UserStateSyncService.hasDirtyCloudChanges()) {
+        void UserStateSyncService.flushCloudPush(currentUserRef.current);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        captureAndFlush();
+      }
+    };
+
+    window.addEventListener('pagehide', captureAndFlush);
+    window.addEventListener('beforeunload', captureAndFlush);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', captureAndFlush);
+      window.removeEventListener('beforeunload', captureAndFlush);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [recordCameraIfChanged]);
+
+  // Sync pending planned routes and cross-platform user position/config when signed in & online
   useEffect(() => {
     if (!currentUser || !isOnline) return;
     let cancelled = false;
+    setIsSyncingCloud(true);
+
     (async () => {
       try {
-        const syncedCount = await PlannedTracksCloudService.syncPendingRoutesForUser(currentUser);
-        const downloaded = await PlannedTracksCloudService.fetchUserPlannedRoutes(currentUser);
+        const [mergedState, syncedCount, downloaded] = await Promise.all([
+          UserStateSyncService.pullAndMergeCloudState(currentUser),
+          PlannedTracksCloudService.syncPendingRoutesForUser(currentUser),
+          PlannedTracksCloudService.fetchUserPlannedRoutes(currentUser),
+        ]);
         if (cancelled) return;
+
+        if (mergedState) {
+          applyRemoteMergedState(mergedState);
+          if (mergedState.applyRemoteCamera || mergedState.applyRemoteConfig) {
+            showToast('שוחזרו מיקום והגדרות מחשבון Google שלך');
+          }
+          setLastSyncedAt(mergedState.merged.lastSyncedAt || new Date().toISOString());
+        }
+
         if (syncedCount > 0 || downloaded.length > 0) {
           if (deletedRouteIdsRef.current.size > 0) {
             await db.routes.bulkDelete(Array.from(deletedRouteIdsRef.current));
@@ -450,12 +671,23 @@ export const App: React.FC = () => {
         }
       } catch (err) {
         console.warn('[NavApp] Planned tracks cloud sync warning:', err);
+      } finally {
+        if (!cancelled) {
+          setIsSyncingCloud(false);
+        }
       }
     })();
+
+    const unsubRemoteState = UserStateSyncService.subscribeRemoteState(currentUser, (remoteRes) => {
+      if (cancelled) return;
+      applyRemoteMergedState(remoteRes);
+    });
+
     return () => {
       cancelled = true;
+      unsubRemoteState();
     };
-  }, [currentUser, isOnline, showToast]);
+  }, [currentUser, isOnline, showToast, applyRemoteMergedState]);
 
   // Toggle MapLibre doubleClickZoom & crosshair cursor while Route Planning mode is active
   useEffect(() => {
@@ -514,17 +746,6 @@ export const App: React.FC = () => {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [isRecordingTrack, isRecordingPaused]);
-
-  const beginCameraTransition = useCallback((durationHintMs = 1000) => {
-    cameraTransitionInFlightRef.current = true;
-    if (cameraTransitionTimerRef.current !== null) {
-      window.clearTimeout(cameraTransitionTimerRef.current);
-    }
-    cameraTransitionTimerRef.current = window.setTimeout(() => {
-      cameraTransitionInFlightRef.current = false;
-      cameraTransitionTimerRef.current = null;
-    }, Math.max(250, durationHintMs + 150));
-  }, []);
 
   const syncHeadingUi = useCallback((resolved: number | null, perfNowMs = performance.now()) => {
     liveHeadingRef.current = resolved;
@@ -710,6 +931,7 @@ export const App: React.FC = () => {
   }, [activeRoute, isNavigationActive]);
 
   useEffect(() => {
+    routePlannerEngine.clearCache();
     const smoother = navSmootherRef.current;
     if (!smoother) return;
     smoother.clearRoadNetworkCache();
@@ -784,15 +1006,9 @@ export const App: React.FC = () => {
           if (isNavigatingRouteRef.current) {
             setOffRouteWarning(check.isOffRoute ? check.distanceFromTrailMeters : null);
           }
-          const feature = currentActiveRoute.geojson.features[0] as GeoJSON.Feature<GeoJSON.LineString>;
-          if (feature?.geometry?.coordinates?.length >= 2) {
-            const endCoord =
-              feature.geometry.coordinates[feature.geometry.coordinates.length - 1];
-            const rem = turf.distance(turf.point(check.snappedCoord), turf.point(endCoord), {
-              units: 'kilometers',
-            });
-            setRemainingDistKm(Number(rem.toFixed(1)));
-          }
+          setRemainingDistKm(
+            RouteManager.computeRemainingDistanceKm(currentActiveRoute, checkLon, checkLat)
+          );
         }
 
         if (isRecordingTrackRef.current && !isRecordingPausedRef.current && ingest.accepted) {
@@ -1096,24 +1312,38 @@ export const App: React.FC = () => {
           'case',
           ['==', ['get', 'color'], PLANNING_ROUTE_COLOR],
           currentTheme === 'topo-dark' ? '#93c5fd' : '#1e3a8a',
+          ['==', ['get', 'color'], '#f59e0b'],
+          currentTheme === 'topo-dark' ? '#fcd34d' : '#78350f',
+          ['==', ['get', 'color'], '#ef4444'],
+          currentTheme === 'topo-dark' ? '#fca5a5' : '#7f1d1d',
+          ['==', ['get', 'color'], '#9333ea'],
+          currentTheme === 'topo-dark' ? '#d8b4fe' : '#4c1d95',
+          ['==', ['get', 'color'], '#06b6d4'],
+          currentTheme === 'topo-dark' ? '#67e8f9' : '#164e63',
+          ['==', ['get', 'color'], '#14b8a6'],
+          currentTheme === 'topo-dark' ? '#5eead4' : '#134e4a',
           currentTheme === 'topo-dark' ? '#f9a8d4' : '#831843',
         ];
 
         const normalizeFeaturesForRoute = (r: SavedRouteRecord): GeoJSON.Feature[] => {
           const feats = r.geojson?.features || [];
-          if (r.sourceFormat !== 'planned') return feats;
+          const resolvedColor = resolveRouteDisplayColor(r);
           return feats.map((f) => ({
             ...f,
             properties: {
               ...(f.properties || {}),
-              color: PLANNING_ROUTE_COLOR,
+              color: resolvedColor,
             },
           }));
         };
 
+        const editingHiddenId = currentPlan.active ? currentPlan.editingRouteId : null;
+
         // Other visible saved routes (renders full multi-route / multi-segment GPX paths clearly)
         const secondaryFeatures = allRoutes
-          .filter((r) => r.visible !== false && r.id !== currentRoute?.id)
+          .filter(
+            (r) => r.visible !== false && r.id !== currentRoute?.id && r.id !== editingHiddenId
+          )
           .flatMap((r) => normalizeFeaturesForRoute(r));
         const savedRoutesGeoJson: GeoJSON.FeatureCollection = {
           type: 'FeatureCollection',
@@ -1149,13 +1379,17 @@ export const App: React.FC = () => {
           });
         }
 
-        // Active Route (semi-transparent highlighter ribbon + crisp outer rail casing so original trail colors stay visible through the center)
-        const routeGeoJson: GeoJSON.FeatureCollection = currentRoute
-          ? {
-              type: 'FeatureCollection',
-              features: normalizeFeaturesForRoute(currentRoute),
-            }
-          : { type: 'FeatureCollection', features: [] };
+        // Active Route (respects route.visible toggle and hides stale copy while editing waypoints)
+        const isActiveRouteVisible = Boolean(
+          currentRoute && currentRoute.visible !== false && currentRoute.id !== editingHiddenId
+        );
+        const routeGeoJson: GeoJSON.FeatureCollection =
+          isActiveRouteVisible && currentRoute
+            ? {
+                type: 'FeatureCollection',
+                features: normalizeFeaturesForRoute(currentRoute),
+              }
+            : { type: 'FeatureCollection', features: [] };
 
         const existingRouteSrc = map.getSource('active-route-src') as maplibregl.GeoJSONSource;
         if (existingRouteSrc) {
@@ -1187,27 +1421,35 @@ export const App: React.FC = () => {
           });
         }
 
-        // Active Route Start / Finish Endpoint Markers (supports single & multi-segment tracks)
+        // Active Route Start / Finish Endpoint Markers (supports LineString & MultiLineString)
         const endpointFeatures: GeoJSON.Feature[] = [];
-        const activeLineFeatures = (currentRoute?.geojson?.features?.filter(
-          (f) => f.geometry?.type === 'LineString'
-        ) || []) as Array<GeoJSON.Feature<GeoJSON.LineString>>;
-        const firstCoords = activeLineFeatures[0]?.geometry?.coordinates || [];
-        const lastCoords =
-          activeLineFeatures[activeLineFeatures.length - 1]?.geometry?.coordinates || [];
-        if (firstCoords.length >= 1 && lastCoords.length >= 1) {
-          endpointFeatures.push(
-            {
-              type: 'Feature',
-              properties: { kind: 'start' },
-              geometry: { type: 'Point', coordinates: firstCoords[0] },
-            },
-            {
-              type: 'Feature',
-              properties: { kind: 'end' },
-              geometry: { type: 'Point', coordinates: lastCoords[lastCoords.length - 1] },
+        if (isActiveRouteVisible && currentRoute) {
+          const activeCoordLists: Array<Array<GeoJSON.Position>> = [];
+          for (const f of currentRoute.geojson?.features || []) {
+            if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 1) {
+              activeCoordLists.push(f.geometry.coordinates);
+            } else if (f.geometry?.type === 'MultiLineString') {
+              for (const ring of f.geometry.coordinates) {
+                if (ring.length >= 1) activeCoordLists.push(ring);
+              }
             }
-          );
+          }
+          const firstCoords = activeCoordLists[0] || [];
+          const lastCoords = activeCoordLists[activeCoordLists.length - 1] || [];
+          if (firstCoords.length >= 1 && lastCoords.length >= 1) {
+            endpointFeatures.push(
+              {
+                type: 'Feature',
+                properties: { kind: 'start' },
+                geometry: { type: 'Point', coordinates: firstCoords[0] },
+              },
+              {
+                type: 'Feature',
+                properties: { kind: 'end' },
+                geometry: { type: 'Point', coordinates: lastCoords[lastCoords.length - 1] },
+              }
+            );
+          }
         }
         const endpointsGeoJson: GeoJSON.FeatureCollection = {
           type: 'FeatureCollection',
@@ -1567,7 +1809,7 @@ export const App: React.FC = () => {
         }
 
         // Route Planning Overlays (draft network legs, straight fallback legs, snapped cursor preview, numbered waypoints)
-        const modeColor = PLANNING_MODE_META[currentPlan.mode].color;
+        const modeColor = currentPlan.activeColor || PLANNING_MODE_META[currentPlan.mode].color;
         const planCasingColor = currentTheme === 'topo-dark' ? '#0f172a' : '#ffffff';
 
         const networkFeatures: GeoJSON.Feature[] = currentPlan.active
@@ -1902,11 +2144,16 @@ export const App: React.FC = () => {
       theme: themeRef.current,
     });
 
+    const startupCamera = UserStateSyncService.getStartupState().camera;
+    lastRecordedCameraRef.current = { ...startupCamera };
+
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: initialStyle,
-      center: [34.8134, 30.835],
-      zoom: 12.6,
+      center: [startupCamera.lon, startupCamera.lat],
+      zoom: startupCamera.zoom,
+      bearing: startupCamera.bearing,
+      pitch: startupCamera.pitch,
       maxPitch: 75,
       fadeDuration: 0,
       refreshExpiredTiles: false,
@@ -2022,6 +2269,20 @@ export const App: React.FC = () => {
       const lon = Number(c.lng.toFixed(4));
       const lat = Number(c.lat.toFixed(4));
       const zoom = Number(map.getZoom().toFixed(1));
+      const nowMs = Date.now();
+      if (!isNavFollowTick || nowMs - lastNavCamPersistTsRef.current >= 2500) {
+        lastNavCamPersistTsRef.current = nowMs;
+        recordCameraIfChanged(
+          {
+            lon: c.lng,
+            lat: c.lat,
+            zoom: map.getZoom(),
+            bearing: map.getBearing(),
+            pitch: map.getPitch(),
+          },
+          isNavFollowTick ? 4000 : 1500
+        );
+      }
       const ele = await ElevationService.getElevationAt(lon, lat, 11, false);
       if (isCancelled) return;
       setCursorCoords({ lon, lat, ele, zoom });
@@ -2184,7 +2445,13 @@ export const App: React.FC = () => {
           showToast('לא נמצאו קובצי מפה מקומיים — פתח "מפות אופליין" לטעינת PMTiles.');
         }
         if (loadedPois.length > 0) setPois(loadedPois);
-        if (loadedRoutes.length > 0) setRoutes(loadedRoutes);
+        if (deletedRouteIdsRef.current.size > 0) {
+          await db.routes.bulkDelete(Array.from(deletedRouteIdsRef.current));
+        }
+        const filteredRoutes = loadedRoutes.filter(
+          (r) => !deletedRouteIdsRef.current.has(r.id)
+        );
+        if (filteredRoutes.length > 0) setRoutes(filteredRoutes);
       } catch (err) {
         console.warn('[App] Background data loading warning:', err);
       }
@@ -2377,19 +2644,34 @@ export const App: React.FC = () => {
 
   // Live unified search over all PMTiles vector features + POIs + saved routes + ITM/WGS84 coords
   useEffect(() => {
-    if (!isSearchFocused && !searchQuery.trim()) {
+    const trimmed = searchQuery.trim();
+    if (!isSearchFocused && !trimmed) {
       setSearchResults([]);
+      setExecutedSearchQuery('');
       return;
     }
-    const results = pmtilesSearchService.search(searchQuery, {
-      filter: searchFilter,
-      referenceCoord: searchRefCoordRef.current,
-      pois,
-      routes,
-      limit: 30,
-    });
-    setSearchResults(results);
-    setActiveSearchIndex(0);
+
+    const runSearch = () => {
+      const results = pmtilesSearchService.search(searchQuery, {
+        filter: searchFilter,
+        referenceCoord: searchRefCoordRef.current,
+        pois,
+        routes,
+        limit: 30,
+      });
+      setSearchResults(results);
+      setExecutedSearchQuery(searchQuery);
+      setActiveSearchIndex(0);
+    };
+
+    if (!trimmed) {
+      runSearch();
+      return;
+    }
+
+    // Brief coalesce delay keeps Android WebView IME keystrokes lag-free while scanning 142k+ features
+    const timer = window.setTimeout(runSearch, 40);
+    return () => window.clearTimeout(timer);
   }, [
     searchQuery,
     searchFilter,
@@ -2566,13 +2848,13 @@ export const App: React.FC = () => {
   );
 
   const handleImportedData = useCallback(
-    async (poiCount: number, createdRoutes: SavedRouteRecord[]) => {
+    async (poiCount: number, createdRoutes: SavedRouteRecord[], importedPois: PoiRecord[] = []) => {
       const [updatedPois, updatedRoutes] = await Promise.all([
         PoiManager.getAllPois(),
         RouteManager.initializeStarterRoutes(),
       ]);
       setPois(updatedPois);
-      setRoutes(updatedRoutes);
+      setRoutes(updatedRoutes.filter((r) => !deletedRouteIdsRef.current.has(r.id)));
 
       if (createdRoutes.length > 0) {
         const primary = createdRoutes.reduce(
@@ -2596,7 +2878,7 @@ export const App: React.FC = () => {
             : `יובאו ${createdRoutes.length} מסלולי שטח ומוצגים במפה`
         );
       } else if (poiCount > 0) {
-        const latestPoi = updatedPois[updatedPois.length - 1];
+        const latestPoi = importedPois[0] ?? updatedPois[updatedPois.length - 1];
         if (!isMobileRef.current) {
           setIsStorageOpen(false);
         } else {
@@ -2618,34 +2900,30 @@ export const App: React.FC = () => {
     [fitBoundsToRoutes, beginCameraTransition, showToast]
   );
 
-  const handleHoverElevationChart = (
-    pt: { lon: number; lat: number; ele: number; distKm: number } | null
-  ) => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (!pt) {
-      hoverMarkerRef.current?.remove();
-      hoverMarkerRef.current = null;
-      return;
-    }
-    const markerColor =
-      activeRouteRef.current?.sourceFormat === 'planned'
-        ? PLANNING_ROUTE_COLOR
-        : !activeRouteRef.current?.color || activeRouteRef.current.color === '#10b981'
-          ? '#ec4899'
-          : activeRouteRef.current.color;
-    if (!hoverMarkerRef.current) {
-      const el = document.createElement('div');
-      el.className = 'w-4 h-4 rounded-full border-2 border-white shadow-lg pointer-events-none';
-      el.style.backgroundColor = markerColor;
-      hoverMarkerRef.current = new maplibregl.Marker({ element: el })
-        .setLngLat([pt.lon, pt.lat])
-        .addTo(map);
-    } else {
-      hoverMarkerRef.current.getElement().style.backgroundColor = markerColor;
-      hoverMarkerRef.current.setLngLat([pt.lon, pt.lat]);
-    }
-  };
+  const handleHoverElevationChart = useCallback(
+    (pt: { lon: number; lat: number; ele: number; distKm: number } | null) => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (!pt) {
+        hoverMarkerRef.current?.remove();
+        hoverMarkerRef.current = null;
+        return;
+      }
+      const markerColor = resolveRouteDisplayColor(activeRouteRef.current);
+      if (!hoverMarkerRef.current) {
+        const el = document.createElement('div');
+        el.className = 'w-4 h-4 rounded-full border-2 border-white shadow-lg pointer-events-none';
+        el.style.backgroundColor = markerColor;
+        hoverMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat([pt.lon, pt.lat])
+          .addTo(map);
+      } else {
+        hoverMarkerRef.current.getElement().style.backgroundColor = markerColor;
+        hoverMarkerRef.current.setLngLat([pt.lon, pt.lat]);
+      }
+    },
+    []
+  );
 
   const handleLocateMe = () => {
     setIsFollowingUser(true);
@@ -2781,6 +3059,7 @@ export const App: React.FC = () => {
     setSelectedPoi(item);
     handleFlyTo(item.lon, item.lat, zoom);
     setSearchQuery('');
+    setExecutedSearchQuery('');
     setSearchResults([]);
     setIsSearchFocused(false);
     if (isMobile) {
@@ -2795,6 +3074,7 @@ export const App: React.FC = () => {
 
   const handleSelectSearchResult = (item: SearchResultItem) => {
     setSearchQuery('');
+    setExecutedSearchQuery('');
     setSearchResults([]);
     setIsSearchFocused(false);
 
@@ -2829,26 +3109,46 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSelectRoute = async (
-    route: SavedRouteRecord | null,
-    options?: { flyTo?: boolean }
-  ) => {
-    if (!route) {
+  const handleSelectRoute = useCallback(
+    async (route: SavedRouteRecord | null, options?: { flyTo?: boolean }) => {
+      const seq = ++selectRouteSeqRef.current;
+      if (!route) {
+        handleHoverElevationChart(null);
+        setActiveRoute(null);
+        setIsNavigatingRoute(false);
+        setOffRouteWarning(null);
+        setRemainingDistKm(null);
+        return;
+      }
       handleHoverElevationChart(null);
-      setActiveRoute(null);
-      setIsNavigatingRoute(false);
-      setOffRouteWarning(null);
-      setRemainingDistKm(null);
-      return;
+      setActiveRoute(route);
+      if (options?.flyTo !== false) {
+        handleFlyToRoute(route);
+      }
+      const refreshed = await RouteManager.refreshRouteElevationsFromDem(route);
+      if (selectRouteSeqRef.current !== seq || deletedRouteIdsRef.current.has(route.id)) {
+        return;
+      }
+      setActiveRoute((cur) => (cur?.id === refreshed.id ? refreshed : cur));
+      setRoutes((prev) => prev.map((r) => (r.id === refreshed.id ? refreshed : r)));
+    },
+    [handleFlyToRoute, handleHoverElevationChart]
+  );
+
+  // Backfill active route elevation profile automatically once Israel DEM finishes mounting
+  useEffect(() => {
+    if (!demInfo) return;
+    const cur = activeRouteRef.current;
+    if (!cur) return;
+    if (
+      cur.minEle === 0 &&
+      cur.maxEle === 0 &&
+      cur.ascentMeters === 0 &&
+      cur.descentMeters === 0
+    ) {
+      void handleSelectRoute(cur, { flyTo: false });
     }
-    handleHoverElevationChart(null);
-    const refreshed = await RouteManager.refreshRouteElevationsFromDem(route);
-    setActiveRoute(refreshed);
-    setRoutes((prev) => prev.map((r) => (r.id === refreshed.id ? refreshed : r)));
-    if (options?.flyTo !== false) {
-      handleFlyToRoute(refreshed);
-    }
-  };
+  }, [demInfo, handleSelectRoute]);
 
   const handleStartRouteNavigation = async (route: SavedRouteRecord) => {
     void NavigationHeadingService.requestCompassPermissionIfNeeded();
@@ -2903,8 +3203,13 @@ export const App: React.FC = () => {
 
   const handleDeleteRoute = async (routeId: string) => {
     deletedRouteIdsRef.current.add(routeId);
+    markPlannedRouteDeleted(routeId);
     const target = routesRef.current.find((r) => r.id === routeId);
     const wasActive = activeRouteRef.current?.id === routeId;
+    if (editingRouteIdRef.current === routeId) {
+      editingRouteIdRef.current = null;
+      setEditingRouteId(null);
+    }
     const nextRoutes = routesRef.current.filter((r) => r.id !== routeId);
     const nextActive = wasActive ? null : activeRouteRef.current;
 
@@ -2941,8 +3246,79 @@ export const App: React.FC = () => {
     showToast('המסלול נמחק מהמכשיר');
   };
 
+  const syncMutatedRouteState = useCallback(
+    (updated: SavedRouteRecord | undefined, successToast?: string) => {
+      if (!updated) return;
+      routesRef.current = routesRef.current.map((r) => (r.id === updated.id ? updated : r));
+      setRoutes((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+      if (activeRouteRef.current?.id === updated.id) {
+        activeRouteRef.current = updated;
+        setActiveRoute(updated);
+      }
+      if (successToast) showToast(successToast);
+      if (
+        updated.sourceFormat === 'planned' &&
+        updated.cloudSyncStatus === 'pending' &&
+        currentUser &&
+        isOnline &&
+        AuthService.isAvailable()
+      ) {
+        void PlannedTracksCloudService.savePlannedRouteToFirebase(updated, currentUser).then(
+          (cloudRes) => {
+            if (deletedRouteIdsRef.current.has(updated.id)) return;
+            const syncedRec = cloudRes.route;
+            setRoutes((prev) => prev.map((r) => (r.id === syncedRec.id ? syncedRec : r)));
+            setActiveRoute((cur) => (cur?.id === syncedRec.id ? syncedRec : cur));
+          }
+        );
+      }
+    },
+    [currentUser, isOnline, showToast]
+  );
+
+  const handleRenameRoute = useCallback(
+    async (routeId: string, nextName: string) => {
+      const updated = await RouteManager.updateRouteDetails(routeId, { name: nextName });
+      syncMutatedRouteState(updated, updated ? `שם המסלול עודכן ל-"${updated.name}"` : undefined);
+    },
+    [syncMutatedRouteState]
+  );
+
+  const handleChangeRouteColor = useCallback(
+    async (routeId: string, color: string) => {
+      const updated = await RouteManager.updateRouteDetails(routeId, { color });
+      syncMutatedRouteState(updated, 'צבע המסלול עודכן');
+    },
+    [syncMutatedRouteState]
+  );
+
+  const handleToggleRouteVisibility = useCallback(
+    async (routeId: string) => {
+      const updated = await RouteManager.toggleRouteVisibility(routeId);
+      syncMutatedRouteState(
+        updated,
+        updated
+          ? updated.visible === false
+            ? 'המסלול הוסתר מהמפה'
+            : 'המסלול מוצג במפה'
+          : undefined
+      );
+    },
+    [syncMutatedRouteState]
+  );
+
+  const handleReverseRoute = useCallback(
+    async (routeId: string) => {
+      handleHoverElevationChart(null);
+      const updated = await RouteManager.reverseRoute(routeId);
+      syncMutatedRouteState(updated, 'כיוון המסלול הוחלף');
+    },
+    [handleHoverElevationChart, syncMutatedRouteState]
+  );
+
   const recomputePlanElevationStats = useCallback(
     async (legs: PlannedLeg[], wps: PlannedWaypoint[]) => {
+      const seq = ++planElevSeqRef.current;
       const allPts: Array<[number, number]> = [];
       for (const leg of legs) {
         for (const c of leg.coordinates) {
@@ -2951,11 +3327,13 @@ export const App: React.FC = () => {
         }
       }
       if (allPts.length < 2) {
-        setPlanElevStats({ ascent: 0, descent: 0 });
+        if (planElevSeqRef.current === seq) {
+          setPlanElevStats({ ascent: 0, descent: 0 });
+        }
         return;
       }
 
-      const maxSamples = 35;
+      const maxSamples = 45;
       const step = Math.max(1, Math.floor(allPts.length / maxSamples));
       const sampledCoords: Array<[number, number]> = [];
       for (let i = 0; i < allPts.length; i += step) sampledCoords.push(allPts[i]);
@@ -2966,7 +3344,7 @@ export const App: React.FC = () => {
       const eles = await Promise.all(
         sampledCoords.map(([lon, lat]) => ElevationService.getElevationAt(lon, lat, 11))
       );
-      if (planLegsRef.current.length !== legs.length) return;
+      if (planElevSeqRef.current !== seq) return;
 
       let ascent = 0;
       let descent = 0;
@@ -3005,6 +3383,7 @@ export const App: React.FC = () => {
       const mode = planningModeRef.current;
 
       const work = (async () => {
+        isRoutingLegRef.current = true;
         setIsRoutingLeg(true);
         try {
           const snapped = await routePlannerEngine.snapToNearestHighway(clickLon, clickLat, mode);
@@ -3027,6 +3406,8 @@ export const App: React.FC = () => {
               ele,
               roadLabel: snapped.roadLabel,
             };
+            disconnectedCandidateRef.current = null;
+            planWaypointsRef.current = [firstWp];
             setDisconnectedCandidate(null);
             setPlanWaypoints([firstWp]);
             setPlanPreviewPoint(snapped);
@@ -3036,6 +3417,7 @@ export const App: React.FC = () => {
           const prevWp = prevWaypoints[prevWaypoints.length - 1];
           const res = await routePlannerEngine.routeBetweenSnappedPoints(prevWp, snapped, mode);
           if (!res.found) {
+            disconnectedCandidateRef.current = snapped;
             setDisconnectedCandidate(snapped);
             if (isMobileRef.current) {
               setMobileSheetExpanded(true);
@@ -3063,11 +3445,15 @@ export const App: React.FC = () => {
           };
           const nextWps = [...prevWaypoints, newWp];
           const nextLegs = [...planLegsRef.current, newLeg];
+          disconnectedCandidateRef.current = null;
+          planWaypointsRef.current = nextWps;
+          planLegsRef.current = nextLegs;
           setDisconnectedCandidate(null);
           setPlanWaypoints(nextWps);
           setPlanLegs(nextLegs);
           void recomputePlanElevationStats(nextLegs, nextWps);
         } finally {
+          isRoutingLegRef.current = false;
           setIsRoutingLeg(false);
         }
       })();
@@ -3115,6 +3501,9 @@ export const App: React.FC = () => {
     };
     const nextWps = [...prevWps, newWp];
     const nextLegs = [...planLegsRef.current, newLeg];
+    disconnectedCandidateRef.current = null;
+    planWaypointsRef.current = nextWps;
+    planLegsRef.current = nextLegs;
     setDisconnectedCandidate(null);
     setPlanWaypoints(nextWps);
     setPlanLegs(nextLegs);
@@ -3122,11 +3511,13 @@ export const App: React.FC = () => {
   }, [recomputePlanElevationStats]);
 
   const handleCancelDisconnected = useCallback(() => {
+    disconnectedCandidateRef.current = null;
     setDisconnectedCandidate(null);
   }, []);
 
   const handleUndoLastPlanPoint = useCallback(() => {
     if (disconnectedCandidateRef.current) {
+      disconnectedCandidateRef.current = null;
       setDisconnectedCandidate(null);
       return;
     }
@@ -3134,6 +3525,8 @@ export const App: React.FC = () => {
     if (prevWps.length === 0) return;
     const nextWps = prevWps.slice(0, -1);
     const nextLegs = nextWps.length <= 1 ? [] : planLegsRef.current.slice(0, -1);
+    planWaypointsRef.current = nextWps;
+    planLegsRef.current = nextLegs;
     setPlanWaypoints(nextWps);
     setPlanLegs(nextLegs);
     void recomputePlanElevationStats(nextLegs, nextWps);
@@ -3141,6 +3534,7 @@ export const App: React.FC = () => {
 
   const handleClearPlan = useCallback(() => {
     snapSeqRef.current += 1;
+    planElevSeqRef.current += 1;
     disconnectedCandidateRef.current = null;
     planWaypointsRef.current = [];
     planLegsRef.current = [];
@@ -3172,9 +3566,358 @@ export const App: React.FC = () => {
     }
   }, [syncOverlaySourcesToMap]);
 
+  const handleRemovePlanWaypoint = useCallback(
+    async (removeIdx: number) => {
+      if (isRoutingLegRef.current) return;
+      const prevWps = planWaypointsRef.current;
+      const prevLegs = planLegsRef.current;
+      if (removeIdx < 0 || removeIdx >= prevWps.length) return;
+      if (prevWps.length <= 1) {
+        handleClearPlan();
+        return;
+      }
+
+      disconnectedCandidateRef.current = null;
+      setDisconnectedCandidate(null);
+
+      if (removeIdx === 0) {
+        const nextWps = prevWps.slice(1).map((wp, idx) =>
+          idx === 0 ? { ...wp, legType: undefined } : wp
+        );
+        const nextLegs = prevLegs.slice(1);
+        planWaypointsRef.current = nextWps;
+        planLegsRef.current = nextLegs;
+        setPlanWaypoints(nextWps);
+        setPlanLegs(nextLegs);
+        void recomputePlanElevationStats(nextLegs, nextWps);
+        return;
+      }
+
+      if (removeIdx === prevWps.length - 1) {
+        const nextWps = prevWps.slice(0, -1);
+        const nextLegs = prevLegs.slice(0, -1);
+        planWaypointsRef.current = nextWps;
+        planLegsRef.current = nextLegs;
+        setPlanWaypoints(nextWps);
+        setPlanLegs(nextLegs);
+        void recomputePlanElevationStats(nextLegs, nextWps);
+        return;
+      }
+
+      // Bridge prevWps[removeIdx - 1] -> prevWps[removeIdx + 1]
+      const leftWp = prevWps[removeIdx - 1];
+      const rightWp = prevWps[removeIdx + 1];
+      const preferStraight =
+        prevLegs[removeIdx - 1]?.legType === 'straight' ||
+        prevLegs[removeIdx]?.legType === 'straight';
+      const straightDistKm = Number(
+        turf
+          .distance(turf.point([leftWp.lon, leftWp.lat]), turf.point([rightWp.lon, rightWp.lat]), {
+            units: 'kilometers',
+          })
+          .toFixed(3)
+      );
+
+      let bridgedLeg: PlannedLeg;
+      if (preferStraight) {
+        bridgedLeg = {
+          coordinates: [
+            [leftWp.lon, leftWp.lat],
+            [rightWp.lon, rightWp.lat],
+          ],
+          distanceKm: straightDistKm,
+          legType: 'straight',
+          roadLabels: [rightWp.roadLabel || 'קו ישר'],
+        };
+      } else {
+        isRoutingLegRef.current = true;
+        setIsRoutingLeg(true);
+        try {
+          const res = await routePlannerEngine.routeBetweenSnappedPoints(
+            leftWp,
+            rightWp,
+            planningModeRef.current
+          );
+          if (res.found) {
+            bridgedLeg = {
+              coordinates: res.coordinates,
+              distanceKm: res.distanceKm,
+              legType: 'network',
+              roadLabels: res.roadLabels,
+            };
+          } else {
+            bridgedLeg = {
+              coordinates: [
+                [leftWp.lon, leftWp.lat],
+                [rightWp.lon, rightWp.lat],
+              ],
+              distanceKm: straightDistKm,
+              legType: 'straight',
+              roadLabels: [rightWp.roadLabel || 'קו ישר'],
+            };
+            showToast('לא נמצא חיבור דרכים לאחר מחיקת הנקודה — המקטע חובר בקו ישר');
+          }
+        } finally {
+          isRoutingLegRef.current = false;
+          setIsRoutingLeg(false);
+        }
+      }
+
+      const updatedRightWp: PlannedWaypoint = { ...rightWp, legType: bridgedLeg.legType };
+      const nextWps = [
+        ...prevWps.slice(0, removeIdx),
+        updatedRightWp,
+        ...prevWps.slice(removeIdx + 2),
+      ];
+      const nextLegs = [
+        ...prevLegs.slice(0, removeIdx - 1),
+        bridgedLeg,
+        ...prevLegs.slice(removeIdx + 1),
+      ];
+      planWaypointsRef.current = nextWps;
+      planLegsRef.current = nextLegs;
+      setPlanWaypoints(nextWps);
+      setPlanLegs(nextLegs);
+      void recomputePlanElevationStats(nextLegs, nextWps);
+    },
+    [handleClearPlan, recomputePlanElevationStats, showToast]
+  );
+
+  const handleTogglePlanLegType = useCallback(
+    async (legIdx: number) => {
+      if (isRoutingLegRef.current) return;
+      const prevWps = planWaypointsRef.current;
+      const prevLegs = planLegsRef.current;
+      if (legIdx < 0 || legIdx >= prevLegs.length || legIdx + 1 >= prevWps.length) return;
+
+      const curLeg = prevLegs[legIdx];
+      const fromWp = prevWps[legIdx];
+      const toWp = prevWps[legIdx + 1];
+      let nextLeg: PlannedLeg;
+
+      if (curLeg.legType === 'network') {
+        const distKm = Number(
+          turf
+            .distance(turf.point([fromWp.lon, fromWp.lat]), turf.point([toWp.lon, toWp.lat]), {
+              units: 'kilometers',
+            })
+            .toFixed(3)
+        );
+        nextLeg = {
+          coordinates: [
+            [fromWp.lon, fromWp.lat],
+            [toWp.lon, toWp.lat],
+          ],
+          distanceKm: distKm,
+          legType: 'straight',
+          roadLabels: [toWp.roadLabel || 'קו ישר'],
+        };
+      } else {
+        isRoutingLegRef.current = true;
+        setIsRoutingLeg(true);
+        try {
+          const res = await routePlannerEngine.routeBetweenSnappedPoints(
+            fromWp,
+            toWp,
+            planningModeRef.current
+          );
+          if (!res.found) {
+            showToast('לא נמצא חיבור ברשת הדרכים למקטע זה — נשאר בקו ישר');
+            return;
+          }
+          nextLeg = {
+            coordinates: res.coordinates,
+            distanceKm: res.distanceKm,
+            legType: 'network',
+            roadLabels: res.roadLabels,
+          };
+        } finally {
+          isRoutingLegRef.current = false;
+          setIsRoutingLeg(false);
+        }
+      }
+
+      const nextLegs = prevLegs.map((l, idx) => (idx === legIdx ? nextLeg : l));
+      const nextWps = prevWps.map((wp, idx) =>
+        idx === legIdx + 1 ? { ...wp, legType: nextLeg.legType } : wp
+      );
+      planWaypointsRef.current = nextWps;
+      planLegsRef.current = nextLegs;
+      setPlanWaypoints(nextWps);
+      setPlanLegs(nextLegs);
+      void recomputePlanElevationStats(nextLegs, nextWps);
+    },
+    [recomputePlanElevationStats, showToast]
+  );
+
+  const handleEditRouteInPlanner = useCallback(
+    (route: SavedRouteRecord) => {
+      handleHoverElevationChart(null);
+      const mode: PlanningMode = route.planningMode || 'foot';
+      const lineFeatures: Array<GeoJSON.Feature<GeoJSON.LineString>> = [];
+      for (const f of route.geojson?.features || []) {
+        if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 2) {
+          lineFeatures.push(f as GeoJSON.Feature<GeoJSON.LineString>);
+        } else if (f.geometry?.type === 'MultiLineString') {
+          for (const ring of f.geometry.coordinates) {
+            if (ring.length >= 2) {
+              lineFeatures.push({
+                type: 'Feature',
+                properties: f.properties || {},
+                geometry: { type: 'LineString', coordinates: ring },
+              });
+            }
+          }
+        }
+      }
+
+      let wps: PlannedWaypoint[] = (route.waypoints || []).map((wp) => ({ ...wp }));
+      if (wps.length < 2) {
+        const allCoords = lineFeatures.flatMap((lf) =>
+          lf.geometry.coordinates.map((c) => [Number(c[0]), Number(c[1])] as [number, number])
+        );
+        if (allCoords.length < 2) {
+          showToast('לא ניתן לפתוח מסלול ריק לעריכת נקודות');
+          return;
+        }
+        wps = [
+          { lon: allCoords[0][0], lat: allCoords[0][1], roadLabel: 'התחלה' },
+          {
+            lon: allCoords[allCoords.length - 1][0],
+            lat: allCoords[allCoords.length - 1][1],
+            roadLabel: 'סיום',
+            legType: 'network',
+          },
+        ];
+      }
+
+      const legs: PlannedLeg[] = [];
+      if (lineFeatures.length === wps.length - 1) {
+        for (let i = 0; i < wps.length - 1; i++) {
+          const lf = lineFeatures[i];
+          const coords = lf.geometry.coordinates.map(
+            (c) => [Number(c[0]), Number(c[1])] as [number, number]
+          );
+          const distKm = Number(turf.length(lf, { units: 'kilometers' }).toFixed(3));
+          const legType = wps[i + 1].legType || 'network';
+          legs.push({
+            coordinates: coords,
+            distanceKm: distKm,
+            legType,
+            roadLabels: wps[i + 1].roadLabel ? [wps[i + 1].roadLabel!] : [],
+          });
+        }
+      } else {
+        const flatCoords = lineFeatures.flatMap((lf) =>
+          lf.geometry.coordinates.map((c) => [Number(c[0]), Number(c[1])] as [number, number])
+        );
+        const wpIndices: number[] = [];
+        let cursor = 0;
+        for (let w = 0; w < wps.length; w++) {
+          let bestIdx = Math.min(cursor, Math.max(0, flatCoords.length - 1));
+          let bestDistSq = Infinity;
+          for (let j = cursor; j < flatCoords.length; j++) {
+            const dx = flatCoords[j][0] - wps[w].lon;
+            const dy = flatCoords[j][1] - wps[w].lat;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < bestDistSq) {
+              bestDistSq = dSq;
+              bestIdx = j;
+            }
+          }
+          wpIndices.push(bestIdx);
+          cursor = bestIdx;
+        }
+
+        for (let i = 0; i < wps.length - 1; i++) {
+          const fromIdx = wpIndices[i];
+          const toIdx = wpIndices[i + 1];
+          const slice =
+            toIdx > fromIdx && flatCoords.length > toIdx
+              ? flatCoords.slice(fromIdx, toIdx + 1)
+              : ([
+                  [wps[i].lon, wps[i].lat],
+                  [wps[i + 1].lon, wps[i + 1].lat],
+                ] as Array<[number, number]>);
+          const legCoords: Array<[number, number]> =
+            slice.length >= 2
+              ? slice
+              : [
+                  [wps[i].lon, wps[i].lat],
+                  [wps[i + 1].lon, wps[i + 1].lat],
+                ];
+          const distKm = Number(
+            turf.length(turf.lineString(legCoords), { units: 'kilometers' }).toFixed(3)
+          );
+          const legType = wps[i + 1].legType || 'network';
+          legs.push({
+            coordinates: legCoords,
+            distanceKm: distKm,
+            legType,
+            roadLabels: wps[i + 1].roadLabel ? [wps[i + 1].roadLabel!] : [],
+          });
+        }
+      }
+
+      editingRouteIdRef.current = route.id;
+      setEditingRouteId(route.id);
+      planningModeRef.current = mode;
+      setPlanningMode(mode);
+      setPlanRouteName(route.name);
+      disconnectedCandidateRef.current = null;
+      setDisconnectedCandidate(null);
+      setPlanPreviewPoint(null);
+      setPlanCursorCoord(null);
+      planWaypointsRef.current = wps;
+      setPlanWaypoints(wps);
+      planLegsRef.current = legs;
+      setPlanLegs(legs);
+
+      if (isMobileRef.current) {
+        setMobileDisplayMode('planning');
+        setMobilePlanningOverlay('plan-route');
+        setMobileSheetExpanded(true);
+      } else {
+        setDesktopDrawer('plan-route');
+      }
+      handleFlyToRoute(route);
+      void recomputePlanElevationStats(legs, wps);
+    },
+    [handleFlyToRoute, handleHoverElevationChart, recomputePlanElevationStats, showToast]
+  );
+
+  const handleCancelEditPlan = useCallback(() => {
+    editingRouteIdRef.current = null;
+    setEditingRouteId(null);
+    setPlanRouteName('');
+    handleClearPlan();
+    if (isMobileRef.current) {
+      setMobilePlanningOverlay(null);
+      setMobileDisplayMode('planning');
+      setMobileTab('routes');
+      setMobileSheetExpanded(true);
+    } else {
+      setDesktopDrawer('routes');
+    }
+  }, [handleClearPlan]);
+
+  const handleClosePlannerPanel = useCallback(() => {
+    disconnectedCandidateRef.current = null;
+    setDisconnectedCandidate(null);
+    setPlanPreviewPoint(null);
+    setPlanCursorCoord(null);
+    if (isMobileRef.current) {
+      setMobilePlanningOverlay(null);
+    } else {
+      setDesktopDrawer(null);
+    }
+  }, []);
+
   const handleChangePlanningMode = useCallback(
     (nextMode: PlanningMode) => {
+      planningModeRef.current = nextMode;
       setPlanningMode(nextMode);
+      disconnectedCandidateRef.current = null;
       setDisconnectedCandidate(null);
       if (planCursorCoord) {
         void routePlannerEngine
@@ -3187,12 +3930,14 @@ export const App: React.FC = () => {
   );
 
   const handleFinishPlanningRoute = useCallback(async () => {
+    if (isSavingPlan) return;
     if (activeRoutePromiseRef.current) {
       await activeRoutePromiseRef.current;
     }
     const wps = planWaypointsRef.current;
     const legs = planLegsRef.current;
     const mode = planningModeRef.current;
+    const targetEditId = editingRouteIdRef.current;
 
     if (wps.length < 2 || legs.length === 0) {
       showToast('נדרשות לפחות 2 נקודות ציר כדי לשמור מסלול');
@@ -3211,46 +3956,36 @@ export const App: React.FC = () => {
         .map((l) => l.coordinates)
         .filter((coords) => coords.length >= 2);
 
-      const savedLocal = await RouteManager.createAndSavePlannedRoute({
-        name: finalName,
-        mode,
-        segments,
-        waypoints: wps,
-        ownerUid: currentUser?.uid ?? null,
-        ownerEmail: currentUser?.email ?? null,
-      });
+      const savedLocal = targetEditId
+        ? await RouteManager.updatePlannedRoute(targetEditId, {
+            name: finalName,
+            mode,
+            segments,
+            waypoints: wps,
+            ownerUid: currentUser?.uid ?? null,
+            ownerEmail: currentUser?.email ?? null,
+          })
+        : await RouteManager.createAndSavePlannedRoute({
+            name: finalName,
+            mode,
+            segments,
+            waypoints: wps,
+            ownerUid: currentUser?.uid ?? null,
+            ownerEmail: currentUser?.email ?? null,
+          });
 
-      let finalRecord = savedLocal;
-      setRoutes((prev) => [...prev, savedLocal]);
+      setRoutes((prev) =>
+        prev.some((r) => r.id === savedLocal.id)
+          ? prev.map((r) => (r.id === savedLocal.id ? savedLocal : r))
+          : [...prev, savedLocal]
+      );
       setActiveRoute(savedLocal);
 
-      if (currentUser && isOnline && AuthService.isAvailable()) {
-        const cloudRes = await PlannedTracksCloudService.savePlannedRouteToFirebase(
-          savedLocal,
-          currentUser
-        );
-        if (deletedRouteIdsRef.current.has(savedLocal.id)) {
-          await RouteManager.deleteRoute(savedLocal.id);
-          void PlannedTracksCloudService.deleteRemotePlannedRoute(cloudRes.route, currentUser);
-          return;
-        }
-        finalRecord = cloudRes.route;
-        setRoutes((prev) => prev.map((r) => (r.id === finalRecord.id ? finalRecord : r)));
-        setActiveRoute((cur) => (cur?.id === finalRecord.id ? finalRecord : cur));
-
-        if (cloudRes.synced) {
-          showToast(`המסלול "${finalRecord.name}" נשמר כ-GPX במכשיר וב-planing_tracks!`);
-        } else {
-          showToast(`נשמר מקומית כ-GPX (סנכרון ענן נדחה: ${cloudRes.error || 'שגיאה'})`);
-        }
-      } else if (!AuthService.isAvailable()) {
-        showToast(`המסלול "${finalRecord.name}" נשמר מקומית כ-GPX`);
-      } else if (!currentUser) {
-        showToast('המסלול נשמר מקומית כ-GPX — התחבר עם Gmail לגיבוי ב-planing_tracks');
-      } else {
-        showToast('אופליין: המסלול נשמר כ-GPX במכשיר ויסונכרן עם החזרה לרשת');
-      }
-
+      editingRouteIdRef.current = null;
+      setEditingRouteId(null);
+      disconnectedCandidateRef.current = null;
+      planWaypointsRef.current = [];
+      planLegsRef.current = [];
       setDisconnectedCandidate(null);
       setPlanWaypoints([]);
       setPlanLegs([]);
@@ -3267,12 +4002,44 @@ export const App: React.FC = () => {
       } else {
         setDesktopDrawer('routes');
       }
+
+      if (currentUser && isOnline && AuthService.isAvailable()) {
+        showToast(
+          targetEditId
+            ? `המסלול "${savedLocal.name}" עודכן ונשמר — מסנכרן לענן ברקע...`
+            : `המסלול "${savedLocal.name}" נשמר — מסנכרן לענן ברקע...`
+        );
+        void PlannedTracksCloudService.savePlannedRouteToFirebase(savedLocal, currentUser).then(
+          async (cloudRes) => {
+            if (deletedRouteIdsRef.current.has(savedLocal.id)) {
+              await RouteManager.deleteRoute(savedLocal.id);
+              void PlannedTracksCloudService.deleteRemotePlannedRoute(cloudRes.route, currentUser);
+              return;
+            }
+            const finalRecord = cloudRes.route;
+            setRoutes((prev) => prev.map((r) => (r.id === finalRecord.id ? finalRecord : r)));
+            setActiveRoute((cur) => (cur?.id === finalRecord.id ? finalRecord : cur));
+
+            if (cloudRes.synced) {
+              showToast(`המסלול "${finalRecord.name}" נשמר כ-GPX וב-planing_tracks!`);
+            } else {
+              showToast(`נשמר מקומית כ-GPX (סנכרון ענן נדחה: ${cloudRes.error || 'שגיאה'})`);
+            }
+          }
+        );
+      } else if (!AuthService.isAvailable()) {
+        showToast(`המסלול "${savedLocal.name}" נשמר מקומית כ-GPX`);
+      } else if (!currentUser) {
+        showToast('המסלול נשמר מקומית כ-GPX — התחבר עם Gmail לגיבוי ב-planing_tracks');
+      } else {
+        showToast('אופליין: המסלול נשמר כ-GPX במכשיר ויסונכרן עם החזרה לרשת');
+      }
     } catch (err: any) {
       showToast(err?.message || 'שגיאה בשמירת המסלול');
     } finally {
       setIsSavingPlan(false);
     }
-  }, [planRouteName, currentUser, isOnline, showToast]);
+  }, [isSavingPlan, planRouteName, currentUser, isOnline, showToast]);
 
   handlePlanMapClickRef.current = handlePlanMapClick;
   handleFinishPlanningRef.current = handleFinishPlanningRoute;
@@ -3293,25 +4060,65 @@ export const App: React.FC = () => {
   const handleSignOutGoogle = useCallback(async () => {
     setIsAuthBusy(true);
     try {
+      if (currentUser && UserStateSyncService.hasDirtyCloudChanges()) {
+        await UserStateSyncService.flushCloudPush(currentUser);
+      }
       await AuthService.signOut();
       setCurrentUser(null);
       showToast('התנתקת מחשבון Google');
     } finally {
       setIsAuthBusy(false);
     }
-  }, [showToast]);
+  }, [currentUser, showToast]);
 
   const handleSyncPendingNow = useCallback(async () => {
     if (!currentUser) return;
+    setIsSyncingCloud(true);
     try {
-      const count = await PlannedTracksCloudService.syncPendingRoutesForUser(currentUser);
-      const all = await db.routes.toArray();
+      const map = mapRef.current;
+      if (map) {
+        try {
+          const c = map.getCenter();
+          recordCameraIfChanged(
+            {
+              lon: c.lng,
+              lat: c.lat,
+              zoom: map.getZoom(),
+              bearing: map.getBearing(),
+              pitch: map.getPitch(),
+            },
+            1500
+          );
+        } catch {
+          // Ignore if map is unavailable
+        }
+      }
+      const [count, merged] = await Promise.all([
+        PlannedTracksCloudService.syncPendingRoutesForUser(currentUser),
+        UserStateSyncService.pullAndMergeCloudState(currentUser),
+      ]);
+      if (merged) {
+        applyRemoteMergedState(merged);
+        setLastSyncedAt(merged.merged.lastSyncedAt || new Date().toISOString());
+      } else if (UserStateSyncService.hasDirtyCloudChanges()) {
+        const pushed = await UserStateSyncService.flushCloudPush(currentUser);
+        if (pushed) {
+          setLastSyncedAt(new Date().toISOString());
+        }
+      }
+      const all = (await db.routes.toArray()).filter((r) => !deletedRouteIdsRef.current.has(r.id));
       setRoutes(all);
-      showToast(count > 0 ? `סונכרנו ${count} מסלולים ל-planing_tracks` : 'הכל כבר מסונכרן');
+      showToast(
+        count > 0
+          ? `סונכרנו ${count} מסלולים והגדרות לחשבון Google`
+          : 'מיקום והגדרות מסונכרנים בענן'
+      );
     } catch (err: any) {
       showToast(err?.message || 'שגיאת סנכרון');
+    } finally {
+      setIsSyncingCloud(false);
     }
-  }, [currentUser, showToast]);
+  }, [currentUser, showToast, applyRemoteMergedState, recordCameraIfChanged]);
 
   const planTotalDistanceKm = useMemo(
     () => Number(planLegs.reduce((sum, leg) => sum + leg.distanceKm, 0).toFixed(2)),
@@ -3400,279 +4207,67 @@ export const App: React.FC = () => {
     Boolean(osmInfo && (osmInfo.record.storageKind === 'opfs' || osmInfo.record.storageKind === 'native-file' || osmInfo.record.storageKind === 'user-file')) &&
     Boolean(demInfo && (demInfo.record.storageKind === 'opfs' || demInfo.record.storageKind === 'native-file' || demInfo.record.storageKind === 'user-file'));
 
-  const renderSearchBar = (compactMobile: boolean) => {
-    const showDropdown = isSearchFocused || searchQuery.trim().length > 0;
-    const isIndexingCustom = Boolean(searchStatus.indexingProgress);
-    const indexPct =
-      searchStatus.indexingProgress && searchStatus.indexingProgress.total > 0
-        ? Math.min(
-            100,
-            Math.round(
-              (searchStatus.indexingProgress.done / searchStatus.indexingProgress.total) * 100
-            )
-          )
-        : 0;
-    const quickExamples = [
-      'ירושלים',
-      'עין עקב',
-      'כביש 6',
-      'הר מירון',
-      'נחל צין',
-      'מעלה זיק',
-      '1813-5828',
-    ];
+  const osmInfoRef = useRef<MountedArchiveInfo | null>(osmInfo);
+  osmInfoRef.current = osmInfo;
 
-    return (
-      <div ref={searchContainerRef} className="relative">
-        <div
-          className={`flex items-center gap-2 border transition-colors ${
-            compactMobile ? 'rounded-full px-3.5 py-2' : 'rounded-2xl px-3.5 py-2.5'
-          } ${t.panel}`}
-        >
-          <Search
-            className={`w-4 h-4 shrink-0 ${
-              isIndexingCustom ? 'text-amber-500 animate-pulse' : 'text-emerald-500'
-            }`}
-          />
-          <input
-            type="text"
-            dir="auto"
-            value={searchQuery}
-            onFocus={() => setIsSearchFocused(true)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setIsSearchFocused(false);
-                (e.target as HTMLInputElement).blur();
-                return;
-              }
-              if (e.key === 'ArrowDown' && searchResults.length > 0) {
-                e.preventDefault();
-                setActiveSearchIndex((idx) => (idx + 1) % searchResults.length);
-                return;
-              }
-              if (e.key === 'ArrowUp' && searchResults.length > 0) {
-                e.preventDefault();
-                setActiveSearchIndex(
-                  (idx) => (idx - 1 + searchResults.length) % searchResults.length
-                );
-                return;
-              }
-              if (e.key === 'Enter' && searchResults.length > 0) {
-                e.preventDefault();
-                const chosen = searchResults[activeSearchIndex] || searchResults[0];
-                if (chosen) {
-                  handleSelectSearchResult(chosen);
-                  (e.target as HTMLInputElement).blur();
-                }
-              }
-            }}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setIsSearchFocused(true);
-            }}
-            placeholder="חפש עיר, רחוב, נחל, הר, חניון, נ.צ..."
-            className={`w-full bg-transparent text-sm focus:outline-none ${t.input}`}
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                setSearchResults([]);
-              }}
-              className={`p-1 rounded-full text-xs font-bold shrink-0 ${t.muted}`}
-              title="נקה חיפוש"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery('');
+    setExecutedSearchQuery('');
+    setSearchResults([]);
+  }, []);
 
-          {compactMobile ? (
-            <button
-              type="button"
-              onClick={() => {
-                setMobileDisplayMode('planning');
-                setMobileTab('offline');
-                setMobilePlanningOverlay(null);
-              }}
-              className={`px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 shrink-0 ${
-                isOfflineReady
-                  ? 'bg-emerald-500/15 text-emerald-600'
-                  : isOnline
-                    ? 'bg-sky-500/15 text-sky-600'
-                    : 'bg-amber-500/20 text-amber-600'
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isOfflineReady ? 'bg-emerald-500' : isOnline ? 'bg-sky-500' : 'bg-amber-500'
-                }`}
-              />
-              <span>{isOfflineReady ? 'אופליין' : isOnline ? 'מקוון' : 'מנותק'}</span>
-            </button>
-          ) : (
-            <>
-              <div className="h-5 w-px bg-current opacity-15 shrink-0" />
-              <button
-                type="button"
-                onClick={() => setDesktopDrawer(desktopDrawer === 'routes' ? null : 'routes')}
-                title="מסלולים ופרופיל גובה"
-                className="p-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shrink-0"
-              >
-                <RouteIcon className="w-4 h-4" />
-              </button>
-            </>
-          )}
-        </div>
+  const handleRebuildSearchIndex = useCallback(() => {
+    const currentOsm = osmInfoRef.current;
+    if (currentOsm) {
+      void pmtilesSearchService.rebuildFromPmtiles(currentOsm.pmtiles);
+    }
+  }, []);
 
-        {/* Rich Unified Search Panel */}
-        {showDropdown && (
-          <div
-            className={`absolute top-full left-0 right-0 mt-2 rounded-2xl border overflow-hidden z-50 flex flex-col max-h-[64vh] md:max-h-[460px] ${t.panel}`}
-          >
-            {/* Category Filter Chips */}
-            <div
-              className={`px-2.5 py-2 border-b flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0 ${t.divider}`}
-            >
-              {SEARCH_FILTER_TABS.map((tab) => {
-                const active = searchFilter === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setSearchFilter(tab.id)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1 transition-colors shrink-0 ${
-                      active
-                        ? 'bg-emerald-600 text-white shadow-sm'
-                        : `border ${t.pillBtn}`
-                    }`}
-                  >
-                    <span>{tab.emoji}</span>
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+  const handleOpenMobileOffline = useCallback(() => {
+    setMobileDisplayMode('planning');
+    setMobileTab('offline');
+    setMobilePlanningOverlay(null);
+  }, []);
 
-            {/* Indexing Status Strip when extracting custom PMTiles archive */}
-            {isIndexingCustom && (
-              <div
-                className={`px-3 py-1.5 border-b text-xs flex items-center justify-between gap-2 text-amber-500 font-semibold ${t.divider}`}
-              >
-                <span>מעדכן אינדקס חיפוש מהמפה החדשה...</span>
-                <span className="font-mono">{indexPct}%</span>
-              </div>
-            )}
+  const handleToggleDesktopRoutes = useCallback(() => {
+    setDesktopDrawer((prev) => (prev === 'routes' ? null : 'routes'));
+  }, []);
 
-            {/* Body: Suggestions (if empty) OR Ranked Results OR Empty State */}
-            <div className="overflow-y-auto min-h-0 flex-1">
-              {searchResults.length > 0 ? (
-                searchResults.map((item, idx) => {
-                  const isHighlighted = idx === activeSearchIndex;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleSelectSearchResult(item)}
-                      onMouseEnter={() => setActiveSearchIndex(idx)}
-                      className={`w-full text-right px-3.5 py-2.5 border-b flex items-center justify-between gap-2.5 transition-colors ${t.divider} ${
-                        isHighlighted ? 'bg-emerald-500/12' : t.hoverRow
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="text-base shrink-0">{item.emoji}</span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-xs font-bold truncate" dir="auto">
-                              {item.title}
-                            </span>
-                            {item.ref && item.filterGroup === 'roads' && (
-                              <span
-                                dir="ltr"
-                                className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-500 text-[10px] font-mono font-bold shrink-0"
-                              >
-                                {item.ref}
-                              </span>
-                            )}
-                          </div>
-                          <div className={`text-xs truncate ${t.muted}`} dir="auto">
-                            {item.subtitle}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-left shrink-0 space-y-0.5">
-                        {item.distanceKm !== null && (
-                          <div className="text-xs font-mono font-bold text-emerald-500">
-                            {item.distanceKm < 1
-                              ? `${Math.round(item.distanceKm * 1000)} מ׳`
-                              : `${item.distanceKm.toFixed(1)} ק״מ`}
-                          </div>
-                        )}
-                        <div className={`text-[11px] font-mono ${t.muted}`}>
-                          {item.ele !== null ? `${item.ele}m` : item.locality || item.categoryLabel}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
-              ) : !searchQuery.trim() ? (
-                <div className="p-3 space-y-2.5">
-                  <div className={`text-xs flex items-center justify-between ${t.muted}`}>
-                    <span>
-                      {searchStatus.ready
-                        ? `מוכנים ${searchStatus.totalFeatures.toLocaleString()} יעדים מהמפה + נ.צ.`
-                        : 'טוען אינדקס מפה...'}
-                    </span>
-                    {osmInfo && (
-                      <button
-                        type="button"
-                        onClick={() => void pmtilesSearchService.rebuildFromPmtiles(osmInfo.pmtiles)}
-                        disabled={isIndexingCustom}
-                        className="text-emerald-500 hover:underline disabled:opacity-40 font-semibold"
-                        title="סרוק מחדש את כל שכבות ה-PMTiles"
-                      >
-                        סרוק מחדש
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {quickExamples.map((ex) => (
-                      <button
-                        key={ex}
-                        type="button"
-                        onClick={() => {
-                          setSearchFilter('all');
-                          setSearchQuery(ex);
-                        }}
-                        className={`px-2.5 py-1 rounded-full border text-xs font-semibold transition-colors ${t.pillBtn}`}
-                      >
-                        {ex}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className={`p-4 text-center text-xs space-y-2 ${t.muted}`}>
-                  <div>לא נמצאו תוצאות עבור &ldquo;{searchQuery}&rdquo;</div>
-                  {searchFilter !== 'all' ? (
-                    <button
-                      type="button"
-                      onClick={() => setSearchFilter('all')}
-                      className="px-3 py-1 rounded-full bg-emerald-600 text-white font-bold"
-                    >
-                      חפש בכל הקטגוריות
-                    </button>
-                  ) : (
-                    <div>נסה שם עיר, רחוב, נחל, הר, כביש 6 או נ.צ. (לדוגמה 31.77, 35.21)</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
+  const handleSelectSearchResultRef = useRef<(item: SearchResultItem) => void>(() => {});
+  handleSelectSearchResultRef.current = handleSelectSearchResult;
+  const handleSelectSearchResultStable = useCallback((item: SearchResultItem) => {
+    handleSelectSearchResultRef.current(item);
+  }, []);
+
+  const isSearchingPending =
+    searchQuery.trim().length > 0 && searchQuery.trim() !== executedSearchQuery.trim();
+
+  const renderSearchBar = (compactMobile: boolean) => (
+    <SearchBar
+      compactMobile={compactMobile}
+      theme={theme}
+      containerRef={searchContainerRef}
+      searchQuery={searchQuery}
+      onChangeSearchQuery={setSearchQuery}
+      searchFilter={searchFilter}
+      onChangeSearchFilter={setSearchFilter}
+      searchResults={searchResults}
+      isSearching={isSearchingPending}
+      searchStatus={searchStatus}
+      activeSearchIndex={activeSearchIndex}
+      onChangeActiveSearchIndex={setActiveSearchIndex}
+      isSearchFocused={isSearchFocused}
+      onChangeSearchFocused={setIsSearchFocused}
+      onClearSearch={handleClearSearch}
+      onSelectResult={handleSelectSearchResultStable}
+      onRebuildIndex={handleRebuildSearchIndex}
+      hasOsmInfo={Boolean(osmInfo)}
+      isOfflineReady={isOfflineReady}
+      isOnline={isOnline}
+      onOpenMobileOffline={handleOpenMobileOffline}
+      onToggleDesktopRoutes={handleToggleDesktopRoutes}
+    />
+  );
 
   const renderNavOrientationIconButton = (mobile = false) => {
     const headingActive = navOrientation === 'heading-up';
@@ -3831,6 +4426,11 @@ export const App: React.FC = () => {
                       onOpenImporter={() => setIsStorageOpen(true)}
                       onOpenRoutePlanner={() => setDesktopDrawer('plan-route')}
                       onDeleteRoute={handleDeleteRoute}
+                      onRenameRoute={handleRenameRoute}
+                      onChangeRouteColor={handleChangeRouteColor}
+                      onToggleRouteVisibility={handleToggleRouteVisibility}
+                      onReverseRoute={handleReverseRoute}
+                      onEditRouteInPlanner={handleEditRouteInPlanner}
                       onClose={() => setDesktopDrawer(null)}
                       onHoverPoint={handleHoverElevationChart}
                       onSelectPoint={(pt) =>
@@ -3853,6 +4453,8 @@ export const App: React.FC = () => {
                       descentMeters={planElevStats.descent}
                       isRoutingLeg={isRoutingLeg}
                       isSaving={isSavingPlan}
+                      isEditingExisting={Boolean(editingRouteId)}
+                      editingRouteColor={editingRouteColor}
                       disconnectedCandidate={disconnectedCandidate}
                       currentUser={currentUser}
                       firebaseAvailable={AuthService.isAvailable()}
@@ -3863,12 +4465,15 @@ export const App: React.FC = () => {
                       onConfirmStraightLine={handleConfirmStraightLine}
                       onCancelDisconnected={handleCancelDisconnected}
                       onUndoLastPoint={handleUndoLastPlanPoint}
+                      onRemoveWaypoint={handleRemovePlanWaypoint}
+                      onToggleLegType={handleTogglePlanLegType}
                       onClearPlan={handleClearPlan}
+                      onCancelEdit={handleCancelEditPlan}
                       onFinishAndSave={handleFinishPlanningRoute}
                       onSignInGoogle={handleSignInGoogle}
                       onSignOutGoogle={handleSignOutGoogle}
                       onSyncPendingNow={handleSyncPendingNow}
-                      onClose={() => setDesktopDrawer(null)}
+                      onClose={handleClosePlannerPanel}
                     />
                   )}
 
@@ -4197,6 +4802,19 @@ export const App: React.FC = () => {
                     }`}
                   />
                 </button>
+
+                <GoogleAccountButton
+                  currentUser={currentUser}
+                  firebaseAvailable={AuthService.isAvailable()}
+                  isAuthBusy={isAuthBusy}
+                  isOnline={isOnline}
+                  isSyncingCloud={isSyncingCloud}
+                  lastSyncedAt={lastSyncedAt}
+                  theme={theme}
+                  onSignInGoogle={handleSignInGoogle}
+                  onSignOutGoogle={handleSignOutGoogle}
+                  onSyncNow={handleSyncPendingNow}
+                />
               </div>
             </div>
 
@@ -4255,13 +4873,6 @@ export const App: React.FC = () => {
         {/* ================= MOBILE CHROME (PLANNING vs NAVIGATING) ================= */}
         {isMobile && (
           <>
-            {/* MODE A: PLANNING — Search Pill at Top */}
-            {mobileDisplayMode === 'planning' && (
-              <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-none">
-                <div className="pointer-events-auto">{renderSearchBar(true)}</div>
-              </div>
-            )}
-
             {/* MODE B: NAVIGATING — No Search, No Chips! Compact Icon Navigation Status + Planning Icon */}
             {mobileDisplayMode === 'navigating' && (
               <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-none">
@@ -4359,9 +4970,10 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Mobile Left-Edge Floating Controls (Layers, 3D, Compass when rotated outside nav, Crosshair) */}
+            {/* Mobile Top-Left Horizontal Controls (Layers, 3D, Compass when rotated outside nav, Crosshair) */}
             <div
-              className={`absolute left-3 z-20 flex flex-col gap-2 pointer-events-auto pt-safe ${
+              dir="ltr"
+              className={`absolute left-3 z-20 flex flex-row items-center gap-2 pointer-events-auto pt-safe ${
                 mobileDisplayMode === 'navigating'
                   ? isNavigatingRoute && activeRoute
                     ? 'top-[5.25rem]'
@@ -4422,11 +5034,47 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Mobile Bottom-Left Thumb FABs (Change Icon + Add Pin + Locate GPS + Direction/North-Up) */}
+            {/* Mobile Bottom-Left Compact 2-Column Thumb FABs (Locate GPS + Google | User Icon + Add Pin | Nav Orientation) */}
             <div
               dir="ltr"
               className="absolute bottom-3 left-3 z-20 flex items-end gap-2 pointer-events-auto"
             >
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  onClick={handleLocateMe}
+                  className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${
+                    isFollowingUser && userLocation
+                      ? 'bg-sky-600 hover:bg-sky-500 ring-2 ring-sky-300/80 text-white'
+                      : userLocation
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        : 'bg-slate-800/95 border border-slate-600 text-sky-400'
+                  }`}
+                  title={
+                    isFollowingUser && userLocation
+                      ? 'מעקב מיקום רציף פעיל'
+                      : userLocation
+                        ? 'מרכז ונעל מעקב מיקום רציף (GPS)'
+                        : 'מאתר מיקום GPS רציף...'
+                  }
+                >
+                  <LocateFixed className={`w-5 h-5 ${!userLocation ? 'animate-pulse' : ''}`} />
+                </button>
+
+                <GoogleAccountButton
+                  currentUser={currentUser}
+                  firebaseAvailable={AuthService.isAvailable()}
+                  isAuthBusy={isAuthBusy}
+                  isOnline={isOnline}
+                  isSyncingCloud={isSyncingCloud}
+                  lastSyncedAt={lastSyncedAt}
+                  theme={theme}
+                  mobile
+                  onSignInGoogle={handleSignInGoogle}
+                  onSignOutGoogle={handleSignOutGoogle}
+                  onSyncNow={handleSyncPendingNow}
+                />
+              </div>
+
               <div className="flex flex-col items-center gap-2">
                 <button
                   onClick={() => {
@@ -4467,26 +5115,6 @@ export const App: React.FC = () => {
                 >
                   <Plus className={`w-5 h-5 ${isAddingPoiMode ? 'text-white' : 'text-sky-500'}`} />
                 </button>
-
-                <button
-                  onClick={handleLocateMe}
-                  className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${
-                    isFollowingUser && userLocation
-                      ? 'bg-sky-600 hover:bg-sky-500 ring-2 ring-sky-300/80 text-white'
-                      : userLocation
-                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                        : 'bg-slate-800/95 border border-slate-600 text-sky-400'
-                  }`}
-                  title={
-                    isFollowingUser && userLocation
-                      ? 'מעקב מיקום רציף פעיל'
-                      : userLocation
-                        ? 'מרכז ונעל מעקב מיקום רציף (GPS)'
-                        : 'מאתר מיקום GPS רציף...'
-                  }
-                >
-                  <LocateFixed className={`w-5 h-5 ${!userLocation ? 'animate-pulse' : ''}`} />
-                </button>
               </div>
 
               {isNavigationActive && renderNavOrientationIconButton(true)}
@@ -4510,6 +5138,13 @@ export const App: React.FC = () => {
           </>
         )}
       </div>
+
+      {/* MODE A: PLANNING — Search Pill & Dropdown Overlay (rendered outside flex-1 overflow-hidden so Android keyboard resize never clips results) */}
+      {isMobile && mobileDisplayMode === 'planning' && (
+        <div className="absolute top-3 right-3 left-3 z-[45] pt-safe pointer-events-none">
+          <div className="pointer-events-auto">{renderSearchBar(true)}</div>
+        </div>
+      )}
 
       {/* ================= MOBILE BOTTOM AREA ================= */}
       {isMobile && mobileDisplayMode === 'planning' && (
@@ -4600,6 +5235,8 @@ export const App: React.FC = () => {
                     descentMeters={planElevStats.descent}
                     isRoutingLeg={isRoutingLeg}
                     isSaving={isSavingPlan}
+                    isEditingExisting={Boolean(editingRouteId)}
+                    editingRouteColor={editingRouteColor}
                     disconnectedCandidate={disconnectedCandidate}
                     currentUser={currentUser}
                     firebaseAvailable={AuthService.isAvailable()}
@@ -4610,12 +5247,15 @@ export const App: React.FC = () => {
                     onConfirmStraightLine={handleConfirmStraightLine}
                     onCancelDisconnected={handleCancelDisconnected}
                     onUndoLastPoint={handleUndoLastPlanPoint}
+                    onRemoveWaypoint={handleRemovePlanWaypoint}
+                    onToggleLegType={handleTogglePlanLegType}
                     onClearPlan={handleClearPlan}
+                    onCancelEdit={handleCancelEditPlan}
                     onFinishAndSave={handleFinishPlanningRoute}
                     onSignInGoogle={handleSignInGoogle}
                     onSignOutGoogle={handleSignOutGoogle}
                     onSyncPendingNow={handleSyncPendingNow}
-                    onClose={() => setMobilePlanningOverlay(null)}
+                    onClose={handleClosePlannerPanel}
                   />
                 </div>
               ) : (
@@ -4627,10 +5267,10 @@ export const App: React.FC = () => {
                   >
                     <span
                       className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: PLANNING_MODE_META[planningMode].color }}
+                      style={{ backgroundColor: editingRouteColor || PLANNING_MODE_META[planningMode].color }}
                     />
                     <span className="truncate">
-                      {PLANNING_MODE_META[planningMode].shortLabelHe} • {planTotalDistanceKm.toFixed(2)} km ({planWaypoints.length})
+                      {PLANNING_MODE_META[planningMode].shortLabelHe} • <span dir="ltr">{planTotalDistanceKm.toFixed(2)} km</span> ({planWaypoints.length})
                     </span>
                   </button>
                   <div className="flex items-center gap-1.5 shrink-0">
@@ -4677,6 +5317,11 @@ export const App: React.FC = () => {
                     setMobileSheetExpanded(true);
                   }}
                   onDeleteRoute={handleDeleteRoute}
+                  onRenameRoute={handleRenameRoute}
+                  onChangeRouteColor={handleChangeRouteColor}
+                  onToggleRouteVisibility={handleToggleRouteVisibility}
+                  onReverseRoute={handleReverseRoute}
+                  onEditRouteInPlanner={handleEditRouteInPlanner}
                   onClose={() => setMobileTab('explore')}
                   onHoverPoint={handleHoverElevationChart}
                   onSelectPoint={(pt) =>

@@ -10,6 +10,7 @@ import {
   type PoiLayerKey,
 } from '../../core/style/israelOutdoorStyle';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
+import { getAppVersion } from '../../core/appVersion';
 
 interface LayerSwitcherSheetProps {
   isOpen: boolean;
@@ -295,6 +296,16 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
             </div>
           )}
         </div>
+      </div>
+
+      {/* App Version Footer */}
+      <div
+        className={`pt-2.5 border-t flex items-center justify-between text-[11px] ${t.divider} ${t.muted}`}
+      >
+        <span className="font-semibold">גרסת אפליקציה</span>
+        <span dir="ltr" className="font-mono font-semibold select-all" data-testid="app-version">
+          {getAppVersion()}
+        </span>
       </div>
     </div>
   );

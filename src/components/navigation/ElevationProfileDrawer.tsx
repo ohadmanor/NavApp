@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
 import {
   TrendingUp,
@@ -14,13 +14,20 @@ import {
   Maximize2,
   Check,
   Plus,
+  Pencil,
+  Eye,
+  EyeOff,
+  Palette,
+  ArrowLeftRight,
+  PenTool,
 } from 'lucide-react';
 import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
-import { RouteManager } from '../../core/navigation/RouteManager';
 import {
-  PLANNING_MODE_META,
-  PLANNING_ROUTE_COLOR,
-} from '../../core/routing/RoutingProfiles';
+  ROUTE_COLOR_PALETTE,
+  RouteManager,
+  resolveRouteDisplayColor,
+} from '../../core/navigation/RouteManager';
+import { PLANNING_MODE_META } from '../../core/routing/RoutingProfiles';
 import { MilitaryGridService } from '../../core/navigation/MilitaryGridService';
 import { getSurfaceTheme, POI_CATEGORY_META, type MapTheme } from '../ui/themeTokens';
 
@@ -51,6 +58,11 @@ interface ElevationProfileDrawerProps {
   onOpenImporter?: () => void;
   onOpenRoutePlanner?: () => void;
   onDeleteRoute?: (routeId: string) => void;
+  onRenameRoute?: (routeId: string, nextName: string) => void | Promise<void>;
+  onChangeRouteColor?: (routeId: string, color: string) => void | Promise<void>;
+  onToggleRouteVisibility?: (routeId: string) => void | Promise<void>;
+  onReverseRoute?: (routeId: string) => void | Promise<void>;
+  onEditRouteInPlanner?: (route: SavedRouteRecord) => void;
   onClose: () => void;
   onHoverPoint: (pt: { lon: number; lat: number; ele: number; distKm: number } | null) => void;
   onSelectPoint?: (pt: { lon: number; lat: number; ele: number; distKm: number }) => void;
@@ -71,6 +83,11 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   onOpenImporter,
   onOpenRoutePlanner,
   onDeleteRoute,
+  onRenameRoute,
+  onChangeRouteColor,
+  onToggleRouteVisibility,
+  onReverseRoute,
+  onEditRouteInPlanner,
   onClose,
   onHoverPoint,
   onSelectPoint,
@@ -82,23 +99,26 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   const [pinnedIdx, setPinnedIdx] = useState<number | null>(null);
   const [isRoutesMenuOpen, setIsRoutesMenuOpen] = useState(false);
   const [isPointsMenuOpen, setIsPointsMenuOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const t = getSurfaceTheme(theme);
+
+  // Synchronous guard prevents out-of-bounds crash during the first render after switching routes
+  const prevRouteIdRef = useRef<string | undefined>(route?.id);
+  const justSwitchedRoute = prevRouteIdRef.current !== route?.id;
+  if (justSwitchedRoute) {
+    prevRouteIdRef.current = route?.id;
+  }
 
   useEffect(() => {
     setHoveredIdx(null);
     setPinnedIdx(null);
+    setIsRenaming(false);
+    setIsColorPickerOpen(false);
   }, [route?.id]);
 
-  const getDisplayColor = (r: SavedRouteRecord | null) => {
-    if (!r?.color || r.color === '#10b981') return '#ec4899';
-    if (
-      r.sourceFormat === 'planned' &&
-      (r.color === '#f97316' || r.color === '#ec4899' || r.color === '#06b6d4')
-    ) {
-      return PLANNING_ROUTE_COLOR;
-    }
-    return r.color;
-  };
+  const getDisplayColor = (r: SavedRouteRecord | null) => resolveRouteDisplayColor(r);
 
   const routePoints = useMemo<RoutePointOption[]>(() => {
     if (!route || route.elevationProfile.length === 0) return [];
@@ -114,10 +134,23 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
       ...first,
     });
 
-    // Find waypoints/POIs along this route (within 400m)
-    const lineFeatures = route.geojson.features.filter(
-      (f) => f.geometry?.type === 'LineString'
-    ) as Array<GeoJSON.Feature<GeoJSON.LineString>>;
+    // Support both LineString & MultiLineString features when scanning POIs along route
+    const lineFeatures: Array<GeoJSON.Feature<GeoJSON.LineString>> = [];
+    for (const f of route.geojson?.features || []) {
+      if (f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 2) {
+        lineFeatures.push(f as GeoJSON.Feature<GeoJSON.LineString>);
+      } else if (f.geometry?.type === 'MultiLineString') {
+        for (const ring of f.geometry.coordinates) {
+          if (Array.isArray(ring) && ring.length >= 2) {
+            lineFeatures.push({
+              type: 'Feature',
+              properties: f.properties || {},
+              geometry: { type: 'LineString', coordinates: ring },
+            });
+          }
+        }
+      }
+    }
 
     if (lineFeatures.length > 0 && pois.length > 0) {
       let minLon = Infinity;
@@ -132,7 +165,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
           if (lat > maxLat) maxLat = lat;
         }
       }
-      // ~2.2 km generous bbox margin (~0.02 deg) to avoid calling pointToLineDistance on thousands of distant POIs
       const padDeg = 0.02;
       minLon -= padDeg;
       maxLon += padDeg;
@@ -152,7 +184,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
         }
         const maxRadiusKm = poi.subcategory?.startsWith('imported_') ? 1.5 : 0.35;
         if (minLineKm <= maxRadiusKm) {
-          // Match closest sample in elevationProfile for distKm & fallback elevation
           let bestSample = pts[0];
           let bestSampleDist = Infinity;
           for (const sample of pts) {
@@ -191,7 +222,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
       options.push(...dedupedWpts.slice(0, 25));
     }
 
-    // Add Peak elevation point if distinct from start/end
     if (pts.length >= 3) {
       let peakIdx = 0;
       for (let i = 1; i < pts.length; i++) {
@@ -233,6 +263,18 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const handleCommitRename = () => {
+    if (!route || !onRenameRoute) {
+      setIsRenaming(false);
+      return;
+    }
+    const next = renameDraft.trim();
+    setIsRenaming(false);
+    if (next && next !== route.name) {
+      void onRenameRoute(route.id, next);
+    }
+  };
+
   const renderChart = (r: SavedRouteRecord) => {
     if (r.elevationProfile.length < 2) return null;
     const pts = r.elevationProfile;
@@ -259,41 +301,59 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
       .join(' ');
     const areaPath = `${linePath} L ${coordsSvg[coordsSvg.length - 1].x.toFixed(1)} ${height} L ${coordsSvg[0].x.toFixed(1)} ${height} Z`;
 
-    const activeIdx = hoveredIdx !== null ? hoveredIdx : pinnedIdx;
+    const clampIdx = (idx: number | null): number | null => {
+      if (justSwitchedRoute || idx === null || !Number.isInteger(idx) || pts.length === 0) {
+        return null;
+      }
+      return Math.min(pts.length - 1, Math.max(0, idx));
+    };
 
-    const getNearestIdxFromPointer = (clientX: number, rect: DOMRect) => {
+    const safeHoveredIdx = clampIdx(hoveredIdx);
+    const safePinnedIdx = clampIdx(pinnedIdx);
+    const activeIdx = safeHoveredIdx !== null ? safeHoveredIdx : safePinnedIdx;
+
+    const getNearestIdxFromPointer = (clientX: number, rect: DOMRect): number | null => {
+      if (!rect || rect.width <= 0 || pts.length === 0) return null;
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      return Math.min(pts.length - 1, Math.round(ratio * (pts.length - 1)));
+      const idx = Math.round(ratio * (pts.length - 1));
+      return Number.isFinite(idx) ? Math.min(pts.length - 1, Math.max(0, idx)) : null;
     };
 
     const handleScrub = (clientX: number, rect: DOMRect) => {
       const nearestIdx = getNearestIdxFromPointer(clientX, rect);
+      if (nearestIdx === null || !pts[nearestIdx]) return;
       setHoveredIdx(nearestIdx);
       onHoverPoint(pts[nearestIdx]);
     };
 
     const handleChartClick = (clientX: number, rect: DOMRect) => {
       const nearestIdx = getNearestIdxFromPointer(clientX, rect);
+      if (nearestIdx === null || !pts[nearestIdx]) return;
       setPinnedIdx(nearestIdx);
       setHoveredIdx(nearestIdx);
       onHoverPoint(pts[nearestIdx]);
     };
 
-    const activeSvgPt = activeIdx !== null ? coordsSvg[activeIdx] : null;
+    const activeSvgPt =
+      activeIdx !== null && activeIdx >= 0 && activeIdx < coordsSvg.length
+        ? coordsSvg[activeIdx]
+        : null;
     const activePt = activeSvgPt?.pt ?? null;
 
-    // Instantaneous slope (%) around activeIdx
     let gradePct: number | null = null;
     if (activeIdx !== null && pts.length >= 2) {
       const prevIdx = Math.max(0, activeIdx - 1);
       const nextIdx = Math.min(pts.length - 1, activeIdx + 1);
-      const dDistMeters = (pts[nextIdx].distKm - pts[prevIdx].distKm) * 1000;
-      if (dDistMeters >= 15) {
-        gradePct = Math.round(((pts[nextIdx].ele - pts[prevIdx].ele) / dDistMeters) * 100);
+      const prevPt = pts[prevIdx];
+      const nextPt = pts[nextIdx];
+      if (prevPt && nextPt) {
+        const dDistMeters = (nextPt.distKm - prevPt.distKm) * 1000;
+        if (dDistMeters >= 15) {
+          gradePct = Math.round(((nextPt.ele - prevPt.ele) / dDistMeters) * 100);
+        }
       }
     }
 
-    // Nearest named waypoint/point near activePt
     const nearestNamedWpt =
       activePt && routePoints.length > 0
         ? routePoints.find(
@@ -313,7 +373,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
 
     const gradId = `eleGrad-${r.id.replace(/[^a-zA-Z0-9_-]/g, '') || 'route'}`;
 
-    // Map route waypoints to SVG positions anchored on the plotted elevation curve
     const wptMarkers = routePoints
       .filter((wp) => wp.kind === 'wpt')
       .map((wp) => {
@@ -342,28 +401,30 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
           }}
           onMouseLeave={() => {
             setHoveredIdx(null);
-            if (pinnedIdx === null) {
-              onHoverPoint(null);
+            if (safePinnedIdx !== null && pts[safePinnedIdx]) {
+              onHoverPoint(pts[safePinnedIdx]);
             } else {
-              onHoverPoint(pts[pinnedIdx]);
+              onHoverPoint(null);
             }
           }}
         >
-          {/* Floating Info Card directly over the hovered/pinned point on the height graph */}
           {activePt && (
             <div
               style={{ left: `${tooltipLeftPct}%` }}
               className={`absolute top-0.5 -translate-x-1/2 z-20 pointer-events-none px-2.5 py-1 rounded-xl border shadow-xl backdrop-blur-md whitespace-nowrap text-xs flex items-center gap-2 ${t.panelSolid}`}
             >
-              <span className="font-mono font-bold" style={{ color: strokeColor }}>
+              <span dir="ltr" className="font-mono font-bold" style={{ color: strokeColor }}>
                 {activePt.ele}m
               </span>
               <span className="opacity-30">•</span>
-              <span className="font-mono">{activePt.distKm} km</span>
+              <span dir="ltr" className="font-mono">
+                {activePt.distKm} km
+              </span>
               {gradePct !== null && (
                 <>
                   <span className="opacity-30">•</span>
                   <span
+                    dir="ltr"
                     className={`font-mono font-bold ${
                       gradePct > 0 ? 'text-emerald-500' : gradePct < 0 ? 'text-amber-500' : t.muted
                     }`}
@@ -400,7 +461,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               </linearGradient>
             </defs>
 
-            {/* Horizontal Elevation Reference Lines */}
             {[padY, height / 2, height - padY].map((gy, idx) => (
               <line
                 key={idx}
@@ -424,7 +484,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               strokeLinecap="round"
             />
 
-            {/* Waypoint Markers along the elevation curve */}
             {wptMarkers.map(({ wp, x, y }) => (
               <circle
                 key={wp.id}
@@ -437,7 +496,6 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               />
             ))}
 
-            {/* Vertical Crosshair + Active Point Marker */}
             {activeSvgPt && (
               <>
                 <line
@@ -461,27 +519,35 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             )}
           </svg>
 
-          {/* Min / Mid / Max subtle elevation labels inside chart */}
-          <div className={`absolute top-1 right-1 text-[10px] font-mono pointer-events-none ${t.muted}`}>
+          <div
+            dir="ltr"
+            className={`absolute top-1 right-1 text-[10px] font-mono pointer-events-none ${t.muted}`}
+          >
             {maxEle}m
           </div>
-          <div className={`absolute top-1/2 -translate-y-1/2 right-1 text-[10px] font-mono pointer-events-none ${t.muted}`}>
+          <div
+            dir="ltr"
+            className={`absolute top-1/2 -translate-y-1/2 right-1 text-[10px] font-mono pointer-events-none ${t.muted}`}
+          >
             {midEle}m
           </div>
-          <div className={`absolute bottom-1 right-1 text-[10px] font-mono pointer-events-none ${t.muted}`}>
+          <div
+            dir="ltr"
+            className={`absolute bottom-1 right-1 text-[10px] font-mono pointer-events-none ${t.muted}`}
+          >
             {minEle}m
           </div>
         </div>
 
         <div className={`flex items-center justify-between text-xs font-mono mt-1 ${t.muted}`}>
-          <span>0 km</span>
+          <span dir="ltr">0 km</span>
           <span className="flex items-center gap-2 font-sans">
-            <span>
+            <span dir={activePt ? 'ltr' : 'rtl'}>
               {activePt
                 ? `${activePt.distKm} km • ${activePt.ele}m`
                 : 'החלק או לחץ על הגרף לפרטי נקודה'}
             </span>
-            {pinnedIdx !== null && (
+            {safePinnedIdx !== null && (
               <button
                 type="button"
                 onClick={() => {
@@ -496,7 +562,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               </button>
             )}
           </span>
-          <span>{r.distanceKm} km</span>
+          <span dir="ltr">{r.distanceKm} km</span>
         </div>
       </div>
     );
@@ -529,31 +595,107 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
     onSelectPoint?.(ptOption);
   };
 
+  const activeColor = getDisplayColor(route);
+
   const innerContent = (
     <div dir="rtl" className="p-4 space-y-3 overflow-y-auto min-h-0 flex-1">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <TrendingUp className="w-4 h-4 text-pink-500 shrink-0" />
-          <div className="min-w-0">
+      {/* Header with Inline Rename & Visibility */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 min-w-0 flex-1">
+          <TrendingUp className="w-4 h-4 text-pink-500 shrink-0 mt-1" />
+          <div className="min-w-0 flex-1">
             <span className="text-xs font-bold text-pink-500 block">
               מסלולים ופרופיל גובה (DEM)
             </span>
-            <h4 className="text-sm font-bold truncate" dir="auto">
-              {route ? route.name : `מסלולים שמורים (${routes.length})`}
-            </h4>
+            {route && isRenaming ? (
+              <div className="flex items-center gap-1.5 mt-1">
+                <input
+                  id="route-rename-input"
+                  name="routeRename"
+                  type="text"
+                  dir="auto"
+                  autoFocus
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCommitRename();
+                    if (e.key === 'Escape') setIsRenaming(false);
+                  }}
+                  className={`flex-1 min-w-0 rounded-lg border px-2.5 py-1 text-xs font-bold focus:outline-none focus:border-emerald-500 ${t.fieldBox}`}
+                />
+                <button
+                  type="button"
+                  onClick={handleCommitRename}
+                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shrink-0"
+                  title="שמור שם"
+                  aria-label="שמור שם"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRenaming(false)}
+                  className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
+                  title="ביטול"
+                  aria-label="ביטול שינוי שם"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h4 className="text-sm font-bold truncate" dir="auto">
+                  {route ? route.name : `מסלולים שמורים (${routes.length})`}
+                </h4>
+                {route && onRenameRoute && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenameDraft(route.name);
+                      setIsRenaming(true);
+                    }}
+                    className={`p-1 rounded-md opacity-70 hover:opacity-100 transition-opacity shrink-0 ${t.hoverRow}`}
+                    title="שנה שם מסלול"
+                    aria-label="שנה שם מסלול"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
-          title="סגור"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {route && onToggleRouteVisibility && (
+            <button
+              type="button"
+              onClick={() => onToggleRouteVisibility(route.id)}
+              className={`p-1.5 rounded-lg border shrink-0 ${
+                route.visible === false ? 'border-amber-500/60 text-amber-500 bg-amber-500/10' : t.pillBtn
+              }`}
+              title={route.visible === false ? 'המסלול מוסתר — לחץ להצגה במפה' : 'הסתר מסלול במפה'}
+              aria-label={route.visible === false ? 'הצג מסלול במפה' : 'הסתר מסלול במפה'}
+            >
+              {route.visible === false ? (
+                <EyeOff className="w-4 h-4" />
+              ) : (
+                <Eye className="w-4 h-4" />
+              )}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
+            title="סגור"
+            aria-label="סגור"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      {/* Routes Dropdown Selector + Action Buttons (Zero Horizontal Cut-Off) */}
+      {/* Routes Dropdown Selector + Action Buttons */}
       {routes.length > 0 ? (
         <div className="space-y-2 relative">
           <div className="flex items-center gap-2">
@@ -569,8 +711,10 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: getDisplayColor(route) }}
+                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                      route?.visible === false ? 'opacity-35 ring-1 ring-current' : ''
+                    }`}
+                    style={{ backgroundColor: activeColor }}
                   />
                   <span className="font-bold truncate" dir="auto">
                     {route ? route.name : 'בחר מסלול מהרשימה...'}
@@ -578,7 +722,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {route && (
-                    <span className={`font-mono ${t.muted}`}>
+                    <span dir="ltr" className={`font-mono ${t.muted}`}>
                       {route.distanceKm} km ({routes.length})
                     </span>
                   )}
@@ -634,29 +778,41 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
             >
               {routes.map((r, idx) => {
                 const isSelected = route?.id === r.id;
+                const isHidden = r.visible === false;
                 return (
-                  <button
+                  <div
                     key={r.id}
-                    type="button"
-                    onClick={() => handleSelectRouteOption(r)}
-                    className={`w-full px-3 py-2.5 text-right text-xs flex items-center justify-between gap-2 transition-colors ${
+                    className={`w-full px-2 py-1.5 text-xs flex items-center justify-between gap-1 transition-colors ${
                       isSelected ? 'bg-pink-500/15 font-bold' : t.hoverRow
                     }`}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectRouteOption(r)}
+                      className="flex-1 min-w-0 text-right px-1.5 py-1 flex items-center gap-2"
+                    >
                       <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                          isHidden ? 'opacity-35 ring-1 ring-current' : ''
+                        }`}
                         style={{ backgroundColor: getDisplayColor(r) }}
                       />
                       <div className="min-w-0">
-                        <div className="font-bold break-words" dir="auto">
+                        <div
+                          className={`font-bold break-words ${isHidden ? 'opacity-60' : ''}`}
+                          dir="auto"
+                        >
                           {r.name}
                         </div>
                         <div className={`font-mono text-[11px] ${t.muted}`}>
-                          #{idx + 1} • {r.distanceKm} km • +{r.ascentMeters}m •{' '}
+                          <span dir="ltr">
+                            #{idx + 1} • {r.distanceKm} km • +{r.ascentMeters}m
+                          </span>{' '}
+                          •{' '}
                           {r.planningMode
                             ? PLANNING_MODE_META[r.planningMode]?.shortLabelHe
                             : r.sourceFormat.toUpperCase()}
+                          {isHidden ? ' • מוסתר' : ''}
                           {r.cloudSyncStatus === 'synced'
                             ? ' • ☁️ בענן'
                             : r.cloudSyncStatus === 'pending'
@@ -664,9 +820,32 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                               : ''}
                         </div>
                       </div>
+                    </button>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {onToggleRouteVisibility && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onToggleRouteVisibility(r.id);
+                          }}
+                          className={`p-1.5 rounded-lg ${
+                            isHidden ? 'text-amber-500' : t.muted
+                          } hover:bg-black/10`}
+                          title={isHidden ? 'הצג מסלול במפה' : 'הסתר מסלול במפה'}
+                          aria-label={isHidden ? `הצג ${r.name}` : `הסתר ${r.name}`}
+                        >
+                          {isHidden ? (
+                            <EyeOff className="w-3.5 h-3.5" />
+                          ) : (
+                            <Eye className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      )}
+                      {isSelected && <Check className="w-4 h-4 text-pink-500 shrink-0" />}
                     </div>
-                    {isSelected && <Check className="w-4 h-4 text-pink-500 shrink-0" />}
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -702,29 +881,132 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
         </div>
       )}
 
-      {/* Selected Route Telemetry, Waypoints Dropdown, Elevation Chart & Actions */}
+      {/* Selected Route Telemetry, Edit Strip, Waypoints, Elevation Chart & Actions */}
       {route && (
         <>
+          {route.visible === false && (
+            <div className="px-3 py-1.5 rounded-xl border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-semibold flex items-center justify-between gap-2">
+              <span>המסלול מוסתר כרגע על המפה</span>
+              {onToggleRouteVisibility && (
+                <button
+                  type="button"
+                  onClick={() => onToggleRouteVisibility(route.id)}
+                  className="underline font-bold"
+                >
+                  הצג במפה
+                </button>
+              )}
+            </div>
+          )}
+
           <div className={`grid grid-cols-4 gap-2 text-xs p-2.5 rounded-xl border ${t.subCard}`}>
             <div>
               <span className={`block ${t.muted}`}>אורך</span>
-              <span className="font-mono font-bold">{route.distanceKm} km</span>
+              <span dir="ltr" className="font-mono font-bold inline-block">
+                {route.distanceKm} km
+              </span>
             </div>
             <div>
               <span className={`block ${t.muted}`}>טיפוס</span>
-              <span className="font-mono font-bold text-emerald-500">+{route.ascentMeters}m</span>
+              <span dir="ltr" className="font-mono font-bold text-emerald-500 inline-block">
+                +{route.ascentMeters}m
+              </span>
             </div>
             <div>
               <span className={`block ${t.muted}`}>ירידה</span>
-              <span className="font-mono font-bold text-amber-500">-{route.descentMeters}m</span>
+              <span dir="ltr" className="font-mono font-bold text-amber-500 inline-block">
+                -{route.descentMeters}m
+              </span>
             </div>
             <div>
               <span className={`block ${t.muted}`}>טווח גובה</span>
-              <span className="font-mono">
+              <span dir="ltr" className="font-mono inline-block">
                 {route.minEle}–{route.maxEle}m
               </span>
             </div>
           </div>
+
+          {/* Route Editing Bar: Color, Reverse Direction, Edit Waypoints */}
+          {(onChangeRouteColor || onReverseRoute || onEditRouteInPlanner) && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {onChangeRouteColor && (
+                  <button
+                    type="button"
+                    onClick={() => setIsColorPickerOpen((v) => !v)}
+                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
+                      isColorPickerOpen ? 'border-pink-500/70' : ''
+                    } ${t.pillBtn}`}
+                    title="שנה צבע מסלול"
+                  >
+                    <Palette className="w-3.5 h-3.5" style={{ color: activeColor }} />
+                    <span>צבע</span>
+                    <span
+                      className="w-2.5 h-2.5 rounded-full border border-white/60"
+                      style={{ backgroundColor: activeColor }}
+                    />
+                  </button>
+                )}
+
+                {onReverseRoute && (
+                  <button
+                    type="button"
+                    onClick={() => onReverseRoute(route.id)}
+                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${t.pillBtn}`}
+                    title="הפוך את כיוון המסלול"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5 text-sky-500" />
+                    <span>הפוך כיוון</span>
+                  </button>
+                )}
+
+                {onEditRouteInPlanner &&
+                  (route.sourceFormat === 'planned' ||
+                    (route.waypoints && route.waypoints.length >= 2)) && (
+                    <button
+                      type="button"
+                      onClick={() => onEditRouteInPlanner(route)}
+                      className="px-2.5 py-1.5 rounded-xl border border-blue-500/40 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 text-xs font-bold flex items-center gap-1.5"
+                      title="פתח לעריכת נקודות ציר במתכנן"
+                    >
+                      <PenTool className="w-3.5 h-3.5" />
+                      <span>ערוך נקודות</span>
+                    </button>
+                  )}
+              </div>
+
+              {isColorPickerOpen && onChangeRouteColor && (
+                <div
+                  className={`p-2 rounded-xl border flex items-center justify-between gap-2 ${t.subCard}`}
+                >
+                  <span className={`text-xs font-semibold ${t.muted}`}>צבע במפה:</span>
+                  <div className="flex items-center gap-1.5">
+                    {ROUTE_COLOR_PALETTE.map((hex) => {
+                      const selected = activeColor.toLowerCase() === hex.toLowerCase();
+                      return (
+                        <button
+                          key={hex}
+                          type="button"
+                          onClick={() => {
+                            void onChangeRouteColor(route.id, hex);
+                            setIsColorPickerOpen(false);
+                          }}
+                          className={`w-6 h-6 rounded-full flex items-center justify-center border-2 transition-transform hover:scale-110 ${
+                            selected ? 'border-white ring-2 ring-pink-500' : 'border-white/40'
+                          }`}
+                          style={{ backgroundColor: hex }}
+                          title={`בחר צבע ${hex}`}
+                          aria-label={`בחר צבע ${hex}`}
+                        >
+                          {selected && <Check className="w-3 h-3 text-white stroke-[3]" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Route Points / Waypoints Dropdown List */}
           {routePoints.length > 0 && (
@@ -766,7 +1048,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                           {ptOpt.label}
                         </span>
                       </span>
-                      <span className={`font-mono shrink-0 ${t.muted}`}>
+                      <span dir="ltr" className={`font-mono shrink-0 ${t.muted}`}>
                         {ptOpt.distKm} km • {ptOpt.ele}m
                       </span>
                     </button>
@@ -827,6 +1109,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                 }}
                 className={`px-2.5 py-2.5 rounded-xl border text-xs font-bold text-red-500 ${t.pillBtn}`}
                 title="מחק מסלול"
+                aria-label="מחק מסלול"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>

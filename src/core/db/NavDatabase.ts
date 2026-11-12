@@ -63,6 +63,7 @@ export interface SavedRouteRecord {
   minEle: number;
   maxEle: number;
   color: string;
+  colorCustomized?: boolean;
   visible: boolean;
   geojson: GeoJSON.FeatureCollection;
   elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;

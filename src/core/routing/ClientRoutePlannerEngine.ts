@@ -284,10 +284,33 @@ export class ClientRoutePlannerEngine {
     let graph = await this.graphBuilder.buildGraphForTiles(primaryTiles, mode);
     let bestHit = this.findClosestEdgeInGraph(graph, lon, lat, maxRadiusMeters);
 
-    // Fallback: if nothing in immediate edge tiles, expand to full 3x3 grid around clicked tile
-    if (!bestHit) {
-      const c = lonLatToTile(lon, lat, ROUTING_TILE_ZOOM);
-      const n = 1 << ROUTING_TILE_ZOOM;
+    // Check distance in meters from (lon, lat) to the nearest unloaded neighbor tile edge
+    const c = lonLatToTile(lon, lat, ROUTING_TILE_ZOOM);
+    const n = 1 << ROUTING_TILE_ZOOM;
+    const xFrac = ((lon + 180) / 360) * n - c.tx;
+    const latRad = (lat * Math.PI) / 180;
+    const yFrac =
+      ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n - c.ty;
+    const tileMeters = (40075016.686 * Math.cos(latRad)) / n;
+    const loadedSet = new Set(primaryTiles.map((t) => `${t.tx}/${t.ty}`));
+
+    let minUnloadedEdgeDist = Infinity;
+    if (c.tx > 0 && !loadedSet.has(`${c.tx - 1}/${c.ty}`)) {
+      minUnloadedEdgeDist = Math.min(minUnloadedEdgeDist, xFrac * tileMeters);
+    }
+    if (c.tx < n - 1 && !loadedSet.has(`${c.tx + 1}/${c.ty}`)) {
+      minUnloadedEdgeDist = Math.min(minUnloadedEdgeDist, (1 - xFrac) * tileMeters);
+    }
+    if (c.ty > 0 && !loadedSet.has(`${c.tx}/${c.ty - 1}`)) {
+      minUnloadedEdgeDist = Math.min(minUnloadedEdgeDist, yFrac * tileMeters);
+    }
+    if (c.ty < n - 1 && !loadedSet.has(`${c.tx}/${c.ty + 1}`)) {
+      minUnloadedEdgeDist = Math.min(minUnloadedEdgeDist, (1 - yFrac) * tileMeters);
+    }
+
+    // Expand to full 3x3 grid when no hit OR when an unloaded adjacent tile is closer than current hit / maxRadius
+    const effectiveLimit = bestHit ? bestHit.distMeters : maxRadiusMeters;
+    if (!bestHit || (minUnloadedEdgeDist <= maxRadiusMeters && minUnloadedEdgeDist < effectiveLimit)) {
       const full3x3: TileCoord[] = [];
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
@@ -318,26 +341,54 @@ export class ClientRoutePlannerEngine {
     };
   }
 
+  private lonLatToTileFloat(lon: number, lat: number, zoom: number): { x: number; y: number } {
+    const n = 1 << zoom;
+    const clampedLat = Math.max(-85.0511, Math.min(85.0511, lat));
+    const latRad = (clampedLat * Math.PI) / 180;
+    const x = ((lon + 180) / 360) * n;
+    const y = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+    return { x, y };
+  }
+
   private buildTileCorridor(
     a: { lon: number; lat: number },
     b: { lon: number; lat: number },
     padTiles: number
   ): TileCoord[] {
-    const ta = lonLatToTile(a.lon, a.lat, ROUTING_TILE_ZOOM);
-    const tb = lonLatToTile(b.lon, b.lat, ROUTING_TILE_ZOOM);
     const n = 1 << ROUTING_TILE_ZOOM;
-    const minTx = Math.max(0, Math.min(ta.tx, tb.tx) - padTiles);
-    const maxTx = Math.min(n - 1, Math.max(ta.tx, tb.tx) + padTiles);
-    const minTy = Math.max(0, Math.min(ta.ty, tb.ty) - padTiles);
-    const maxTy = Math.min(n - 1, Math.max(ta.ty, tb.ty) + padTiles);
+    const fa = this.lonLatToTileFloat(a.lon, a.lat, ROUTING_TILE_ZOOM);
+    const fb = this.lonLatToTileFloat(b.lon, b.lat, ROUTING_TILE_ZOOM);
 
-    const tiles: TileCoord[] = [];
-    for (let tx = minTx; tx <= maxTx; tx++) {
-      for (let ty = minTy; ty <= maxTy; ty++) {
-        tiles.push({ tx, ty });
+    // Supercover grid traversal along line segment fa -> fb so diagonal corridors don't explode AABB size
+    const steps = Math.max(
+      1,
+      Math.ceil(Math.max(Math.abs(fb.x - fa.x), Math.abs(fb.y - fa.y)) * 4)
+    );
+    const tileMap = new Map<string, TileCoord>();
+
+    const stamp = (cx: number, cy: number) => {
+      for (let dx = -padTiles; dx <= padTiles; dx++) {
+        for (let dy = -padTiles; dy <= padTiles; dy++) {
+          const tx = cx + dx;
+          const ty = cy + dy;
+          if (tx >= 0 && tx < n && ty >= 0 && ty < n) {
+            const key = `${tx}/${ty}`;
+            if (!tileMap.has(key)) {
+              tileMap.set(key, { tx, ty });
+            }
+          }
+        }
       }
+    };
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const fx = fa.x + (fb.x - fa.x) * t;
+      const fy = fa.y + (fb.y - fa.y) * t;
+      stamp(Math.floor(fx), Math.floor(fy));
     }
-    return tiles;
+
+    return Array.from(tileMap.values());
   }
 
   /**
@@ -523,7 +574,7 @@ export class ClientRoutePlannerEngine {
     const endCoord = toHit.coord;
     const heuristic = (nodeId: string): number => {
       const c = getCoord(nodeId);
-      return c ? haversineMeters(c, endCoord) * 0.85 : 0;
+      return c ? haversineMeters(c, endCoord) * 0.8 : 0;
     };
 
     const gScore = new Map<string, number>();

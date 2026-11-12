@@ -4,6 +4,28 @@ import tailwindcss from '@tailwindcss/vite';
 import fs from 'node:fs';
 import path from 'node:path';
 
+function buildAppVersionString(): string {
+  let baseVersion = '0.5.0';
+  try {
+    const pkgPath = path.resolve(__dirname, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    if (pkg.version && pkg.version.trim()) {
+      baseVersion = pkg.version.trim();
+    }
+  } catch {
+    // Keep default fallback base version
+  }
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  return `${baseVersion}.${yyyy}${mm}${dd}-${hh}${min}`;
+}
+
+const APP_VERSION = buildAppVersionString();
+
 /**
  * Custom Vite plugin that serves files from C:\dev\NavApp\data\* at /data/*
  * with full HTTP 206 Partial Content (Range: bytes=start-end) support.
@@ -116,6 +138,9 @@ function pmtilesDataRangePlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), pmtilesDataRangePlugin()],
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   resolve: {
     alias: {
       'maplibre-contour': path.resolve(

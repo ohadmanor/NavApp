@@ -267,6 +267,8 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
         <div className={`flex-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs ${t.subCard}`}>
           <Globe className="w-3.5 h-3.5 text-sky-500 shrink-0" />
           <input
+            id="user-icon-web-search"
+            name="userIconWebSearch"
             type="text"
             dir="auto"
             value={webQuery}

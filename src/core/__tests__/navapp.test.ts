@@ -3169,4 +3169,23 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     },
     30000
   );
+
+  it('keeps Android Capacitor captureInput disabled and WebView input IME handling safe for Hebrew & predictive keyboards', () => {
+    const rootCapConfig = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf-8'));
+    expect(rootCapConfig.android?.captureInput).toBe(false);
+
+    const androidAssetsConfigPath = 'android/app/src/main/assets/capacitor.config.json';
+    if (fs.existsSync(androidAssetsConfigPath)) {
+      const androidCapConfig = JSON.parse(fs.readFileSync(androidAssetsConfigPath, 'utf-8'));
+      expect(androidCapConfig.android?.captureInput).toBe(false);
+    }
+
+    const indexCss = fs.readFileSync('src/index.css', 'utf-8');
+    expect(indexCss).toMatch(/input,\s*textarea\s*\{[^}]*user-select:\s*text/i);
+
+    const searchBarSrc = fs.readFileSync('src/components/search/SearchBar.tsx', 'utf-8');
+    expect(searchBarSrc).toContain('onCompositionStart');
+    expect(searchBarSrc).toContain('onCompositionEnd');
+    expect(searchBarSrc).toContain('select-text');
+  });
 });

@@ -13,7 +13,7 @@ import {
   LogIn,
   LogOut,
   Loader2,
-  MapPin,
+  Route as RouteIcon,
 } from 'lucide-react';
 import {
   PLANNING_MODE_META,
@@ -42,6 +42,8 @@ interface RoutePlannerPanelProps {
   descentMeters: number;
   isRoutingLeg: boolean;
   isSaving: boolean;
+  isEditingExisting?: boolean;
+  editingRouteColor?: string;
   disconnectedCandidate: SnappedPoint | null;
   currentUser: NavUser | null;
   firebaseAvailable: boolean;
@@ -52,7 +54,10 @@ interface RoutePlannerPanelProps {
   onConfirmStraightLine: () => void;
   onCancelDisconnected: () => void;
   onUndoLastPoint: () => void;
+  onRemoveWaypoint?: (index: number) => void;
+  onToggleLegType?: (legIndex: number) => void;
   onClearPlan: () => void;
+  onCancelEdit?: () => void;
   onFinishAndSave: () => void;
   onSignInGoogle: () => void;
   onSignOutGoogle: () => void;
@@ -81,6 +86,8 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
   descentMeters,
   isRoutingLeg,
   isSaving,
+  isEditingExisting = false,
+  editingRouteColor,
   disconnectedCandidate,
   currentUser,
   firebaseAvailable,
@@ -91,7 +98,10 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
   onConfirmStraightLine,
   onCancelDisconnected,
   onUndoLastPoint,
+  onRemoveWaypoint,
+  onToggleLegType,
   onClearPlan,
+  onCancelEdit,
   onFinishAndSave,
   onSignInGoogle,
   onSignOutGoogle,
@@ -100,6 +110,7 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
 }) => {
   const t = getSurfaceTheme(theme);
   const modeMeta = PLANNING_MODE_META[mode];
+  const accentColor = editingRouteColor || modeMeta.color;
 
   return (
     <div dir="rtl" className="p-4 space-y-3 overflow-y-auto min-h-0 flex-1">
@@ -109,24 +120,39 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
           <div className="flex items-center gap-1.5">
             <span
               className="w-2.5 h-2.5 rounded-full shrink-0"
-              style={{ backgroundColor: modeMeta.color }}
+              style={{ backgroundColor: accentColor }}
             />
-            <span className="text-xs font-bold" style={{ color: modeMeta.color }}>
-              מתכנן מסלול חכם • {modeMeta.labelHe}
+            <span className="text-xs font-bold" style={{ color: accentColor }}>
+              {isEditingExisting
+                ? `עריכת מסלול קיים • ${modeMeta.labelHe}`
+                : `מתכנן מסלול חכם • ${modeMeta.labelHe}`}
             </span>
           </div>
           <p className={`text-xs mt-0.5 ${t.muted}`}>
-            לחץ על המפה לקיבוע לציר הקרוב • דאבל-קליק לסיום
+            לחץ על המפה להוספת נקודה • דאבל-קליק לסיום
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
-          title="סגור מתכנן מסלול"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isEditingExisting && onCancelEdit && (
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              className={`px-2 py-1 rounded-lg border text-[11px] font-bold text-amber-500 ${t.pillBtn}`}
+              title="בטל עריכה וחזור לרשימת המסלולים"
+            >
+              בטל עריכה
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
+            title="סגור מתכנן מסלול"
+            aria-label="סגור מתכנן מסלול"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Mode Selector: 4x4 / Foot / Bicycle */}
@@ -157,6 +183,8 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
 
       {/* Route Name */}
       <input
+        id="route-planner-name"
+        name="routePlannerName"
         type="text"
         dir="auto"
         value={routeName}
@@ -169,13 +197,17 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
       <div className={`grid grid-cols-3 gap-2 p-2.5 rounded-xl border text-xs ${t.subCard}`}>
         <div>
           <span className={`block ${t.muted}`}>מרחק כולל</span>
-          <span className="font-mono font-bold text-sm" style={{ color: modeMeta.color }}>
+          <span
+            dir="ltr"
+            className="font-mono font-bold text-sm inline-block"
+            style={{ color: accentColor }}
+          >
             {totalDistanceKm.toFixed(2)} km
           </span>
         </div>
         <div>
           <span className={`block ${t.muted}`}>טיפוס / ירידה</span>
-          <span className="font-mono font-bold">
+          <span dir="ltr" className="font-mono font-bold inline-block">
             <span className="text-emerald-500">+{ascentMeters}m</span>
             <span className="opacity-35 mx-1">/</span>
             <span className="text-amber-500">-{descentMeters}m</span>
@@ -223,9 +255,9 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
         </div>
       )}
 
-      {/* Snapped Waypoints List */}
+      {/* Snapped Waypoints List with Per-Point Delete & Leg Mode Toggle */}
       {waypoints.length > 0 ? (
-        <div className={`rounded-xl border divide-y max-h-36 overflow-y-auto ${t.subCard} ${t.divider}`}>
+        <div className={`rounded-xl border divide-y max-h-44 overflow-y-auto ${t.subCard} ${t.divider}`}>
           {waypoints.map((wp, idx) => {
             const incomingLeg = idx > 0 ? legs[idx - 1] : null;
             return (
@@ -242,24 +274,60 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
                           ? '#10b981'
                           : idx === waypoints.length - 1
                             ? '#ef4444'
-                            : modeMeta.color,
+                            : accentColor,
                     }}
                   >
                     {idx + 1}
                   </span>
                   <div className="min-w-0">
-                    <div className="font-semibold truncate">
+                    <div className="font-semibold truncate" dir="auto">
                       {wp.roadLabel || 'נקודה על ציר'}
                     </div>
                     {incomingLeg && (
-                      <div className={`text-[11px] font-mono ${t.muted}`}>
-                        +{incomingLeg.distanceKm.toFixed(2)} km •{' '}
-                        {incomingLeg.legType === 'straight' ? 'קו ישר' : 'רשת דרכים'}
+                      <div className={`text-[11px] flex items-center gap-1.5 flex-wrap ${t.muted}`}>
+                        <span dir="ltr" className="font-mono">
+                          +{incomingLeg.distanceKm.toFixed(2)} km
+                        </span>
+                        <span>•</span>
+                        {onToggleLegType ? (
+                          <button
+                            type="button"
+                            disabled={isRoutingLeg || isSaving}
+                            onClick={() => onToggleLegType(idx - 1)}
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-colors disabled:opacity-40 ${
+                              incomingLeg.legType === 'straight'
+                                ? 'border-amber-500/50 text-amber-500 bg-amber-500/10 hover:bg-amber-500/20'
+                                : 'border-blue-500/40 text-blue-500 bg-blue-500/10 hover:bg-blue-500/20'
+                            }`}
+                            title="לחץ להחלפה בין ניתוב רשת דרכים לקו ישר"
+                          >
+                            <RouteIcon className="w-2.5 h-2.5" />
+                            <span>
+                              {incomingLeg.legType === 'straight' ? 'קו ישר' : 'רשת דרכים'}
+                            </span>
+                          </button>
+                        ) : (
+                          <span>
+                            {incomingLeg.legType === 'straight' ? 'קו ישר' : 'רשת דרכים'}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
                 </div>
-                <MapPin className={`w-3.5 h-3.5 shrink-0 ${t.muted}`} />
+
+                {onRemoveWaypoint && (
+                  <button
+                    type="button"
+                    disabled={isRoutingLeg || isSaving}
+                    onClick={() => onRemoveWaypoint(idx)}
+                    className={`p-1 rounded-md text-red-400 hover:text-red-500 hover:bg-red-500/10 disabled:opacity-35 shrink-0`}
+                    title={`הסר נקודה ${idx + 1}`}
+                    aria-label={`הסר נקודה ${idx + 1}`}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             );
           })}
@@ -280,12 +348,16 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
               <CloudOff className={`w-4 h-4 shrink-0 ${t.muted}`} />
             )}
             <div className="min-w-0">
-              <div className="font-bold truncate">
-                {currentUser
-                  ? currentUser.email || currentUser.displayName || 'מחובר עם Google'
-                  : 'שמירה מקומית + Firebase (planing_tracks)'}
+              <div className="font-bold leading-snug break-words">
+                {currentUser ? (
+                  currentUser.email || currentUser.displayName || 'מחובר עם Google'
+                ) : (
+                  <>
+                    שמירה מקומית + <span dir="ltr">Firebase (planing_tracks)</span>
+                  </>
+                )}
               </div>
-              <div className={`text-[11px] truncate ${t.muted}`}>
+              <div className={`text-[11px] leading-snug ${t.muted}`}>
                 {!firebaseAvailable
                   ? 'מצב מקומי בלבד (חסר קובץ .env של Firebase)'
                   : currentUser
@@ -350,6 +422,7 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
           onClick={onClearPlan}
           className={`px-3 py-2.5 rounded-xl border text-xs font-bold text-red-500 flex items-center gap-1 disabled:opacity-40 ${t.pillBtn}`}
           title="נקה תכנון"
+          aria-label="נקה תכנון"
         >
           <Trash2 className="w-4 h-4" />
         </button>
@@ -365,7 +438,13 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
           ) : (
             <Check className="w-4 h-4" />
           )}
-          <span>{isSaving ? 'שומר GPX...' : 'סיים ושמור מסלול'}</span>
+          <span>
+            {isSaving
+              ? 'שומר...'
+              : isEditingExisting
+                ? 'עדכן ושמור מסלול'
+                : 'סיים ושמור מסלול'}
+          </span>
         </button>
       </div>
     </div>

@@ -1,7 +1,7 @@
 {
   "name": "navapp-outdoor",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.5.0",
   "description": "Serverless Offline-First Cross-Platform Outdoor Map Navigation (Web PWA, Android, iOS) powered by MapLibre GL JS & PMTiles",
   "type": "module",
   "scripts": {

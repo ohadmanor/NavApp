@@ -122,48 +122,61 @@ export function extractRouteTangentHeading(
   lon?: number,
   lat?: number
 ): number | null {
-  const feature = route?.geojson?.features?.find(
-    (f) => f?.geometry?.type === 'LineString' || f?.geometry?.type === 'MultiLineString'
-  );
-  const coords =
-    feature?.geometry?.type === 'LineString'
-      ? (feature.geometry.coordinates as number[][])
-      : feature?.geometry?.type === 'MultiLineString'
-        ? (feature.geometry.coordinates[0] as number[][] | undefined) ?? null
-        : null;
-  if (!coords || coords.length < 2) return null;
-
-  if (typeof lon === 'number' && typeof lat === 'number') {
-    let bestIdx = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < coords.length - 1; i++) {
-      const d = haversineMeters(lon, lat, coords[i][0], coords[i][1]);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
+  const sequences: number[][][] = [];
+  for (const f of route?.geojson?.features || []) {
+    if (f?.geometry?.type === 'LineString' && Array.isArray(f.geometry.coordinates)) {
+      if (f.geometry.coordinates.length >= 2) {
+        sequences.push(f.geometry.coordinates as number[][]);
+      }
+    } else if (f?.geometry?.type === 'MultiLineString' && Array.isArray(f.geometry.coordinates)) {
+      for (const ring of f.geometry.coordinates) {
+        if (Array.isArray(ring) && ring.length >= 2) {
+          sequences.push(ring as number[][]);
+        }
       }
     }
-    for (let j = bestIdx; j < coords.length - 1; j++) {
+  }
+  if (sequences.length === 0) return null;
+
+  if (typeof lon === 'number' && typeof lat === 'number') {
+    let bestSeqIdx = 0;
+    let bestPtIdx = 0;
+    let bestDist = Infinity;
+    for (let s = 0; s < sequences.length; s++) {
+      const seq = sequences[s];
+      for (let i = 0; i < seq.length - 1; i++) {
+        const d = haversineMeters(lon, lat, seq[i][0], seq[i][1]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestSeqIdx = s;
+          bestPtIdx = i;
+        }
+      }
+    }
+    const targetSeq = sequences[bestSeqIdx];
+    for (let j = bestPtIdx; j < targetSeq.length - 1; j++) {
       const b = computeBearingBetweenCoords(
-        coords[j][0],
-        coords[j][1],
-        coords[j + 1][0],
-        coords[j + 1][1],
+        targetSeq[j][0],
+        targetSeq[j][1],
+        targetSeq[j + 1][0],
+        targetSeq[j + 1][1],
         1
       );
       if (b !== null) return b;
     }
   }
 
-  for (let i = 0; i < coords.length - 1; i++) {
-    const b = computeBearingBetweenCoords(
-      coords[i][0],
-      coords[i][1],
-      coords[i + 1][0],
-      coords[i + 1][1],
-      1
-    );
-    if (b !== null) return b;
+  for (const seq of sequences) {
+    for (let i = 0; i < seq.length - 1; i++) {
+      const b = computeBearingBetweenCoords(
+        seq[i][0],
+        seq[i][1],
+        seq[i + 1][0],
+        seq[i + 1][1],
+        1
+      );
+      if (b !== null) return b;
+    }
   }
   return null;
 }
