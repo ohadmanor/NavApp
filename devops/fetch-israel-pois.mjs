@@ -629,15 +629,15 @@ export function classifyOsmElement(el) {
   }
 
   if (tags.mountain_pass === 'yes') {
-    if (!hasExplicitName && tags.highway && EXCLUDED_MAALE_HIGHWAYS.has(tags.highway)) {
+    if (!hasExplicitName) {
       return null;
     }
     return {
       category: 'offroad',
       subcategory: '4x4_pass',
-      nameHe: nameHe || 'מעבר הרים / שטח',
-      nameEn: nameEn || 'Mountain / Trail Pass',
-      hasExplicitName,
+      nameHe,
+      nameEn,
+      hasExplicitName: true,
     };
   }
 

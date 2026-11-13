@@ -931,6 +931,61 @@ const VECTOR_POI_CATEGORY_BY_LAYER_ID: Record<string, PoiCategory> = {
   'icon-parking': 'offroad',
 };
 
+const VECTOR_POI_LAYERS_REQUIRING_NAME = new Set<string>([
+  'name-peak',
+  'name-water-point',
+  'water-hole',
+  'water-well',
+  'water-tank',
+  'water-waterfall',
+  'icon-camp_site',
+  'icon-picnic',
+  'icon-viewpoint',
+  'icon-cave',
+  'icon-ruins',
+  'icon-archaeological',
+  'icon-memorial',
+  'icon-holy',
+  'icon-jewish',
+  'icon-muslim',
+  'icon-christian',
+  'icon-tree',
+  'icon-guidepost',
+  'icon-rail_station',
+]);
+
+const HAS_VECTOR_POI_NAME_EXPR: any = [
+  'any',
+  ['!=', ['coalesce', ['get', 'name:he'], ''], ''],
+  ['!=', ['coalesce', ['get', 'name'], ''], ''],
+  ['!=', ['coalesce', ['get', 'name:latin'], ''], ''],
+  ['!=', ['coalesce', ['get', 'name:en'], ''], ''],
+  ['!=', ['coalesce', ['get', 'name_en'], ''], ''],
+  ['!=', ['coalesce', ['get', 'int_name'], ''], ''],
+];
+
+export function getVectorPoiLayerCategory(layerId: string): PoiCategory | undefined {
+  return VECTOR_POI_CATEGORY_BY_LAYER_ID[layerId];
+}
+
+export function buildVectorPoiLayerFilter(
+  layerId: string,
+  baseFilter: any,
+  exclusionPoly?: GeoJSON.MultiPolygon | null
+): any {
+  const requiresName = VECTOR_POI_LAYERS_REQUIRING_NAME.has(layerId);
+  if (!requiresName && !exclusionPoly) {
+    return baseFilter ?? null;
+  }
+  const clauses: any[] = [];
+  const baseExpr = convertLegacyFilterToExpression(baseFilter);
+  if (baseExpr) clauses.push(baseExpr);
+  if (requiresName) clauses.push(HAS_VECTOR_POI_NAME_EXPR);
+  if (exclusionPoly) clauses.push(['!', ['within', exclusionPoly]]);
+  if (clauses.length === 0) return null;
+  return clauses.length === 1 ? clauses[0] : ['all', ...clauses];
+}
+
 function getModernVectorPoiLayerUpdates(
   layerId: string,
   originalLayout?: any
@@ -1406,6 +1461,15 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       };
     }
 
+    if (POI_STYLE_LAYER_IDS.has(layer.id)) {
+      const nextFilter = buildVectorPoiLayerFilter(layer.id, (layer as any).filter);
+      if (nextFilter) {
+        (layer as any).filter = nextFilter;
+      } else {
+        delete (layer as any).filter;
+      }
+    }
+
     layers.push(layer);
   }
 
@@ -1600,14 +1664,8 @@ export function applyLayerVisibilityToMap(
     for (const vecLayerId of POI_STYLE_LAYER_IDS) {
       if (!map.getLayer(vecLayerId)) continue;
       const rawLayer = rawLayerById.get(vecLayerId);
-      const baseFilter = rawLayer?.filter;
-      if (!exclusionPoly) {
-        map.setFilter(vecLayerId, baseFilter ?? null);
-        continue;
-      }
-      const baseExpr = convertLegacyFilterToExpression(baseFilter);
-      const notWithinExpr: any = ['!', ['within', exclusionPoly]];
-      map.setFilter(vecLayerId, baseExpr ? ['all', baseExpr, notWithinExpr] : notWithinExpr);
+      const nextFilter = buildVectorPoiLayerFilter(vecLayerId, rawLayer?.filter, exclusionPoly);
+      map.setFilter(vecLayerId, nextFilter);
     }
   }
 

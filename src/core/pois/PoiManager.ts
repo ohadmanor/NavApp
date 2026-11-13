@@ -3,6 +3,14 @@ import { offlineDataFiles } from '../pmtiles/OfflineDataFiles';
 import { isValidPoiCategory, normalizeSubcategoryForCategory, resolvePoiSymbolId } from './poiTaxonomy';
 import { classifyPoiWithText } from './poiClassifier';
 
+const GENERIC_VECTOR_PLACEHOLDER_NAMES = new Set<string>([
+  'אתר מורשת / נקודת עניין',
+  'heritage landmark',
+  'מעבר הרים / שטח',
+  'mountain / trail pass',
+  'unnamed',
+]);
+
 export interface DeletedPoiSignature {
   id: string;
   normName: string;
@@ -1121,6 +1129,94 @@ export class PoiManager {
           priority: getPoiSortPriority(p),
         },
       })),
+    };
+  }
+
+  /**
+   * Resolves a clicked PMTiles vector-tile POI feature (`POI_STYLE_LAYER_IDS`) to either
+   * a matching richer GeoJSON/Off-Road/User POI at the same spot or a named `vt-*` PoiRecord.
+   * Returns `null` for deleted features or unnamed/placeholder vector points.
+   */
+  static resolveRenderedVectorPoi(params: {
+    featureProps: Record<string, any> | null | undefined;
+    layerId: string;
+    lon: number;
+    lat: number;
+    existingPois: ReadonlyArray<PoiRecord>;
+    vectorCategory?: PoiCategory;
+  }): PoiRecord | null {
+    const p = params.featureProps || {};
+    const layerId = String(params.layerId || '').trim();
+    const { lon, lat } = params;
+    const rawNameHe = String(p['name:he'] || p.name || p['name:latin'] || '').trim();
+    const rawNameEn = String(
+      p['name:en'] || p.name_en || p['name:latin'] || p.name || p['int_name'] || ''
+    ).trim();
+    const subclass = String(p.subclass || p.class || '').trim();
+    const eleNum =
+      typeof p.ele === 'number' && Number.isFinite(p.ele)
+        ? p.ele
+        : p.ele && Number.isFinite(Number(p.ele))
+          ? Number(p.ele)
+          : null;
+
+    const cls = classifyPoiWithText({
+      nameHe: rawNameHe || undefined,
+      nameEn: rawNameEn || undefined,
+      existingCategory: params.vectorCategory,
+      existingSubcategory: subclass || undefined,
+      source: 'IsraelHiking / OSM',
+      ele: eleNum,
+    });
+
+    // If a matching GeoJSON/Off-Road POI sits at the same spot (~28m), open the richer full record
+    const normVtName = rawNameHe.replace(/[\s"'׳״\-–—]/g, '').toLowerCase();
+    const nearbyMatch = params.existingPois.find((item) => {
+      if (Math.abs(item.lon - lon) > 0.0004 || Math.abs(item.lat - lat) > 0.0004) return false;
+      if (item.category !== cls.category) return false;
+      const dMeters = Math.hypot((item.lon - lon) * 95000, (item.lat - lat) * 111320);
+      if (dMeters > 28) return false;
+      if (!normVtName) return true;
+      const normItemName = (item.nameHe || item.name || '').replace(/[\s"'׳״\-–—]/g, '').toLowerCase();
+      return !normItemName || normItemName.includes(normVtName) || normVtName.includes(normItemName);
+    });
+
+    if (nearbyMatch) return nearbyMatch;
+
+    const displayHe = rawNameHe || rawNameEn;
+    if (!displayHe || GENERIC_VECTOR_PLACEHOLDER_NAMES.has(displayHe.toLowerCase())) {
+      return null;
+    }
+
+    if (
+      PoiManager.isVectorFeatureDeleted({
+        layerId,
+        lon,
+        lat,
+        name: displayHe,
+      })
+    ) {
+      return null;
+    }
+
+    return {
+      id: `vt-${layerId || 'poi'}-${lon.toFixed(5)}-${lat.toFixed(5)}`,
+      name: displayHe,
+      nameHe: displayHe,
+      nameEn: rawNameEn || rawNameHe,
+      category: cls.category,
+      subcategory: cls.subcategory,
+      lon,
+      lat,
+      ele: eleNum,
+      waterStatus: null,
+      difficulty4x4: null,
+      descHe: '',
+      descEn: '',
+      source: 'IsraelHiking / OSM',
+      wikipedia: null,
+      externalUrl: null,
+      userNotes: '',
     };
   }
 

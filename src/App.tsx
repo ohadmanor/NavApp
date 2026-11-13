@@ -31,6 +31,7 @@ import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
   buildPoiTieredLayerFilter,
+  getVectorPoiLayerCategory,
   isMasterPoiActive,
   POI_STYLE_LAYER_IDS,
   HIGHWAY_LAYER_IDS,
@@ -43,9 +44,7 @@ import {
   buildPoiIconExpression,
   buildPoiIconSizeExpression,
   buildPoiTextColorExpression,
-  getPoiSymbolSpec,
 } from './core/pois/poiTaxonomy';
-import { classifyPoiWithText } from './core/pois/poiClassifier';
 import { RouteManager, resolveRouteDisplayColor } from './core/navigation/RouteManager';
 import {
   resolveMapRouteDisplay,
@@ -2771,67 +2770,16 @@ export const App: React.FC = () => {
           priority: typeof p.priority === 'number' ? p.priority : undefined,
         };
       } else {
-        const rawNameHe = String(p['name:he'] || p.name || p['name:latin'] || '').trim();
-        const rawNameEn = String(p['name:en'] || p.name_en || p['name:latin'] || p.name || '').trim();
-        const subclass = String(p.subclass || p.class || '').trim();
-        const eleNum =
-          typeof p.ele === 'number' && Number.isFinite(p.ele)
-            ? p.ele
-            : p.ele && Number.isFinite(Number(p.ele))
-              ? Number(p.ele)
-              : null;
-        const cls = classifyPoiWithText({
-          nameHe: rawNameHe || undefined,
-          nameEn: rawNameEn || undefined,
-          existingSubcategory: subclass || undefined,
-          source: 'IsraelHiking / OSM',
-          ele: eleNum,
-        });
-        const symSpec = getPoiSymbolSpec(cls.category, cls.subcategory);
-
-        // If a matching GeoJSON/Off-Road POI sits at the same spot (~25m), open the richer full record
-        const normVtName = rawNameHe.replace(/[\s"'׳״\-–—]/g, '').toLowerCase();
-        const nearbyMatch = poisRef.current.find((item) => {
-          if (Math.abs(item.lon - lon) > 0.0004 || Math.abs(item.lat - lat) > 0.0004) return false;
-          if (item.category !== cls.category) return false;
-          const dMeters = Math.hypot((item.lon - lon) * 95000, (item.lat - lat) * 111320);
-          if (dMeters > 28) return false;
-          if (!normVtName) return true;
-          const normItemName = (item.nameHe || item.name || '').replace(/[\s"'׳״\-–—]/g, '').toLowerCase();
-          return !normItemName || normItemName.includes(normVtName) || normVtName.includes(normItemName);
-        });
-
-        if (
-          !nearbyMatch &&
-          PoiManager.isVectorFeatureDeleted({
-            layerId,
-            lon,
-            lat,
-            name: rawNameHe || rawNameEn,
-          })
-        ) {
-          return;
-        }
-
-        clickedPoi = nearbyMatch ?? {
-          id: `vt-${layerId || 'poi'}-${lon.toFixed(5)}-${lat.toFixed(5)}`,
-          name: rawNameHe || rawNameEn || symSpec.labelHe,
-          nameHe: rawNameHe || symSpec.labelHe,
-          nameEn: rawNameEn || rawNameHe || symSpec.labelEn,
-          category: cls.category,
-          subcategory: cls.subcategory,
+        const resolved = PoiManager.resolveRenderedVectorPoi({
+          featureProps: p,
+          layerId,
           lon,
           lat,
-          ele: eleNum,
-          waterStatus: null,
-          difficulty4x4: null,
-          descHe: symSpec.labelHe,
-          descEn: symSpec.labelEn,
-          source: 'IsraelHiking / OSM',
-          wikipedia: null,
-          externalUrl: null,
-          userNotes: '',
-        };
+          existingPois: poisRef.current,
+          vectorCategory: getVectorPoiLayerCategory(layerId),
+        });
+        if (!resolved) return;
+        clickedPoi = resolved;
       }
 
       setSelectedPoi(clickedPoi);
@@ -2904,13 +2852,16 @@ export const App: React.FC = () => {
             : undefined;
         const fLon = Number(fp.lon ?? coords?.[0] ?? e.lngLat.lng);
         const fLat = Number(fp.lat ?? coords?.[1] ?? e.lngLat.lat);
-        const fName = String(fp['name:he'] || fp.name || fp['name:en'] || fp['name:latin'] || '').trim();
-        return !PoiManager.isVectorFeatureDeleted({
-          layerId: lid,
-          lon: fLon,
-          lat: fLat,
-          name: fName,
-        });
+        return (
+          PoiManager.resolveRenderedVectorPoi({
+            featureProps: fp,
+            layerId: lid,
+            lon: fLon,
+            lat: fLat,
+            existingPois: poisRef.current,
+            vectorCategory: getVectorPoiLayerCategory(lid),
+          }) !== null
+        );
       });
       if (activeHits.length === 0) return;
       const preferred =

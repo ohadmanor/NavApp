@@ -895,6 +895,114 @@ describe('GlobalPoiCloudService', () => {
       DEFAULT_LAYER_VISIBILITY,
       PoiManager.getDeletedSignatures()
     );
-    expect(filterCalls.get('icon-viewpoint')).toEqual(['==', 'subclass', 'viewpoint']);
+    expect(filterCalls.get('icon-parking')).toEqual(['==', 'subclass', 'parking']);
+    expect(JSON.stringify(filterCalls.get('icon-viewpoint'))).not.toContain('"within"');
+    expect(JSON.stringify(filterCalls.get('icon-viewpoint'))).toContain('"name:he"');
+  });
+
+  it('suppresses unnamed/placeholder PMTiles vector-tile POIs (no "אתר מורשת / נקודת עניין" garbage)', async () => {
+    const { PoiManager } = await import('../pois/PoiManager');
+    const { buildIsraelOutdoorStyle, getVectorPoiLayerCategory } = await import(
+      '../style/israelOutdoorStyle'
+    );
+
+    // 1. Style layers hide unnamed guidepost/tree/archaeological/viewpoint clutter
+    const style = buildIsraelOutdoorStyle({
+      visibility: {
+        poiWater: true,
+        poiOffroad: true,
+        poiCampsites: true,
+        poiHeritage: true,
+        poiPeaks: true,
+        poiUser: true,
+        pois: true,
+        hikingTrails: true,
+        cycleways: false,
+        offroad4x4: true,
+        contours: true,
+        hillshade: true,
+        militaryZones: true,
+        natureParks: true,
+        tacticalGrid: false,
+        fuelAndFlood: true,
+        googleSatellite: false,
+        terrain3d: false,
+      },
+      theme: 'topo-day',
+    });
+    for (const id of ['icon-guidepost', 'icon-tree', 'icon-archaeological', 'icon-viewpoint', 'name-peak']) {
+      const layer = style.layers.find((l) => l.id === id) as any;
+      expect(JSON.stringify(layer?.filter)).toContain('"name:he"');
+    }
+
+    // 2. Clicking an unnamed guidepost / tree / landmark without a GeoJSON match returns null
+    expect(
+      PoiManager.resolveRenderedVectorPoi({
+        featureProps: { subclass: 'guidepost' },
+        layerId: 'icon-guidepost',
+        lon: 35.11012,
+        lat: 31.75821,
+        existingPois: [],
+        vectorCategory: getVectorPoiLayerCategory('icon-guidepost'),
+      })
+    ).toBeNull();
+
+    expect(
+      PoiManager.resolveRenderedVectorPoi({
+        featureProps: { name: 'אתר מורשת / נקודת עניין', subclass: 'archaeological_site' },
+        layerId: 'icon-archaeological',
+        lon: 35.11012,
+        lat: 31.75821,
+        existingPois: [],
+        vectorCategory: getVectorPoiLayerCategory('icon-archaeological'),
+      })
+    ).toBeNull();
+
+    // 3. Named vector POI resolves cleanly without fake label repetition in descHe
+    const namedRes = PoiManager.resolveRenderedVectorPoi({
+      featureProps: { 'name:he': 'חורבת עקד', 'name:en': 'Horvat Eked', subclass: 'ruins' },
+      layerId: 'icon-ruins',
+      lon: 35.01234,
+      lat: 31.83456,
+      existingPois: [],
+      vectorCategory: getVectorPoiLayerCategory('icon-ruins'),
+    });
+    expect(namedRes).toMatchObject({
+      id: 'vt-icon-ruins-35.01234-31.83456',
+      nameHe: 'חורבת עקד',
+      nameEn: 'Horvat Eked',
+      category: 'heritage',
+      descHe: '',
+    });
+
+    // 4. Unnamed vector dot overlapping a real GeoJSON POI within ~28m still opens the real POI
+    const existingPoi = {
+      id: 'osm-n1734276790',
+      name: 'בור איתן',
+      nameHe: 'בור איתן',
+      nameEn: 'Bor Eitan',
+      category: 'water' as const,
+      subcategory: 'cistern',
+      lon: 35.11342,
+      lat: 31.76164,
+      ele: null,
+      waterStatus: null,
+      difficulty4x4: null,
+      descHe: 'בתוך יער. מלא כל השנה.',
+      descEn: '',
+      source: 'OpenStreetMap Israel + IsraelHiking',
+      wikipedia: null,
+      externalUrl: null,
+      userNotes: '',
+    };
+    const matched = PoiManager.resolveRenderedVectorPoi({
+      featureProps: { subclass: 'cistern' },
+      layerId: 'name-water-point',
+      lon: 35.11345,
+      lat: 31.76166,
+      existingPois: [existingPoi],
+      vectorCategory: getVectorPoiLayerCategory('name-water-point'),
+    });
+    expect(matched?.id).toBe('osm-n1734276790');
   });
 });
