@@ -10,6 +10,32 @@ export interface DeletedPoiSignature {
   lat: number;
 }
 
+export function parseVectorTilePoiId(
+  id: string
+): { layerId: string; lon: number; lat: number } | null {
+  const m = /^vt-(.+)-(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)$/.exec(String(id || '').trim());
+  if (!m) return null;
+  const lon = Number(m[2]);
+  const lat = Number(m[3]);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  if (lon < -180 || lon > 180 || lat < -90 || lat > 90) return null;
+  return { layerId: m[1], lon, lat };
+}
+
+export function parsePmtilesSearchPoiId(
+  id: string
+): { layer: string; lon: number; lat: number; name: string } | null {
+  const m = /^pmtiles:([^:]+):(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(.*)$/.exec(
+    String(id || '').trim()
+  );
+  if (!m) return null;
+  const lon = Number(m[2]);
+  const lat = Number(m[3]);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  if (lon < -180 || lon > 180 || lat < -90 || lat > 90) return null;
+  return { layer: m[1], lon, lat, name: m[4] || '' };
+}
+
 export interface DeletedPoiUndoSnapshot {
   poi: PoiRecord;
   hadRecordInDb: boolean;
@@ -395,8 +421,82 @@ export class PoiManager {
         ? combinedRaw
         : combinedRaw.filter((_, idx) => !deletedCanonicalGrid.has(idx));
 
+    // Preserve deleted signatures for vector-tile (vt-*) and PMTiles search (pmtiles:*) overrides
+    // which do not have base rows in db.pois or offroadPoisCache.
+    for (const ov of overrides) {
+      if (!ov?.deleted || PoiManager.deletedSignatures.has(ov.id)) continue;
+      const vtParsed = parseVectorTilePoiId(ov.id);
+      if (vtParsed) {
+        PoiManager.deletedSignatures.set(ov.id, {
+          id: ov.id,
+          normName: '',
+          lon: vtParsed.lon,
+          lat: vtParsed.lat,
+        });
+        continue;
+      }
+      const pmtParsed = parsePmtilesSearchPoiId(ov.id);
+      if (pmtParsed) {
+        PoiManager.deletedSignatures.set(ov.id, {
+          id: ov.id,
+          normName: pmtParsed.name ? normalizePoiNameForMerge(pmtParsed.name) : '',
+          lon: pmtParsed.lon,
+          lat: pmtParsed.lat,
+        });
+      }
+    }
+
     merged.sort((a, b) => getPoiSortPriority(a) - getPoiSortPriority(b) || a.id.localeCompare(b.id));
     return merged;
+  }
+
+  /**
+   * Checks whether a rendered PMTiles vector-tile POI feature corresponds to a globally
+   * deleted POI (`vt-*`, `pmtiles:*`, or a deleted GeoJSON/Off-Road POI at the same spot).
+   */
+  static isVectorFeatureDeleted(params: {
+    layerId?: string;
+    lon: number;
+    lat: number;
+    name?: string;
+  }): boolean {
+    if (PoiManager.deletedSignatures.size === 0) return false;
+    if (!Number.isFinite(params.lon) || !Number.isFinite(params.lat)) return false;
+
+    const layerId = String(params.layerId || '').trim();
+    if (layerId) {
+      const vtId = `vt-${layerId}-${params.lon.toFixed(5)}-${params.lat.toFixed(5)}`;
+      if (PoiManager.deletedSignatures.has(vtId)) {
+        return true;
+      }
+    }
+
+    const normName = params.name ? normalizePoiNameForMerge(params.name) : '';
+    for (const sig of PoiManager.deletedSignatures.values()) {
+      const dMeters = Math.hypot(
+        (sig.lon - params.lon) * 95000,
+        (sig.lat - params.lat) * 111320
+      );
+      if (dMeters > 85) continue;
+
+      if (sig.id.startsWith('vt-')) {
+        if (dMeters <= 12) {
+          if (!layerId || sig.id.startsWith(`vt-${layerId}-`) || dMeters <= 4) {
+            return true;
+          }
+        }
+        continue;
+      }
+
+      if (normName && sig.normName) {
+        if (arePoiNamesEquivalentForMerge(sig.normName, normName)) {
+          return true;
+        }
+      } else if (dMeters <= 12) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static async initializePois(): Promise<PoiRecord[]> {

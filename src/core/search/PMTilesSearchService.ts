@@ -684,13 +684,12 @@ export class PMTilesSearchService {
           );
           if (dup) continue;
         }
-        if (deletedSigs.length > 0 && hitNorm) {
-          const deletedDup = deletedSigs.some(
-            (d) =>
-              d.norm &&
-              d.norm === hitNorm &&
-              haversineKmFast(d.lon, d.lat, hit.lon, hit.lat) < 0.085
-          );
+        if (deletedSigs.length > 0) {
+          const deletedDup = deletedSigs.some((d) => {
+            const distKm = haversineKmFast(d.lon, d.lat, hit.lon, hit.lat);
+            if (distKm < 0.015) return true;
+            return Boolean(d.norm && hitNorm && d.norm === hitNorm && distKm < 0.085);
+          });
           if (deletedDup) continue;
         }
         candidates.push(hit);
@@ -1062,7 +1061,8 @@ export class PMTilesSearchService {
         subtitleParts.push(`${ele} מ׳`);
       }
 
-      const id = `pmtiles:${layer}:${lon.toFixed(5)}:${lat.toFixed(5)}:${name.slice(0, 24)}`;
+      const safeIdName = name.slice(0, 24).replace(/\//g, '_');
+      const id = `pmtiles:${layer}:${lon.toFixed(5)}:${lat.toFixed(5)}:${safeIdName}`;
       const subtitle = subtitleParts.join(' • ');
 
       return {

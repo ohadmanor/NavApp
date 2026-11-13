@@ -1442,13 +1442,85 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
   return style;
 }
 
+function convertLegacyFilterToExpression(filter: any): any {
+  if (!filter || !Array.isArray(filter)) return null;
+  const op = filter[0];
+  if (op === 'all' || op === 'any') {
+    const converted = filter
+      .slice(1)
+      .map(convertLegacyFilterToExpression)
+      .filter(Boolean);
+    return converted.length > 0 ? [op, ...converted] : null;
+  }
+  if (op === '!' || op === 'not') {
+    const inner = convertLegacyFilterToExpression(filter[1]);
+    return inner ? ['!', inner] : null;
+  }
+  if (
+    (op === '==' || op === '!=' || op === '>' || op === '>=' || op === '<' || op === '<=') &&
+    typeof filter[1] === 'string'
+  ) {
+    return [op, ['get', filter[1]], filter[2]];
+  }
+  if (op === 'in' && typeof filter[1] === 'string') {
+    return ['in', ['get', filter[1]], ['literal', filter.slice(2)]];
+  }
+  if (op === '!in' && typeof filter[1] === 'string') {
+    return ['!', ['in', ['get', filter[1]], ['literal', filter.slice(2)]]];
+  }
+  if (op === 'has' && typeof filter[1] === 'string') {
+    return ['has', filter[1]];
+  }
+  if (op === '!has' && typeof filter[1] === 'string') {
+    return ['!', ['has', filter[1]]];
+  }
+  return filter;
+}
+
+/**
+ * Builds a compact GeoJSON MultiPolygon covering ~14m around each deleted POI coordinate
+ * so MapLibre's `within` expression hides deleted vector-tile features across all zoom levels.
+ */
+export function buildDeletedPoiExclusionMultiPolygon(
+  locations: ReadonlyArray<{ lon: number; lat: number }>
+): GeoJSON.MultiPolygon | null {
+  if (!Array.isArray(locations) || locations.length === 0) return null;
+  const seen = new Set<string>();
+  const coordinates: GeoJSON.Position[][][] = [];
+  const dLon = 0.00015;
+  const dLat = 0.00013;
+
+  for (const loc of locations) {
+    if (!loc || !Number.isFinite(loc.lon) || !Number.isFinite(loc.lat)) continue;
+    const key = `${loc.lon.toFixed(5)},${loc.lat.toFixed(5)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const minLon = loc.lon - dLon;
+    const maxLon = loc.lon + dLon;
+    const minLat = loc.lat - dLat;
+    const maxLat = loc.lat + dLat;
+    coordinates.push([
+      [
+        [minLon, minLat],
+        [maxLon, minLat],
+        [maxLon, maxLat],
+        [minLon, maxLat],
+        [minLon, minLat],
+      ],
+    ]);
+  }
+
+  return coordinates.length > 0 ? { type: 'MultiPolygon', coordinates } : null;
+}
+
 /**
  * Updates layer visibility and 3D terrain in-place on an active MapLibre instance
  * without calling map.setStyle(), avoiding full tile reloads or canvas flashing.
  */
 export function applyLayerVisibilityToMap(
   map: any,
-  visibility: OutdoorLayerVisibility
+  visibility: OutdoorLayerVisibility,
+  deletedPoiLocations?: ReadonlyArray<{ lon: number; lat: number }>
 ): void {
   const style = map.getStyle?.();
   if (!style || !Array.isArray(style.layers)) return;
@@ -1520,6 +1592,22 @@ export function applyLayerVisibilityToMap(
           ? buildPoiTieredLayerFilter(visibility, ['water', 'offroad', 'user'])
           : buildPoiLayerFilter(visibility)
       );
+    }
+  }
+
+  if (deletedPoiLocations !== undefined && typeof map.setFilter === 'function') {
+    const exclusionPoly = buildDeletedPoiExclusionMultiPolygon(deletedPoiLocations);
+    for (const vecLayerId of POI_STYLE_LAYER_IDS) {
+      if (!map.getLayer(vecLayerId)) continue;
+      const rawLayer = rawLayerById.get(vecLayerId);
+      const baseFilter = rawLayer?.filter;
+      if (!exclusionPoly) {
+        map.setFilter(vecLayerId, baseFilter ?? null);
+        continue;
+      }
+      const baseExpr = convertLegacyFilterToExpression(baseFilter);
+      const notWithinExpr: any = ['!', ['within', exclusionPoly]];
+      map.setFilter(vecLayerId, baseExpr ? ['all', baseExpr, notWithinExpr] : notWithinExpr);
     }
   }
 

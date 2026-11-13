@@ -32,6 +32,14 @@ import { getFirebaseServices } from './firebaseApp';
 export const GLOBAL_POIS_COLLECTION = 'global_pois';
 export const POI_OVERRIDES_COLLECTION = 'poi_overrides';
 
+export function toSafeFirestorePoiId(rawId: string): string {
+  const cleaned = String(rawId || '')
+    .trim()
+    .replace(/\//g, '_')
+    .slice(0, 128);
+  return cleaned || 'poi-unknown';
+}
+
 const PENDING_GLOBAL_POIS_KEY = 'navapp.pendingGlobalPois.v1';
 const PENDING_GLOBAL_POI_OVERRIDES_KEY = 'navapp.pendingGlobalPoiOverrides.v1';
 const PENDING_GLOBAL_POI_DELETES_KEY = 'navapp.pendingGlobalPoiDeletes.v1';
@@ -149,7 +157,7 @@ export function toFirestoreGlobalPoi(
   const nameEn = String(poi.nameEn || nameHe).trim().slice(0, 200);
 
   return {
-    id: String(poi.id).slice(0, 128),
+    id: toSafeFirestorePoiId(poi.id),
     name,
     nameHe,
     nameEn,
@@ -227,7 +235,7 @@ export function toFirestorePoiOverride(
     : null;
 
   return {
-    id: String(override.id).slice(0, 128),
+    id: toSafeFirestorePoiId(override.id),
     deleted: Boolean(override.deleted),
     category,
     subcategory,
@@ -364,9 +372,10 @@ export class GlobalPoiCloudService {
       return { synced: false, queuedOffline: true };
     }
 
+    const safeId = toSafeFirestorePoiId(poi.id);
     const payload = toFirestoreGlobalPoi(poi, actor.uid);
     try {
-      await setDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, poi.id), payload);
+      await setDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId), payload);
       const remaining = readLocalJson<PendingGlobalPoiOp[]>(PENDING_GLOBAL_POIS_KEY, []).filter(
         (x) => x?.poi?.id !== poi.id
       );
@@ -412,6 +421,7 @@ export class GlobalPoiCloudService {
       return { synced: false, queuedOffline: true };
     }
 
+    const safeId = toSafeFirestorePoiId(poi.id);
     try {
       if (isUserPoi) {
         const docPayload = toFirestoreGlobalPoi(
@@ -420,10 +430,10 @@ export class GlobalPoiCloudService {
           poi.createdByUid,
           poi.createdAt
         );
-        await setDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, poi.id), docPayload);
+        await setDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId), docPayload);
       } else {
         const docPayload = toFirestorePoiOverride(override, actor.uid);
-        await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, poi.id), docPayload);
+        await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId), docPayload);
       }
       return { synced: true, queuedOffline: false };
     } catch (err) {
@@ -471,8 +481,9 @@ export class GlobalPoiCloudService {
     }
 
     try {
+      const safeId = toSafeFirestorePoiId(poiId);
       const docPayload = toFirestorePoiOverride(override, actor.uid);
-      await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, poiId), docPayload);
+      await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId), docPayload);
       return { synced: true, queuedOffline: false };
     } catch (err) {
       if (isPermissionDeniedError(err)) {
@@ -512,15 +523,16 @@ export class GlobalPoiCloudService {
     }
 
     try {
+      const safeId = toSafeFirestorePoiId(poi.id);
       if (isUserPoi) {
-        await deleteDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, poi.id));
-        await deleteDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, poi.id)).catch(
+        await deleteDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId));
+        await deleteDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId)).catch(
           () => undefined
         );
       } else {
         const payload = toFirestorePoiOverride(
           {
-            id: poi.id,
+            id: safeId,
             deleted: true,
             category: null,
             subcategory: null,
@@ -529,7 +541,7 @@ export class GlobalPoiCloudService {
           },
           actor.uid
         );
-        await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, poi.id), payload);
+        await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId), payload);
       }
       removePendingDelete(poi.id);
       return { synced: true, queuedOffline: false };
@@ -593,7 +605,7 @@ export class GlobalPoiCloudService {
 
     try {
       await setDoc(
-        doc(services.firestore, POI_OVERRIDES_COLLECTION, poi.id),
+        doc(services.firestore, POI_OVERRIDES_COLLECTION, toSafeFirestorePoiId(poi.id)),
         toFirestorePoiOverride(override, actor.uid)
       );
       return { synced: true, queuedOffline: false };
@@ -627,8 +639,9 @@ export class GlobalPoiCloudService {
         continue;
       }
       try {
+        const safeId = toSafeFirestorePoiId(op.poi.id);
         await setDoc(
-          doc(services.firestore, GLOBAL_POIS_COLLECTION, op.poi.id),
+          doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId),
           toFirestoreGlobalPoi(op.poi, actor.uid)
         );
         flushed++;
@@ -655,9 +668,10 @@ export class GlobalPoiCloudService {
         continue;
       }
       try {
+        const safeId = toSafeFirestorePoiId(op.override.id);
         if (op.userPoiUpdate && op.override.id.startsWith('user-poi-')) {
           await setDoc(
-            doc(services.firestore, GLOBAL_POIS_COLLECTION, op.override.id),
+            doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId),
             toFirestoreGlobalPoi(
               op.userPoiUpdate,
               actor.uid,
@@ -667,7 +681,7 @@ export class GlobalPoiCloudService {
           );
         } else {
           await setDoc(
-            doc(services.firestore, POI_OVERRIDES_COLLECTION, op.override.id),
+            doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId),
             toFirestorePoiOverride(op.override, actor.uid)
           );
         }
@@ -692,17 +706,18 @@ export class GlobalPoiCloudService {
         continue;
       }
       try {
+        const safeId = toSafeFirestorePoiId(op.poiId);
         if (op.isUserPoi) {
-          await deleteDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, op.poiId));
-          await deleteDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, op.poiId)).catch(
+          await deleteDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId));
+          await deleteDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId)).catch(
             () => undefined
           );
         } else {
           await setDoc(
-            doc(services.firestore, POI_OVERRIDES_COLLECTION, op.poiId),
+            doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId),
             toFirestorePoiOverride(
               {
-                id: op.poiId,
+                id: safeId,
                 deleted: true,
                 category: null,
                 subcategory: null,
@@ -847,12 +862,12 @@ export class GlobalPoiCloudService {
     const writeOps: Array<{ col: string; id: string; data: Record<string, unknown> }> = [
       ...overridesToWrite.map((ov) => ({
         col: POI_OVERRIDES_COLLECTION,
-        id: ov.id,
+        id: toSafeFirestorePoiId(ov.id),
         data: toFirestorePoiOverride(ov, actor.uid) as unknown as Record<string, unknown>,
       })),
       ...poisToWrite.map((p) => ({
         col: GLOBAL_POIS_COLLECTION,
-        id: p.id,
+        id: toSafeFirestorePoiId(p.id),
         data: toFirestoreGlobalPoi(p, actor.uid, actor.uid, p.createdAt || p.updatedAt) as unknown as Record<string, unknown>,
       })),
     ];

@@ -606,7 +606,13 @@ describe('GlobalPoiCloudService', () => {
     await expect(GlobalPoiCloudService.deleteGlobalPoi(samplePoi, regularUser)).rejects.toThrow();
     await expect(
       GlobalPoiCloudService.restoreDeletedGlobalPoi(
-        { poi: samplePoi, previousOverride: null },
+        {
+          poi: samplePoi,
+          hadRecordInDb: true,
+          hadRecordInOffroadCache: false,
+          offroadCacheIndex: -1,
+          previousOverride: undefined,
+        },
         regularUser
       )
     ).rejects.toThrow();
@@ -778,5 +784,117 @@ describe('GlobalPoiCloudService', () => {
     const cleanedAppState = firestoreStore.docs.get('planing_tracks/ohad-uid/settings/app_state');
     expect(cleanedAppState?.poiOverrides).toBeUndefined();
     expect(cleanedAppState?.poiOverridesMigratedAt).toBeTypeOf('string');
+  });
+
+  it('deletes PMTiles vector-tile POIs (vt-*) globally, hides them on vector layers & clicks, and restores on undo', async () => {
+    const { PoiManager } = await import('../pois/PoiManager');
+    const { GlobalPoiCloudService, toSafeFirestorePoiId } = await import(
+      '../firebase/GlobalPoiCloudService'
+    );
+    const {
+      applyLayerVisibilityToMap,
+      DEFAULT_LAYER_VISIBILITY,
+      POI_STYLE_LAYER_IDS,
+    } = await import('../style/israelOutdoorStyle');
+
+    const adminUser = {
+      uid: 'ohad-uid',
+      email: 'ohad.manor@gmail.com',
+      displayName: 'Ohad',
+      photoURL: null,
+    };
+
+    const vtPoi: PoiRecord = {
+      id: 'vt-icon-viewpoint-35.09123-31.74567',
+      name: 'אתר מורשת / נקודת עניין',
+      nameHe: 'אתר מורשת / נקודת עניין',
+      nameEn: 'Heritage Landmark',
+      category: 'heritage',
+      subcategory: 'heritage_landmark',
+      lon: 35.09123,
+      lat: 31.74567,
+      ele: 514,
+      waterStatus: null,
+      difficulty4x4: null,
+      descHe: 'אתר מורשת / נקודת עניין',
+      descEn: 'Heritage Landmark',
+      source: 'IsraelHiking / OSM',
+      wikipedia: null,
+      userNotes: '',
+    };
+
+    const snapshot = await PoiManager.deletePoi(vtPoi, adminUser.uid);
+    const delRes = await GlobalPoiCloudService.deleteGlobalPoi(vtPoi, adminUser);
+    expect(delRes).toEqual({ synced: true, queuedOffline: false });
+    expect(firestoreStore.docs.get('poi_overrides/vt-icon-viewpoint-35.09123-31.74567')).toMatchObject({
+      id: 'vt-icon-viewpoint-35.09123-31.74567',
+      deleted: true,
+    });
+
+    // Simulate reload / remote reconcile clearing & rehydrating deletedSignatures solely from overrides
+    await PoiManager.getAllPois();
+    const deletedSigs = PoiManager.getDeletedSignatures();
+    expect(deletedSigs.some((s) => s.id === vtPoi.id && Math.abs(s.lon - 35.09123) < 1e-5)).toBe(
+      true
+    );
+
+    // Click interception blocks both exact coords and MVT-quantized (~3m) coords
+    expect(
+      PoiManager.isVectorFeatureDeleted({
+        layerId: 'icon-viewpoint',
+        lon: 35.09123,
+        lat: 31.74567,
+      })
+    ).toBe(true);
+    expect(
+      PoiManager.isVectorFeatureDeleted({
+        layerId: 'icon-viewpoint',
+        lon: 35.09125,
+        lat: 31.74568,
+      })
+    ).toBe(true);
+
+    // Sanitizing slashes in pmtiles:* doc IDs prevents Firestore invalid document path errors
+    expect(toSafeFirestorePoiId('pmtiles:poi:35.10000:31.70000:נחל/שורק')).toBe(
+      'pmtiles:poi:35.10000:31.70000:נחל_שורק'
+    );
+
+    // MapLibre vector-tile POI layers receive valid `['!', ['within', MultiPolygon]]` exclusion filters
+    const filterCalls = new Map<string, any>();
+    const activeLayers = Array.from(POI_STYLE_LAYER_IDS);
+    const mockMap = {
+      getStyle: () => ({ layers: activeLayers.map((id) => ({ id })) }),
+      getLayer: (id: string) => (POI_STYLE_LAYER_IDS.has(id) ? { id } : undefined),
+      getSource: () => undefined,
+      getTerrain: () => null,
+      setLayoutProperty: () => {},
+      setFilter: (id: string, filter: any) => {
+        filterCalls.set(id, filter);
+      },
+    };
+    applyLayerVisibilityToMap(mockMap, DEFAULT_LAYER_VISIBILITY, deletedSigs);
+    expect(filterCalls.size).toBe(POI_STYLE_LAYER_IDS.size);
+    const viewpointFilter = filterCalls.get('icon-viewpoint');
+    expect(JSON.stringify(viewpointFilter)).toContain('"within"');
+    expect(JSON.stringify(viewpointFilter)).toContain('MultiPolygon');
+
+    // Undo restores clickability and removes vector exclusion polygon
+    await PoiManager.restoreDeletedPoi(snapshot, adminUser.uid);
+    await GlobalPoiCloudService.restoreDeletedGlobalPoi(snapshot, adminUser);
+    expect(
+      PoiManager.isVectorFeatureDeleted({
+        layerId: 'icon-viewpoint',
+        lon: 35.09123,
+        lat: 31.74567,
+      })
+    ).toBe(false);
+
+    filterCalls.clear();
+    applyLayerVisibilityToMap(
+      mockMap,
+      DEFAULT_LAYER_VISIBILITY,
+      PoiManager.getDeletedSignatures()
+    );
+    expect(filterCalls.get('icon-viewpoint')).toEqual(['==', 'subclass', 'viewpoint']);
   });
 });

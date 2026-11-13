@@ -2574,7 +2574,11 @@ export const App: React.FC = () => {
       setIsMapReady(true);
       setMapStyleRevision((revision) => revision + 1);
       map.resize();
-      applyLayerVisibilityToMap(map, visibilityRef.current);
+      applyLayerVisibilityToMap(
+        map,
+        visibilityRef.current,
+        PoiManager.getDeletedSignatures()
+      );
       syncOverlaySourcesToMap(
         map,
         poisRef.current,
@@ -2797,6 +2801,18 @@ export const App: React.FC = () => {
           return !normItemName || normItemName.includes(normVtName) || normVtName.includes(normItemName);
         });
 
+        if (
+          !nearbyMatch &&
+          PoiManager.isVectorFeatureDeleted({
+            layerId,
+            lon,
+            lat,
+            name: rawNameHe || rawNameEn,
+          })
+        ) {
+          return;
+        }
+
         clickedPoi = nearbyMatch ?? {
           id: `vt-${layerId || 'poi'}-${lon.toFixed(5)}-${lat.toFixed(5)}`,
           name: rawNameHe || rawNameEn || symSpec.labelHe,
@@ -2878,8 +2894,27 @@ export const App: React.FC = () => {
         { layers: clickableLayers }
       );
       if (!hitFeatures || hitFeatures.length === 0) return;
+      const activeHits = hitFeatures.filter((f) => {
+        const lid = String(f.layer?.id || '');
+        if (geoJsonPoiLayerIds.includes(lid)) return true;
+        const fp = (f.properties || {}) as Record<string, any>;
+        const coords =
+          f.geometry && f.geometry.type === 'Point'
+            ? (f.geometry as GeoJSON.Point).coordinates
+            : undefined;
+        const fLon = Number(fp.lon ?? coords?.[0] ?? e.lngLat.lng);
+        const fLat = Number(fp.lat ?? coords?.[1] ?? e.lngLat.lat);
+        const fName = String(fp['name:he'] || fp.name || fp['name:en'] || fp['name:latin'] || '').trim();
+        return !PoiManager.isVectorFeatureDeleted({
+          layerId: lid,
+          lon: fLon,
+          lat: fLat,
+          name: fName,
+        });
+      });
+      if (activeHits.length === 0) return;
       const preferred =
-        hitFeatures.find((f) => geoJsonPoiLayerIds.includes(String(f.layer?.id || ''))) || hitFeatures[0];
+        activeHits.find((f) => geoJsonPoiLayerIds.includes(String(f.layer?.id || ''))) || activeHits[0];
       selectPoiFromRenderedFeature(preferred, e.lngLat);
     };
 
@@ -3038,7 +3073,11 @@ export const App: React.FC = () => {
       if (mapRef.current !== map) return;
       isStyleLoadedRef.current = true;
       setMapStyleRevision((revision) => revision + 1);
-      applyLayerVisibilityToMap(map, visibilityRef.current);
+      applyLayerVisibilityToMap(
+        map,
+        visibilityRef.current,
+        PoiManager.getDeletedSignatures()
+      );
       syncOverlaySourcesToMap(
         map,
         poisRef.current,
@@ -3076,7 +3115,7 @@ export const App: React.FC = () => {
       }
     }
 
-    applyLayerVisibilityToMap(map, visibility);
+    applyLayerVisibilityToMap(map, visibility, PoiManager.getDeletedSignatures());
     syncOverlaySourcesToMap(
       map,
       pois,
