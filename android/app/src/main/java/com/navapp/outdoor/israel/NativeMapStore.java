@@ -13,6 +13,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -41,6 +43,9 @@ public final class NativeMapStore {
 
     public static final String FILE_OSM_PMTILES = "Israel.osm.pmtiles";
     public static final String FILE_DEM_PMTILES = "Israel.dem.pmtiles";
+    public static final String FILE_POIS_GEOJSON = "Israel.pois.geojson";
+    public static final String FILE_OFFROAD_POIS_GEOJSON = "Israel.offroad.pois.geojson";
+    public static final String FILE_SEARCH_IDX = "Israel.search.idx";
 
     private static final String MAPS_DIR_NAME = "maps";
     private static final String CAR_SYNC_DIR_NAME = "car_sync";
@@ -241,6 +246,9 @@ public final class NativeMapStore {
     }
 
     public void notifyArchiveUpdated(String fileName) {
+        if (FILE_POIS_GEOJSON.equals(fileName) || FILE_OFFROAD_POIS_GEOJSON.equals(fileName)) {
+            poiLoaderExecutor.execute(() -> reloadPoiDataFromDiskOrRemote(fileName));
+        }
         for (CarStateListener listener : listeners) {
             try {
                 listener.onArchiveUpdated(fileName);
@@ -288,7 +296,50 @@ public final class NativeMapStore {
 
     public File getValidMapFile(String fileName) {
         File file = getMapFile(fileName);
-        return isValidPmTiles(file) ? file : null;
+        return isValidDataFile(fileName, file) ? file : null;
+    }
+
+    public static boolean isValidDataFile(String fileName, File file) {
+        if (file == null || !file.exists() || !file.isFile()) {
+            return false;
+        }
+        String lower = fileName != null ? fileName.toLowerCase(Locale.ROOT) : "";
+        if (lower.endsWith(".geojson") || lower.endsWith(".json")) {
+            return hasValidJsonOrIdxHeader(file, false);
+        }
+        if (lower.endsWith(".idx")) {
+            return hasValidJsonOrIdxHeader(file, true);
+        }
+        return isValidPmTiles(file);
+    }
+
+    private static boolean hasValidJsonOrIdxHeader(File file, boolean allowGzipMagic) {
+        if (file.length() < 20L) {
+            return false;
+        }
+        byte[] head = new byte[64];
+        try (FileInputStream fis = new FileInputStream(file)) {
+            int n = fis.read(head);
+            if (n < 2) return false;
+            if (allowGzipMagic && (head[0] & 0xFF) == 0x1F && (head[1] & 0xFF) == 0x8B) {
+                return true;
+            }
+            int i = 0;
+            if (n >= 3 && (head[0] & 0xFF) == 0xEF && (head[1] & 0xFF) == 0xBB && (head[2] & 0xFF) == 0xBF) {
+                i = 3;
+            }
+            while (i < n) {
+                int b = head[i] & 0xFF;
+                if (b == ' ' || b == '\t' || b == '\n' || b == '\r') {
+                    i++;
+                    continue;
+                }
+                return b == '{';
+            }
+            return false;
+        } catch (IOException ex) {
+            return false;
+        }
     }
 
     public static boolean isValidPmTiles(File file) {
@@ -749,26 +800,65 @@ public final class NativeMapStore {
         poiLoaderExecutor.execute(() -> {
             try {
                 if (basePoisLoaded.compareAndSet(false, true)) {
-                    List<CarPoi> core = streamPoisFromAsset("public/data/Israel.pois.geojson", Integer.MAX_VALUE);
+                    List<CarPoi> core = loadPoiTier(FILE_POIS_GEOJSON, Integer.MAX_VALUE);
                     bundledCorePois = Collections.unmodifiableList(core);
-                    poiRevision.incrementAndGet();
+                    if (!core.isEmpty()) {
+                        poiRevision.incrementAndGet();
+                    }
                 }
                 if (!compactGeoJsonBuilt) {
                     writeCompactPoiGeoJsonFile();
                     notifyStateUpdated();
                 }
                 if (offroadPoisLoaded.compareAndSet(false, true)) {
-                    List<CarPoi> extra = streamPoisFromAsset("public/data/Israel.offroad.pois.geojson", 20000);
+                    List<CarPoi> extra = loadPoiTier(FILE_OFFROAD_POIS_GEOJSON, 20000);
                     offroadPois = Collections.unmodifiableList(extra);
-                    poiRevision.incrementAndGet();
-                    compactGeoJsonBuilt = false;
-                    writeCompactPoiGeoJsonFile();
-                    notifyStateUpdated();
+                    if (!extra.isEmpty()) {
+                        poiRevision.incrementAndGet();
+                        compactGeoJsonBuilt = false;
+                        writeCompactPoiGeoJsonFile();
+                        notifyStateUpdated();
+                    }
                 }
             } catch (Exception ex) {
                 Log.w(TAG, "Background POI load warning", ex);
             }
         });
+    }
+
+    private List<CarPoi> loadPoiTier(String fileName, int maxFeatures) {
+        File local = getValidMapFile(fileName);
+        if (local != null) {
+            List<CarPoi> fromLocal = streamPoisFromFile(local, maxFeatures);
+            if (!fromLocal.isEmpty()) {
+                return fromLocal;
+            }
+        }
+        List<CarPoi> fromAsset = streamPoisFromAsset("public/data/" + fileName, maxFeatures);
+        if (!fromAsset.isEmpty()) {
+            return fromAsset;
+        }
+        return streamPoisFromRemote(fileName, maxFeatures);
+    }
+
+    private void reloadPoiDataFromDiskOrRemote(String fileName) {
+        try {
+            if (FILE_POIS_GEOJSON.equals(fileName)) {
+                List<CarPoi> core = loadPoiTier(FILE_POIS_GEOJSON, Integer.MAX_VALUE);
+                bundledCorePois = Collections.unmodifiableList(core);
+                basePoisLoaded.set(true);
+            } else if (FILE_OFFROAD_POIS_GEOJSON.equals(fileName)) {
+                List<CarPoi> extra = loadPoiTier(FILE_OFFROAD_POIS_GEOJSON, 20000);
+                offroadPois = Collections.unmodifiableList(extra);
+                offroadPoisLoaded.set(true);
+            }
+            poiRevision.incrementAndGet();
+            compactGeoJsonBuilt = false;
+            writeCompactPoiGeoJsonFile();
+            notifyStateUpdated();
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed reloading POIs for " + fileName, ex);
+        }
     }
 
     public File getCompactPoisGeoJsonFile() {
@@ -820,10 +910,50 @@ public final class NativeMapStore {
         }
     }
 
+    private List<CarPoi> streamPoisFromFile(File file, int maxFeatures) {
+        try (FileInputStream fis = new FileInputStream(file)) {
+            return streamPoisFromInputStream(fis, maxFeatures);
+        } catch (Exception ex) {
+            Log.w(TAG, "Local file POI streaming skipped (" + file.getName() + "): " + ex.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<CarPoi> streamPoisFromRemote(String fileName, int maxFeatures) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(REMOTE_DATA_ORIGIN + "/data/" + fileName);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(45000);
+            conn.connect();
+            if (conn.getResponseCode() < 200 || conn.getResponseCode() >= 300) {
+                return new ArrayList<>();
+            }
+            try (InputStream is = conn.getInputStream()) {
+                return streamPoisFromInputStream(is, maxFeatures);
+            }
+        } catch (Exception ex) {
+            Log.w(TAG, "Remote POI streaming skipped (" + fileName + "): " + ex.getMessage());
+            return new ArrayList<>();
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     private List<CarPoi> streamPoisFromAsset(String assetPath, int maxFeatures) {
+        try (InputStream is = appContext.getAssets().open(assetPath)) {
+            return streamPoisFromInputStream(is, maxFeatures);
+        } catch (Exception ex) {
+            Log.w(TAG, "Asset POI streaming skipped (" + assetPath + "): " + ex.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<CarPoi> streamPoisFromInputStream(InputStream is, int maxFeatures) throws IOException {
         List<CarPoi> list = new ArrayList<>(Math.min(maxFeatures, 7000));
-        try (InputStream is = appContext.getAssets().open(assetPath);
-             BufferedInputStream bis = new BufferedInputStream(is, 32768);
+        try (BufferedInputStream bis = new BufferedInputStream(is, 32768);
              JsonReader reader = new JsonReader(new InputStreamReader(bis, StandardCharsets.UTF_8))) {
             reader.beginObject();
             while (reader.hasNext()) {
@@ -846,8 +976,6 @@ public final class NativeMapStore {
                 }
             }
             reader.endObject();
-        } catch (Exception ex) {
-            Log.w(TAG, "Asset POI streaming skipped (" + assetPath + "): " + ex.getMessage());
         }
         return list;
     }

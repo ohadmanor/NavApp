@@ -304,16 +304,8 @@ const rtlPluginCode = `/**
 fs.writeFileSync(path.join(ASSETS_DIR, 'rtl-text-plugin.js'), rtlPluginCode, 'utf-8');
 
 // 4. Offline Service Worker (public/sw.js)
-const optionalDataAssets = [];
-if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.pois.geojson'))) {
-  optionalDataAssets.push('/data/Israel.pois.geojson');
-}
-if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.offroad.pois.geojson'))) {
-  optionalDataAssets.push('/data/Israel.offroad.pois.geojson');
-}
-if (fs.existsSync(path.join(PUBLIC_DIR, 'data', 'Israel.search.idx'))) {
-  optionalDataAssets.push('/data/Israel.search.idx');
-}
+// Note: Map data files (*.pmtiles, *.geojson, *.idx) live on Firebase Data Hosting
+// (navapp-israel-topo-data.web.app) and are cached in OPFS / Native storage, never in APP_SHELL.
 const userIconsDir = path.join(ASSETS_DIR, 'user-icons');
 const userIconAssets = fs.existsSync(userIconsDir)
   ? fs
@@ -344,11 +336,10 @@ const appShellEntries = [
   '/assets/sprites/sprite@2x.json',
   '/assets/sprites/sprite@2x.png',
   ...userIconAssets,
-  ...poiSymbolAssets,
-  ...optionalDataAssets
+  ...poiSymbolAssets
 ];
 
-const swCode = `const CACHE_NAME = 'navapp-offline-v11';
+const swCode = `const CACHE_NAME = 'navapp-offline-v12';
 const APP_SHELL = ${JSON.stringify(appShellEntries, null, 2)};
 
 self.addEventListener('install', (event) => {

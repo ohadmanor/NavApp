@@ -7,7 +7,6 @@
  * waterways, dams/ridges, airports, POIs, streets, highway refs, tracks, runways)
  * and serializes a compact gzip-compressed columnar search index to:
  *   - data/Israel.search.idx
- *   - public/data/Israel.search.idx
  */
 
 import fs from 'node:fs';
@@ -29,7 +28,6 @@ const INPUT_PMTILES =
     ? path.resolve(ROOT_DIR, process.argv[inputFlagIdx + 1])
     : path.join(ROOT_DIR, 'data', 'Israel.osm.pmtiles');
 const OUT_DATA_IDX = path.join(ROOT_DIR, 'data', 'Israel.search.idx');
-const OUT_PUBLIC_IDX = path.join(ROOT_DIR, 'public', 'data', 'Israel.search.idx');
 
 const ifPresent = process.argv.includes('--if-present');
 const ifStale = process.argv.includes('--if-stale');
@@ -43,11 +41,10 @@ if (!fs.existsSync(INPUT_PMTILES)) {
   process.exit(1);
 }
 
-if (ifStale && fs.existsSync(OUT_DATA_IDX) && fs.existsSync(OUT_PUBLIC_IDX)) {
+if (ifStale && fs.existsSync(OUT_DATA_IDX)) {
   const srcMtime = fs.statSync(INPUT_PMTILES).mtimeMs;
   const dstDataMtime = fs.statSync(OUT_DATA_IDX).mtimeMs;
-  const dstPubMtime = fs.statSync(OUT_PUBLIC_IDX).mtimeMs;
-  if (dstDataMtime >= srcMtime && dstPubMtime >= srcMtime) {
+  if (dstDataMtime >= srcMtime) {
     console.log('[SearchIndex] Up to date — skipping rebuild.');
     process.exit(0);
   }
@@ -95,9 +92,7 @@ try {
   });
 
   fs.mkdirSync(path.dirname(OUT_DATA_IDX), { recursive: true });
-  fs.mkdirSync(path.dirname(OUT_PUBLIC_IDX), { recursive: true });
   fs.writeFileSync(OUT_DATA_IDX, gzippedBytes);
-  fs.writeFileSync(OUT_PUBLIC_IDX, gzippedBytes);
 
   const elapsedSec = ((performance.now() - t0) / 1000).toFixed(2);
   console.log(`[SearchIndex] Built ${payload.totalFeatures.toLocaleString()} searchable records in ${elapsedSec}s`);
@@ -109,7 +104,7 @@ try {
       (1024 * 1024)
     ).toFixed(2)} MB gzipped`
   );
-  console.log(`[SearchIndex] Wrote:\n  - ${OUT_DATA_IDX}\n  - ${OUT_PUBLIC_IDX}`);
+  console.log(`[SearchIndex] Wrote: ${OUT_DATA_IDX}`);
 } finally {
   fs.closeSync(fd);
 }

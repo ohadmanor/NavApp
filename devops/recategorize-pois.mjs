@@ -26,12 +26,10 @@ const DATASETS = [
   {
     name: 'Israel.pois.geojson',
     dataPath: path.join(ROOT_DIR, 'data', 'Israel.pois.geojson'),
-    publicPath: path.join(ROOT_DIR, 'public', 'data', 'Israel.pois.geojson'),
   },
   {
     name: 'Israel.offroad.pois.geojson',
     dataPath: path.join(ROOT_DIR, 'data', 'Israel.offroad.pois.geojson'),
-    publicPath: path.join(ROOT_DIR, 'public', 'data', 'Israel.offroad.pois.geojson'),
   },
 ];
 
@@ -140,8 +138,7 @@ async function main() {
       };
       const outJson = JSON.stringify(fc);
       fs.writeFileSync(ds.dataPath, outJson, 'utf8');
-      fs.writeFileSync(ds.publicPath, outJson, 'utf8');
-      console.log(`✓ Written migrated dataset to data/${ds.name} and public/data/${ds.name}`);
+      console.log(`✓ Written migrated dataset to data/${ds.name}`);
     }
   }
 }

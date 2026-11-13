@@ -39,6 +39,24 @@
 
 ## 2. Quick Start — Run Locally for Testing
 
+### Configure Firebase sign-in
+
+Before signing in locally, create the root `.env` from the supplied template:
+```bat
+copy .env.example .env
+```
+
+Open `.env` and fill in `VITE_FIREBASE_API_KEY` and `VITE_FIREBASE_APP_ID` from
+Firebase Console → **Project settings** → **Your apps** → your Web app. The
+template contains the project defaults for the other Firebase settings. These
+values are required by the client app; `.env` is ignored by Git and should not
+be committed. Restart the Vite server after changing the file.
+
+If Google sign-in still fails after setup, make sure Google is enabled under
+Firebase Console → **Authentication** → **Sign-in method**. For an
+`auth/unauthorized-domain` error, add the local hostname shown in your browser
+to **Authentication** → **Settings** → **Authorized domains**.
+
 Double-click or run from terminal:
 ```bat
 C:\dev\NavApp\devops\run-local.bat

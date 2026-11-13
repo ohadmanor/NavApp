@@ -300,6 +300,7 @@ describe('Android Auto Sync, Native Offline Storage & Car Style Templates', () =
 
   it('PMTilesRegistry prefers shared native-file storage on Android and migrates legacy OPFS copies', async () => {
     const pmtilesPath = path.resolve('data/Israel.osm.pmtiles');
+    if (!fs.existsSync(pmtilesPath)) return;
     const mockServer = mockFetchForPmtiles(pmtilesPath);
     const addProtoSpy = vi.spyOn(maplibregl, 'addProtocol').mockImplementation(() => {});
 

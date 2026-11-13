@@ -68,16 +68,10 @@ echo "  NavApp - iOS Builder (mode: ${MODE})"
 echo "  Working Directory: ${ROOT_DIR}"
 echo "============================================================================"
 
-echo "[1/5] Generating offline assets, PMTiles search index, and building web bundle..."
+echo "[1/5] Generating offline assets and building web bundle..."
 rm -f dist/*.apk dist/*.ipa dist/*.app.zip
-node devops/build-pmtiles-search-index.mjs --if-present --if-stale
 node devops/generate-offline-assets.mjs
 npm run build
-
-mkdir -p dist/data
-if [[ -f data/Israel.pois.geojson ]]; then cp -f data/Israel.pois.geojson dist/data/Israel.pois.geojson; fi
-if [[ -f data/Israel.offroad.pois.geojson ]]; then cp -f data/Israel.offroad.pois.geojson dist/data/Israel.offroad.pois.geojson; fi
-if [[ -f data/Israel.search.idx ]]; then cp -f data/Israel.search.idx dist/data/Israel.search.idx; fi
 
 echo "[2/5] Syncing web bundle with Capacitor iOS native project..."
 if [[ ! -d node_modules/@capacitor/ios ]]; then

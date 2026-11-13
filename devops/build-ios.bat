@@ -9,11 +9,10 @@ echo   NavApp - iOS Project Generator ^& Capacitor Sync (Windows)
 echo   Working Directory: %CD%
 echo ============================================================================
 
-echo [1/4] Generating offline assets, PMTiles search index, and building production web bundle...
+echo [1/4] Generating offline assets and building production web bundle...
 if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 if exist "dist\NavApp-Israel-Unsigned.ipa" del /F /Q "dist\NavApp-Israel-Unsigned.ipa" >nul 2>&1
 if exist "dist\NavApp-Israel-Release.ipa" del /F /Q "dist\NavApp-Israel-Release.ipa" >nul 2>&1
-call node devops\build-pmtiles-search-index.mjs --if-present --if-stale
 call node devops\generate-offline-assets.mjs
 call npm.cmd run build
 if errorlevel 1 (
@@ -21,11 +20,6 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-
-if not exist "dist\data" mkdir "dist\data"
-if exist "data\Israel.pois.geojson" copy /Y "data\Israel.pois.geojson" "dist\data\Israel.pois.geojson" >nul
-if exist "data\Israel.offroad.pois.geojson" copy /Y "data\Israel.offroad.pois.geojson" "dist\data\Israel.offroad.pois.geojson" >nul
-if exist "data\Israel.search.idx" copy /Y "data\Israel.search.idx" "dist\data\Israel.search.idx" >nul
 
 echo [2/4] Ensuring @capacitor/ios is installed and syncing Capacitor iOS project...
 if not exist "node_modules\@capacitor\ios" (

@@ -39,11 +39,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
-const PUBLIC_DATA_DIR = path.join(ROOT_DIR, 'public', 'data');
 const PMTILES_PATH = path.join(DATA_DIR, 'Israel.osm.pmtiles');
 const OUTPUT_FILES = [
   path.join(DATA_DIR, 'Israel.pois.geojson'),
-  path.join(PUBLIC_DATA_DIR, 'Israel.pois.geojson'),
 ];
 
 const DEFAULT_BBOX = {

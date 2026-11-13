@@ -1,5 +1,5 @@
 import { db, type PoiRecord, type PoiCategory, type PoiOverrideRecord } from '../db/NavDatabase';
-import { bundledDataUrl } from '../dataUrls';
+import { offlineDataFiles } from '../pmtiles/OfflineDataFiles';
 import { isValidPoiCategory, normalizeSubcategoryForCategory, resolvePoiSymbolId } from './poiTaxonomy';
 import { classifyPoiWithText } from './poiClassifier';
 
@@ -401,10 +401,10 @@ export class PoiManager {
 
   static async initializePois(): Promise<PoiRecord[]> {
     try {
-      const [existingPois, osmRes, offroadRes] = await Promise.all([
+      const [existingPois, osmGeo, offroadGeo] = await Promise.all([
         db.pois.toArray(),
-        fetch(bundledDataUrl('Israel.pois.geojson')),
-        fetch(bundledDataUrl('Israel.offroad.pois.geojson')).catch(() => null),
+        offlineDataFiles.loadJson('Israel.pois.geojson'),
+        offlineDataFiles.loadJson('Israel.offroad.pois.geojson').catch(() => null),
       ]);
 
       const existingById = new Map<string, PoiRecord>();
@@ -413,11 +413,6 @@ export class PoiManager {
         existingById.set(p.id, p);
         if (p.userNotes) existingNotes.set(p.id, p.userNotes);
       }
-
-      const [osmGeo, offroadGeo] = await Promise.all([
-        osmRes && osmRes.ok ? osmRes.json().catch(() => null) : Promise.resolve(null),
-        offroadRes && offroadRes.ok ? offroadRes.json().catch(() => null) : Promise.resolve(null),
-      ]);
 
       const osmNextIds = new Set<string>();
       const osmSyncPromise = (async () => {

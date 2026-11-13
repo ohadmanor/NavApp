@@ -1,4 +1,4 @@
-const CACHE_NAME = 'navapp-offline-v11';
+const CACHE_NAME = 'navapp-offline-v12';
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -58,10 +58,7 @@ const APP_SHELL = [
   "/assets/poi-symbols/poi-water-pool.svg",
   "/assets/poi-symbols/poi-water-spring.svg",
   "/assets/poi-symbols/poi-water-tap.svg",
-  "/assets/poi-symbols/poi-water-waterfall.svg",
-  "/data/Israel.pois.geojson",
-  "/data/Israel.offroad.pois.geojson",
-  "/data/Israel.search.idx"
+  "/assets/poi-symbols/poi-water-waterfall.svg"
 ];
 
 self.addEventListener('install', (event) => {

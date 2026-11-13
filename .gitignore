@@ -12,9 +12,15 @@ android/.gradle/
 android/local.properties
 android/capacitor-cordova-android-plugins/
 
-# Heavy Map Data & Archives (>100MB / not suitable for standard Git)
+# Heavy Map Data & Archives (Firebase hosting:data is the source of truth)
 data/*.pmtiles
+data/*.geojson
+data/*.idx
+data/*.tmp
+data/.firebase-sync-meta.json
 public/data/*.pmtiles
+public/data/*.geojson
+public/data/*.idx
 deploy_data/
 
 # Environment & Keystores (keep credentials safe)

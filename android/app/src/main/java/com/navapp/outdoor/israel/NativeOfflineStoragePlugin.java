@@ -82,6 +82,12 @@ public class NativeOfflineStoragePlugin extends Plugin {
         JSObject filesObj = new JSObject();
         filesObj.put(NativeMapStore.FILE_OSM_PMTILES, buildFileStatus(store, NativeMapStore.FILE_OSM_PMTILES));
         filesObj.put(NativeMapStore.FILE_DEM_PMTILES, buildFileStatus(store, NativeMapStore.FILE_DEM_PMTILES));
+        filesObj.put(NativeMapStore.FILE_POIS_GEOJSON, buildFileStatus(store, NativeMapStore.FILE_POIS_GEOJSON));
+        filesObj.put(
+            NativeMapStore.FILE_OFFROAD_POIS_GEOJSON,
+            buildFileStatus(store, NativeMapStore.FILE_OFFROAD_POIS_GEOJSON)
+        );
+        filesObj.put(NativeMapStore.FILE_SEARCH_IDX, buildFileStatus(store, NativeMapStore.FILE_SEARCH_IDX));
 
         JSObject out = new JSObject();
         out.put("supported", true);
@@ -175,8 +181,8 @@ public class NativeOfflineStoragePlugin extends Plugin {
                 if (total > 0L && loaded != total) {
                     throw new IOException("Incomplete download: " + loaded + " of " + total + " bytes");
                 }
-                if (!NativeMapStore.isValidPmTiles(temp)) {
-                    throw new IOException("Downloaded file is not a valid PMTiles archive");
+                if (!NativeMapStore.isValidDataFile(fileName, temp)) {
+                    throw new IOException("Downloaded file is not a valid archive/data file: " + fileName);
                 }
 
                 replaceFileAtomic(temp, target);
@@ -287,8 +293,8 @@ public class NativeOfflineStoragePlugin extends Plugin {
                     "Incomplete file write: " + session.bytesWritten + " of " + session.expectedSize
                 );
             }
-            if (!NativeMapStore.isValidPmTiles(session.tempFile)) {
-                throw new IOException("Invalid PMTiles file header");
+            if (!NativeMapStore.isValidDataFile(session.fileName, session.tempFile)) {
+                throw new IOException("Invalid data file format: " + session.fileName);
             }
             replaceFileAtomic(session.tempFile, session.targetFile);
             store.notifyArchiveUpdated(session.fileName);
@@ -384,7 +390,7 @@ public class NativeOfflineStoragePlugin extends Plugin {
     private static JSObject buildFileStatus(NativeMapStore store, String fileName) {
         File file = store.getMapFile(fileName);
         boolean exists = file != null && file.exists() && file.isFile();
-        boolean valid = NativeMapStore.isValidPmTiles(file);
+        boolean valid = NativeMapStore.isValidDataFile(fileName, file);
         JSObject item = new JSObject();
         item.put("exists", exists);
         item.put("valid", valid);

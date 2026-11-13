@@ -26,6 +26,7 @@ import {
   MapPin,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
+import { offlineDataFiles } from './core/pmtiles/OfflineDataFiles';
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
@@ -1142,6 +1143,24 @@ export const App: React.FC = () => {
     }
   }, [isTrailMarkingMode, currentUser, isPlanningRouteMode, isAddingPoiMode, exitTrailMarkingMode]);
 
+  const refreshOfflineDataConsumers = useCallback(
+    async (kind: 'pois' | 'search' | 'all' = 'all', toastMessage?: string) => {
+      if (kind === 'pois' || kind === 'all') {
+        const reloaded = await PoiManager.initializePois();
+        if (reloaded.length > 0) {
+          setPois(reloaded);
+        }
+      }
+      if (kind === 'search' || kind === 'all') {
+        await pmtilesSearchService.reloadFromOfflineData();
+      }
+      if (toastMessage) {
+        showToast(toastMessage);
+      }
+    },
+    [showToast]
+  );
+
   // Listen to background downloads from Firebase into persistent OPFS
   useEffect(() => {
     const unsubProgress = pmtilesRegistry.onDownloadProgress((fileName, loaded, total) => {
@@ -1159,11 +1178,20 @@ export const App: React.FC = () => {
       showToast(`קובץ המפה ${info.record.fileName} נשמר במכשיר! פועל 100% אופליין.`);
     });
 
+    const unsubDataUpdated = offlineDataFiles.onDataFileUpdated((fileName) => {
+      if (fileName === 'Israel.search.idx') {
+        void refreshOfflineDataConsumers('search', `אינדקס החיפוש ${fileName} עודכן ונשמר לאופליין.`);
+      } else {
+        void refreshOfflineDataConsumers('pois', `קובץ נקודות העניין ${fileName} עודכן ונשמר לאופליין.`);
+      }
+    });
+
     return () => {
       unsubProgress();
       unsubUpdated();
+      unsubDataUpdated();
     };
-  }, [showToast]);
+  }, [showToast, refreshOfflineDataConsumers]);
 
   // Monitor Online / Offline connectivity
   useEffect(() => {
@@ -6202,6 +6230,9 @@ export const App: React.FC = () => {
                   setDemInfo(nextDem);
                   setOsmInfo(nextOsm);
                 }}
+                onDataBundleUpdated={() => {
+                  void refreshOfflineDataConsumers('all');
+                }}
                 onPoisAndRoutesImported={handleImportedData}
               />
             ) : (
@@ -6500,6 +6531,9 @@ export const App: React.FC = () => {
         onArchivesUpdated={(nextDem, nextOsm) => {
           setDemInfo(nextDem);
           setOsmInfo(nextOsm);
+        }}
+        onDataBundleUpdated={() => {
+          void refreshOfflineDataConsumers('all');
         }}
         onPoisAndRoutesImported={handleImportedData}
       />

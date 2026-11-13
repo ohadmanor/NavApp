@@ -35,7 +35,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
-const PUBLIC_DATA_DIR = path.join(ROOT_DIR, 'public', 'data');
 const OFFROAD_RAW_DIR = path.join(__dirname, 'offroad_pois');
 const PMTILES_PATH = path.join(DATA_DIR, 'Israel.osm.pmtiles');
 
@@ -50,7 +49,6 @@ const INPUT_GEOJSON_FILES = [
 
 const OUTPUT_FILES = [
   path.join(DATA_DIR, 'Israel.offroad.pois.geojson'),
-  path.join(PUBLIC_DATA_DIR, 'Israel.offroad.pois.geojson'),
 ];
 
 const VALID_2CHAR_TOPO = new Set([

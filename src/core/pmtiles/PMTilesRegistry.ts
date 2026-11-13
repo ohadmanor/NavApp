@@ -10,10 +10,16 @@ import {
   type RangeResponse,
 } from 'pmtiles';
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
-import { pmtilesUrl, REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN, isNativePlatform } from '../dataUrls';
+import { pmtilesUrl, REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN } from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
 import { NativeOfflineStorage } from './NativeOfflineStorage';
 import { CachedFetchSource } from './CachedFetchSource';
+import {
+  probeLocalDataServer,
+  probeRemoteDataFile,
+  readDataFileMeta,
+  writeDataFileMeta,
+} from './dataFileProbe';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
 import { registerOfflineRtlTextPlugin } from '../style/hebrewBidiProcessor';
 
@@ -209,42 +215,8 @@ export class PMTilesRegistry {
     this.isProtocolRegistered = true;
   }
 
-  private async probeLocalServer(fileName: string): Promise<{
-    url: string;
-    versionedUrl: string;
-    size: number;
-    etag?: string;
-    lastModifiedMs?: number;
-  } | null> {
-    if (typeof window === 'undefined' || !window.location?.origin || isNativePlatform()) {
-      return null;
-    }
-    const localUrl = `${window.location.origin}/data/${fileName}`;
-    try {
-      const head = await fetch(localUrl, {
-        method: 'HEAD',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(4000),
-      });
-      const contentType = head.headers.get('content-type') || '';
-      if (!head.ok || contentType.includes('text/html')) {
-        return null;
-      }
-      const size = Number(head.headers.get('content-length') || 0);
-      const etag = head.headers.get('etag') || undefined;
-      const lastModHeader = head.headers.get('last-modified');
-      const parsedLastMod = lastModHeader ? Date.parse(lastModHeader) : NaN;
-      const lastModifiedMs = Number.isFinite(parsedLastMod) ? parsedLastMod : undefined;
-      const rawTag = etag
-        ? etag.replace(/[^a-zA-Z0-9._-]/g, '')
-        : size > 0 || lastModifiedMs
-          ? `${size}-${lastModifiedMs || 0}`
-          : '';
-      const versionedUrl = rawTag ? `${localUrl}?v=${encodeURIComponent(rawTag)}` : localUrl;
-      return { url: localUrl, versionedUrl, size, etag, lastModifiedMs };
-    } catch {
-      return null;
-    }
+  private probeLocalServer(fileName: string) {
+    return probeLocalDataServer(fileName);
   }
 
   /**
@@ -374,46 +346,15 @@ export class PMTilesRegistry {
 
   /** Reads the real archive size/etag from Firebase with a 1-byte range request (checks primary & fallback sites). */
   async probeRemote(fileName: string): Promise<{ size: number; etag?: string; url: string } | null> {
-    const candidateOrigins = [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN];
-    for (const origin of candidateOrigins) {
-      if (!origin) continue;
-      const targetUrl = `${origin}/data/${fileName}`;
-      try {
-        const res = await fetch(targetUrl, {
-          headers: { Range: 'bytes=0-0' },
-          cache: 'no-store',
-          signal: AbortSignal.timeout(6000),
-        });
-        if (!res.ok) continue;
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('text/html')) {
-          continue; // SPA rewrite or 404 page, not a binary PMTiles archive
-        }
-        const range = res.headers.get('content-range');
-        const size = range ? Number(range.split('/')[1]) : 0;
-        if (!size) continue;
-        return { size, etag: res.headers.get('etag') || undefined, url: targetUrl };
-      } catch {
-        // try next candidate origin
-      }
-    }
-    return null; // offline or not yet uploaded
+    return probeRemoteDataFile(fileName);
   }
 
   private readMeta(fileName: string): { size: number; etag?: string } | null {
-    try {
-      return JSON.parse(localStorage.getItem(`pmtiles-meta:${fileName}`) || 'null');
-    } catch {
-      return null;
-    }
+    return readDataFileMeta(fileName);
   }
 
   private writeMeta(fileName: string, meta: { size: number; etag?: string }): void {
-    try {
-      localStorage.setItem(`pmtiles-meta:${fileName}`, JSON.stringify(meta));
-    } catch {
-      /* ignore */
-    }
+    writeDataFileMeta(fileName, meta);
   }
 
   /** Downloads again only if the server's file differs from the stored one. */

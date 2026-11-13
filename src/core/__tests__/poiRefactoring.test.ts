@@ -471,14 +471,16 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
     }
   });
 
-  it('audits bundled Israel.pois.geojson and Israel.offroad.pois.geojson for zero legacy subcategories and valid exclusive symbolIds', () => {
-    for (const [dataRel, pubRel] of [
-      ['data/Israel.pois.geojson', 'public/data/Israel.pois.geojson'],
-      ['data/Israel.offroad.pois.geojson', 'public/data/Israel.offroad.pois.geojson'],
+  it('audits data/ Israel.pois.geojson and Israel.offroad.pois.geojson for zero legacy subcategories and valid exclusive symbolIds (and ensures public/data/ is not bundled)', () => {
+    expect(fs.existsSync('public/data/Israel.pois.geojson')).toBe(false);
+    expect(fs.existsSync('public/data/Israel.offroad.pois.geojson')).toBe(false);
+
+    for (const dataRel of [
+      'data/Israel.pois.geojson',
+      'data/Israel.offroad.pois.geojson',
     ]) {
+      if (!fs.existsSync(dataRel)) continue;
       const rawData = fs.readFileSync(dataRel, 'utf-8');
-      const rawPub = fs.readFileSync(pubRel, 'utf-8');
-      expect(rawData).toBe(rawPub);
 
       const parsed = JSON.parse(rawData);
       expect(parsed.features.length).toBeGreaterThan(5000);

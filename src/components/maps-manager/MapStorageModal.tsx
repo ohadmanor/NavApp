@@ -14,9 +14,17 @@ import {
   ChevronDown,
   ChevronUp,
   Terminal,
+  Database,
 } from 'lucide-react';
 import type { MountedArchiveInfo } from '../../core/pmtiles/PMTilesRegistry';
 import { pmtilesRegistry } from '../../core/pmtiles/PMTilesRegistry';
+import {
+  offlineDataFiles,
+  OFFLINE_DATA_FILE_SPECS,
+  type OfflineDataBundleStatus,
+  type OfflineDataFileName,
+} from '../../core/pmtiles/OfflineDataFiles';
+import { probeRemoteDataFile } from '../../core/pmtiles/dataFileProbe';
 import { OpfsStorageAdapter } from '../../core/pmtiles/OpfsStorageAdapter';
 import { NativeOfflineStorage } from '../../core/pmtiles/NativeOfflineStorage';
 import { CommunityPoiImporter } from '../../core/pois/CommunityPoiImporter';
@@ -34,12 +42,24 @@ interface MapStorageModalProps {
   embedded?: boolean;
   currentUser?: NavUser | null;
   onArchivesUpdated: (dem: MountedArchiveInfo | null, osm: MountedArchiveInfo | null) => void;
+  onDataBundleUpdated?: () => void;
   onPoisAndRoutesImported: (
     poiCount: number,
     createdRoutes: SavedRouteRecord[],
     importedPois?: PoiRecord[]
   ) => void | Promise<void>;
 }
+
+interface CloudEntryStatus {
+  available: boolean;
+  size?: number;
+  url?: string;
+}
+
+const DEFAULT_DATA_BUNDLE_BYTES = OFFLINE_DATA_FILE_SPECS.reduce(
+  (sum, spec) => sum + spec.defaultSizeBytes,
+  0
+);
 
 export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   isOpen,
@@ -50,6 +70,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   embedded = false,
   currentUser = null,
   onArchivesUpdated,
+  onDataBundleUpdated,
   onPoisAndRoutesImported,
 }) => {
   const [remoteOsmUrl, setRemoteOsmUrl] = useState('');
@@ -57,34 +78,48 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [progressPct, setProgressPct] = useState<number | null>(null);
   const [isBusy, setIsBusy] = useState(false);
-  const [downloading, setDownloading] = useState<'israel-dem' | 'israel-osm' | null>(null);
+  const [downloading, setDownloading] = useState<
+    'israel-dem' | 'israel-osm' | 'offline-data' | null
+  >(null);
   const [dlProgress, setDlProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [dataBundleStatus, setDataBundleStatus] = useState<OfflineDataBundleStatus | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<{
-    dem?: { available: boolean; size?: number; url?: string };
-    osm?: { available: boolean; size?: number; url?: string };
+    dem?: CloudEntryStatus;
+    osm?: CloudEntryStatus;
+    pois?: CloudEntryStatus;
+    offroadPois?: CloudEntryStatus;
+    searchIdx?: CloudEntryStatus;
   }>({});
   const [isCheckingCloud, setIsCheckingCloud] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const osmFileInputRef = useRef<HTMLInputElement>(null);
   const demFileInputRef = useRef<HTMLInputElement>(null);
+  const poisFileInputRef = useRef<HTMLInputElement>(null);
+  const offroadFileInputRef = useRef<HTMLInputElement>(null);
+  const searchIdxFileInputRef = useRef<HTMLInputElement>(null);
   const communityFileInputRef = useRef<HTMLInputElement>(null);
 
   const checkCloudStatus = async () => {
     setIsCheckingCloud(true);
     try {
-      const [demRemote, osmRemote] = await Promise.all([
+      const [demRemote, osmRemote, poisRemote, offroadRemote, searchRemote] = await Promise.all([
         pmtilesRegistry.probeRemote('Israel.dem.pmtiles'),
         pmtilesRegistry.probeRemote('Israel.osm.pmtiles'),
+        probeRemoteDataFile('Israel.pois.geojson', { preferHead: true }),
+        probeRemoteDataFile('Israel.offroad.pois.geojson', { preferHead: true }),
+        probeRemoteDataFile('Israel.search.idx', { preferHead: true }),
       ]);
+      const toStatus = (
+        res: { size: number; url: string } | null
+      ): CloudEntryStatus => (res ? { available: true, size: res.size, url: res.url } : { available: false });
       setCloudStatus({
-        dem: demRemote
-          ? { available: true, size: demRemote.size, url: demRemote.url }
-          : { available: false },
-        osm: osmRemote
-          ? { available: true, size: osmRemote.size, url: osmRemote.url }
-          : { available: false },
+        dem: toStatus(demRemote),
+        osm: toStatus(osmRemote),
+        pois: toStatus(poisRemote),
+        offroadPois: toStatus(offroadRemote),
+        searchIdx: toStatus(searchRemote),
       });
     } catch {
       // offline
@@ -96,6 +131,10 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   useEffect(() => {
     if (isOpen || embedded) {
       checkCloudStatus();
+      void offlineDataFiles
+        .getBundleStatus()
+        .then(setDataBundleStatus)
+        .catch(() => {});
     } else if (!isBusy) {
       setStatusMessage(null);
       setProgressPct(null);
@@ -119,14 +158,12 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     'israel-osm': 'Israel.osm.pmtiles',
   } as const;
 
-  const handleDownloadOffline = async (id: 'israel-dem' | 'israel-osm') => {
-    if (downloading) return;
+  const ensureFreeSpaceForOfflineDownload = async (needed: number): Promise<boolean> => {
     const isAndroidNative = NativeOfflineStorage.isAndroidNative();
     if (!isAndroidNative && !OpfsStorageAdapter.isSupported()) {
       setStatusMessage('שגיאה: אחסון אופליין (OPFS) אינו נתמך במכשיר / בדפדפן זה.');
-      return;
+      return false;
     }
-    const needed = ARCHIVE_SIZES[id];
     if (isAndroidNative) {
       const nativeStatus = await NativeOfflineStorage.getArchiveStatus();
       if (nativeStatus && nativeStatus.freeBytes > 0 && nativeStatus.freeBytes < needed * 1.05) {
@@ -135,19 +172,26 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
             nativeStatus.freeBytes
           )}.`
         );
-        return;
+        return false;
       }
-    } else {
-      const est = await OpfsStorageAdapter.getStorageEstimate();
-      if (est.quota > 0 && est.quota - est.usage < needed * 1.05) {
-        setStatusMessage(
-          `אין מספיק מקום אחסון פנוי: נדרש ${formatSize(needed)}, פנוי ${formatSize(
-            Math.max(0, est.quota - est.usage)
-          )}.`
-        );
-        return;
-      }
+      return true;
     }
+    const est = await OpfsStorageAdapter.getStorageEstimate();
+    if (est.quota > 0 && est.quota - est.usage < needed * 1.05) {
+      setStatusMessage(
+        `אין מספיק מקום אחסון פנוי: נדרש ${formatSize(needed)}, פנוי ${formatSize(
+          Math.max(0, est.quota - est.usage)
+        )}.`
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const handleDownloadOffline = async (id: 'israel-dem' | 'israel-osm') => {
+    if (downloading) return;
+    const needed = ARCHIVE_SIZES[id];
+    if (!(await ensureFreeSpaceForOfflineDownload(needed))) return;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -178,6 +222,39 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     }
   };
 
+  const handleDownloadOfflineData = async () => {
+    if (downloading) return;
+    const needed = dataBundleStatus?.totalBytes || DEFAULT_DATA_BUNDLE_BYTES;
+    if (!(await ensureFreeSpaceForOfflineDownload(needed))) return;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setDownloading('offline-data');
+    setIsBusy(true);
+    setDlProgress({ loaded: 0, total: needed });
+    setStatusMessage('מוריד נקודות עניין ואינדקס חיפוש לשימוש אופליין...');
+    try {
+      const nextStatus = await offlineDataFiles.downloadOfflineBundle(
+        (loaded, total) => setDlProgress({ loaded, total: total || needed }),
+        controller.signal
+      );
+      setDataBundleStatus(nextStatus);
+      onDataBundleUpdated?.();
+      setStatusMessage('✓ חבילת נקודות העניין והחיפוש נשמרה במכשיר ותעודכן אוטומטית!');
+    } catch (err: any) {
+      setStatusMessage(
+        err?.name === 'AbortError'
+          ? 'ההורדה בוטלה.'
+          : `שגיאה בהורדה: ${err?.message || err}`
+      );
+    } finally {
+      setDownloading(null);
+      setDlProgress(null);
+      setIsBusy(false);
+      abortRef.current = null;
+    }
+  };
+
   const handleCancelDownload = () => abortRef.current?.abort();
 
   const handleRemoveOffline = async (id: 'israel-dem' | 'israel-osm') => {
@@ -186,6 +263,54 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     }
     await pmtilesRegistry.removeOfflineArchive(ARCHIVE_FILES[id]);
     window.location.reload();
+  };
+
+  const handleRemoveOfflineData = async () => {
+    if (
+      !window.confirm(
+        'למחוק את העותק המקומי של נקודות העניין ואינדקס החיפוש? האפליקציה תחזור לטעון אותם מ-Firebase בחיבור מקוון.'
+      )
+    ) {
+      return;
+    }
+    setIsBusy(true);
+    try {
+      await offlineDataFiles.removeOfflineBundle();
+      const nextStatus = await offlineDataFiles.getBundleStatus();
+      setDataBundleStatus(nextStatus);
+      onDataBundleUpdated?.();
+      setStatusMessage('✓ העותק המקומי של נקודות העניין והחיפוש נמחק.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleReplaceLocalDataFile = async (
+    fileName: OfflineDataFileName,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsBusy(true);
+    setStatusMessage(`טוען קובץ נתונים מקומי (${fileName})...`);
+    try {
+      const nextStatus = await offlineDataFiles.replaceLocalDataFile(
+        fileName,
+        file,
+        (loaded, total) => {
+          if (total > 0) setProgressPct(Math.round((loaded / total) * 100));
+        }
+      );
+      setDataBundleStatus(nextStatus);
+      onDataBundleUpdated?.();
+      setStatusMessage(`✓ הקובץ ${fileName} נשמר במכשיר בהצלחה!`);
+    } catch (err: any) {
+      setStatusMessage(`שגיאה בטעינת ${fileName}: ${err.message}`);
+    } finally {
+      setIsBusy(false);
+      setProgressPct(null);
+      e.target.value = '';
+    }
   };
 
   const isLocalCopy = (info: MountedArchiveInfo | null) =>
@@ -327,10 +452,17 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
 
   const osmLocal = isLocalCopy(osmInfo);
   const demLocal = isLocalCopy(demInfo);
+  const dataLocal = !!dataBundleStatus?.allLocal;
+  const dataAnyLocal = !!dataBundleStatus?.anyLocal;
+  const dataBundleBytes = dataBundleStatus?.totalBytes || DEFAULT_DATA_BUNDLE_BYTES;
+  const dataStoredBytes = dataBundleStatus
+    ? dataBundleStatus.files.filter((f) => f.local).reduce((sum, f) => sum + f.sizeBytes, 0)
+    : 0;
   const storedBytes =
     (osmLocal ? osmInfo?.record.sizeBytes || ARCHIVE_SIZES['israel-osm'] : 0) +
-    (demLocal ? demInfo?.record.sizeBytes || ARCHIVE_SIZES['israel-dem'] : 0);
-  const totalBytes = ARCHIVE_SIZES['israel-osm'] + ARCHIVE_SIZES['israel-dem'];
+    (demLocal ? demInfo?.record.sizeBytes || ARCHIVE_SIZES['israel-dem'] : 0) +
+    dataStoredBytes;
+  const totalBytes = ARCHIVE_SIZES['israel-osm'] + ARCHIVE_SIZES['israel-dem'] + dataBundleBytes;
 
   const body = (
     <div dir="rtl" className="space-y-3.5">
@@ -403,15 +535,32 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               width: `${osmLocal ? Math.round((ARCHIVE_SIZES['israel-osm'] / totalBytes) * 100) : 0}%`,
             }}
           />
+          <div
+            className="bg-amber-500 h-full transition-all"
+            style={{
+              width: `${dataStoredBytes > 0 ? Math.max(1, Math.round((dataStoredBytes / totalBytes) * 100)) : 0}%`,
+            }}
+          />
         </div>
-        <div className={`flex justify-between text-xs ${t.muted}`}>
+        <div className={`flex flex-wrap justify-between gap-2 text-xs ${t.muted}`}>
           <span>● גבהים 1.40 GB ({demLocal ? 'במכשיר' : 'בענן'})</span>
           <span>● שבילים ווקטור 112 MB ({osmLocal ? 'במכשיר' : 'בענן'})</span>
+          <span>
+            ● נקודות עניין וחיפוש {formatSize(dataBundleBytes)} (
+            {dataLocal
+              ? 'במכשיר'
+              : dataAnyLocal
+                ? 'חלקי במכשיר'
+                : dataBundleStatus?.storageKind === 'local-server'
+                  ? 'שרת מקומי'
+                  : 'בענן'}
+            )
+          </span>
         </div>
       </div>
 
       {/* Offline Package Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {(['israel-osm', 'israel-dem'] as const).map((id) => {
           const info = id === 'israel-dem' ? demInfo : osmInfo;
           const local = isLocalCopy(info);
@@ -532,6 +681,109 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
             </div>
           );
         })}
+
+        {(() => {
+          const active = downloading === 'offline-data';
+          const pct =
+            active && dlProgress && dlProgress.total > 0
+              ? Math.min(100, Math.round((dlProgress.loaded / dlProgress.total) * 100))
+              : 0;
+          return (
+            <div className={`p-3.5 rounded-xl border space-y-2.5 ${t.subCard}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-amber-500" />
+                    <span>נקודות עניין וחיפוש אופליין (POIs &amp; Search)</span>
+                  </div>
+                  <div className={`text-xs font-mono mt-0.5 ${t.muted}`}>
+                    3 קבצים • {formatSize(dataBundleBytes)}
+                  </div>
+                </div>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold shrink-0 ${
+                    dataLocal
+                      ? 'bg-emerald-500/15 text-emerald-500'
+                      : 'bg-amber-500/15 text-amber-500'
+                  }`}
+                >
+                  {dataLocal
+                    ? '✓ אופליין'
+                    : dataAnyLocal
+                      ? 'חלקי'
+                      : dataBundleStatus?.storageKind === 'local-server'
+                        ? 'שרת מקומי'
+                        : 'ענן'}
+                </span>
+              </div>
+
+              <div className={`text-xs space-y-0.5 ${t.muted}`}>
+                {(dataBundleStatus?.files ??
+                  OFFLINE_DATA_FILE_SPECS.map((s) => ({
+                    fileName: s.fileName,
+                    local: false,
+                    storageKind: 'remote-url' as const,
+                    sizeBytes: s.defaultSizeBytes,
+                  }))
+                ).map((item) => (
+                  <div key={item.fileName} className="flex items-center justify-between gap-1 font-mono text-[11px]">
+                    <span className="truncate" dir="ltr">
+                      {item.fileName}
+                    </span>
+                    <span className={item.local ? 'text-emerald-500 shrink-0' : 'shrink-0'}>
+                      {formatSize(item.sizeBytes)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {active && dlProgress && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-mono text-sky-400">
+                    <span>{formatSize(dlProgress.loaded)} / {formatSize(dlProgress.total)}</span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-slate-500/20 overflow-hidden">
+                    <div className="h-full bg-sky-500 transition-all" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-0.5">
+                {active ? (
+                  <button
+                    onClick={handleCancelDownload}
+                    className="flex-1 py-2 px-3 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>בטל הורדה</span>
+                  </button>
+                ) : (
+                  <button
+                    disabled={isBusy}
+                    onClick={handleDownloadOfflineData}
+                    className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 text-white transition-colors ${
+                      dataLocal ? 'bg-slate-600 hover:bg-slate-500' : 'bg-amber-600 hover:bg-amber-500'
+                    } disabled:opacity-40`}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{dataLocal ? 'עדכן / הורד מחדש' : 'הורד לאופליין'}</span>
+                  </button>
+                )}
+                {dataAnyLocal && !active && (
+                  <button
+                    disabled={isBusy}
+                    onClick={handleRemoveOfflineData}
+                    className={`px-3 py-2 rounded-xl border text-xs text-red-500 ${t.pillBtn}`}
+                    title="מחק עותק מקומי"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Community GPX / KML / TWL Importer */}
@@ -571,7 +823,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
         >
           <span className="flex items-center gap-2">
             <Terminal className="w-4 h-4 text-amber-500" />
-            <span>מתקדם: טעינת קובץ PMTiles מקומי ועדכון ענן</span>
+            <span>מתקדם: טעינת קבצים מקומיים ועדכון ענן</span>
           </span>
           {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
@@ -588,6 +840,35 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 <RefreshCw className={`w-3.5 h-3.5 ${isCheckingCloud ? 'animate-spin' : ''}`} />
                 <span>{isCheckingCloud ? 'בודק...' : 'רענן מצב ענן'}</span>
               </button>
+            </div>
+
+            <div className={`rounded-xl border p-2.5 space-y-1 text-[11px] font-mono ${t.panelSolid}`}>
+              {([
+                { label: 'Israel.dem.pmtiles', st: cloudStatus.dem },
+                { label: 'Israel.osm.pmtiles', st: cloudStatus.osm },
+                { label: 'Israel.pois.geojson', st: cloudStatus.pois },
+                { label: 'Israel.offroad.pois.geojson', st: cloudStatus.offroadPois },
+                { label: 'Israel.search.idx', st: cloudStatus.searchIdx },
+              ] as const).map((row) => (
+                <div key={row.label} className="flex items-center justify-between gap-2">
+                  <span dir="ltr">{row.label}</span>
+                  <span
+                    className={
+                      row.st?.available
+                        ? 'text-emerald-500'
+                        : row.st
+                          ? 'text-red-500'
+                          : t.muted
+                    }
+                  >
+                    {row.st
+                      ? row.st.available
+                        ? `✓ ${row.st.size ? formatSize(row.st.size) : 'זמין'}`
+                        : '✗ לא נמצא'
+                      : 'בודק...'}
+                  </span>
+                </div>
+              ))}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -626,6 +907,60 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 <FolderOpen className="w-4 h-4 text-amber-500" />
                 <span>טען Israel.dem מקובץ</span>
               </button>
+
+              <input
+                id="replace-pois-geojson-file"
+                name="replacePoisGeojsonFile"
+                ref={poisFileInputRef}
+                type="file"
+                accept=".geojson,.json"
+                onChange={(e) => void handleReplaceLocalDataFile('Israel.pois.geojson', e)}
+                className="hidden"
+              />
+              <button
+                disabled={isBusy}
+                onClick={() => poisFileInputRef.current?.click()}
+                className={`py-2 px-3 rounded-xl border font-semibold flex items-center justify-center gap-1.5 ${t.pillBtn}`}
+              >
+                <Upload className="w-4 h-4 text-amber-500" />
+                <span>החלף Israel.pois.geojson</span>
+              </button>
+
+              <input
+                id="replace-offroad-pois-geojson-file"
+                name="replaceOffroadPoisGeojsonFile"
+                ref={offroadFileInputRef}
+                type="file"
+                accept=".geojson,.json"
+                onChange={(e) => void handleReplaceLocalDataFile('Israel.offroad.pois.geojson', e)}
+                className="hidden"
+              />
+              <button
+                disabled={isBusy}
+                onClick={() => offroadFileInputRef.current?.click()}
+                className={`py-2 px-3 rounded-xl border font-semibold flex items-center justify-center gap-1.5 ${t.pillBtn}`}
+              >
+                <Upload className="w-4 h-4 text-amber-500" />
+                <span>החלף Israel.offroad.pois.geojson</span>
+              </button>
+
+              <input
+                id="replace-search-idx-file"
+                name="replaceSearchIdxFile"
+                ref={searchIdxFileInputRef}
+                type="file"
+                accept=".idx"
+                onChange={(e) => void handleReplaceLocalDataFile('Israel.search.idx', e)}
+                className="hidden"
+              />
+              <button
+                disabled={isBusy}
+                onClick={() => searchIdxFileInputRef.current?.click()}
+                className={`py-2 px-3 rounded-xl border font-semibold flex items-center justify-center gap-1.5 sm:col-span-2 ${t.pillBtn}`}
+              >
+                <Upload className="w-4 h-4 text-sky-500" />
+                <span>החלף Israel.search.idx מקובץ</span>
+              </button>
             </div>
 
             <label className="flex items-center gap-2 cursor-pointer">
@@ -661,10 +996,13 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               </button>
             </div>
 
-            <div className={`p-2.5 rounded-xl border text-xs ${t.panelSolid}`}>
-              <div className="font-bold text-amber-500 mb-1">עדכון ענן למשתמשים (DevOps):</div>
+            <div className={`p-2.5 rounded-xl border text-xs space-y-1 ${t.panelSolid}`}>
+              <div className="font-bold text-amber-500">סנכרון קובצי מפה ונתונים מול Firebase (DevOps):</div>
               <code className="block font-mono text-emerald-500 select-all" dir="ltr">
                 devops\upload-map-data.bat
+              </code>
+              <code className="block font-mono text-sky-400 select-all" dir="ltr">
+                devops\download-map-data.bat
               </code>
             </div>
           </div>

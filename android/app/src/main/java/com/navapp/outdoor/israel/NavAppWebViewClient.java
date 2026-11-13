@@ -178,10 +178,14 @@ public class NavAppWebViewClient extends BridgeWebViewClient {
         }
 
         baseHeaders.put("Content-Length", Long.toString(totalSize));
+        String mimeType =
+            safeFileName.toLowerCase(Locale.ROOT).endsWith(".geojson")
+                ? "application/json; charset=utf-8"
+                : "application/octet-stream";
         try {
             InputStream fullStream = new BoundedRandomAccessInputStream(file, 0L, totalSize);
             return new WebResourceResponse(
-                "application/octet-stream",
+                mimeType,
                 null,
                 200,
                 "OK",

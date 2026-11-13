@@ -1,5 +1,5 @@
 import { db, type PoiCategory, type PoiRecord, type SavedRouteRecord } from '../db/NavDatabase';
-import { bundledDataUrl, pmtilesUrl } from '../dataUrls';
+import { offlineDataFiles } from '../pmtiles/OfflineDataFiles';
 import { MilitaryGridService } from '../navigation/MilitaryGridService';
 import type { MountedArchiveInfo } from '../pmtiles/PMTilesRegistry';
 import {
@@ -289,21 +289,6 @@ function computeRouteCentroid(route: SavedRouteRecord): [number, number] | null 
   return null;
 }
 
-async function fetchIndexBytesFromUrl(url: string): Promise<Uint8Array | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) return null;
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) return null;
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.length < 4 || buf[0] === 0x3c) return null; // '<' HTML SPA fallback
-    if (!isGzipBytes(buf) && buf[0] !== 0x7b) return null;
-    return buf;
-  } catch {
-    return null;
-  }
-}
-
 export class PMTilesSearchService {
   private compiled: CompiledIndex | null = null;
   private status: SearchIndexStatus = {
@@ -366,26 +351,21 @@ export class PMTilesSearchService {
   }
 
   /**
-   * Loads bundled offline search index (`Israel.search.idx`), or IndexedDB cached custom index.
-   * Safe to invoke multiple times concurrently.
+   * Loads offline search index (`Israel.search.idx`) from OPFS / Native storage / Firebase,
+   * or IndexedDB cached custom index. Safe to invoke multiple times concurrently.
    */
-  async ensureInitialized(): Promise<void> {
-    if (this.compiled) return;
-    if (this.loadPromise) return this.loadPromise;
+  async ensureInitialized(forceReload = false): Promise<void> {
+    if (this.compiled && !forceReload) return;
+    if (this.loadPromise && !forceReload) return this.loadPromise;
 
     this.loadPromise = (async () => {
       try {
-        if (typeof fetch === 'function') {
-          const candidates = [bundledDataUrl('Israel.search.idx'), pmtilesUrl('Israel.search.idx')];
-          const tried = new Set<string>();
-          for (const url of candidates) {
-            if (!url || tried.has(url)) continue;
-            tried.add(url);
-            const bytes = await fetchIndexBytesFromUrl(url);
-            if (bytes) {
-              await this.loadFromBytes(bytes, 'bundled');
-              return;
-            }
+        const rawBuf = await offlineDataFiles.loadBytes('Israel.search.idx');
+        if (rawBuf) {
+          const bytes = new Uint8Array(rawBuf);
+          if (bytes.length >= 4 && (isGzipBytes(bytes) || bytes[0] === 0x7b)) {
+            await this.loadFromBytes(bytes, 'bundled');
+            return;
           }
         }
       } catch (err: any) {
@@ -397,6 +377,10 @@ export class PMTilesSearchService {
     })();
 
     return this.loadPromise;
+  }
+
+  async reloadFromOfflineData(): Promise<void> {
+    return this.ensureInitialized(true);
   }
 
   /**
