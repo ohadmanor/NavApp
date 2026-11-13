@@ -375,7 +375,7 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(formatDuration(3661)).toBe('01:01:01');
   });
 
-  it('isolates hillshade raster-dem source from 3D terrain source and toggles 3D terrain cleanly', () => {
+  it('isolates hillshade raster-dem source from 3D terrain source and toggles 3D terrain cleanly', async () => {
     const style = buildIsraelOutdoorStyle({
       osmProtocolUrl: 'pmtiles://israel-osm',
       demProtocolUrl: 'pmtiles://israel-dem',
@@ -414,6 +414,43 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     // Turning off clears terrain cleanly
     applyLayerVisibilityToMap(mockMap, { ...DEFAULT_LAYER_VISIBILITY, terrain3d: false });
     expect(terrainCalls).toEqual([{ source: 'israel-dem', exaggeration: 1.35 }, null]);
+
+    // 3D horizon sky is configured in sky blue rather than falling back to black canvas
+    expect(style.sky?.['sky-color']).toBe('#88C6FC');
+    expect(style.sky?.['horizon-color']).toBe('#DCEEFF');
+    expect(style.sky?.['fog-color']).toBe('#E8F4FF');
+    expect(style.sky?.['fog-ground-blend']).toBe(0.85);
+    expect(style.sky?.['horizon-fog-blend']).toBe(0.9);
+
+    const darkSkyStyle = buildIsraelOutdoorStyle({
+      osmProtocolUrl: 'pmtiles://israel-osm',
+      demProtocolUrl: 'pmtiles://israel-dem',
+      contourProtocolUrl: null,
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, terrain3d: true },
+      theme: 'topo-dark',
+    });
+    expect(darkSkyStyle.sky?.['sky-color']).toBe('#5A9BE6');
+    expect(darkSkyStyle.sky?.['horizon-color']).toBe('#A5CEFB');
+
+    // validateStyleMin accepts the style.sky specification cleanly
+    const specMod: any = await import('@maplibre/maplibre-gl-style-spec');
+    const validate = specMod.validateStyleMin || specMod.validate || specMod.default?.validateStyleMin;
+    if (typeof validate === 'function') {
+      const skyErrors = validate(style).filter((e: any) => String(e.message || '').includes('sky'));
+      expect(skyErrors).toEqual([]);
+    }
+
+    // applyLayerVisibilityToMap backfills sky if an active map instance is missing it
+    let currentSky: any = null;
+    const skyMap = {
+      ...mockMap,
+      getSky: () => currentSky,
+      setSky: (s: any) => {
+        currentSky = s;
+      },
+    };
+    applyLayerVisibilityToMap(skyMap, { ...DEFAULT_LAYER_VISIBILITY, terrain3d: true });
+    expect(currentSky?.['sky-color']).toBe('#88C6FC');
   });
 
   it('checks navigation deviation accurately across multi-segment GeoJSON LineStrings', () => {

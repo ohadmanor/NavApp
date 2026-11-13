@@ -1,4 +1,4 @@
-import type { StyleSpecification, LayerSpecification } from 'maplibre-gl';
+import type { StyleSpecification, LayerSpecification, SkySpecification } from 'maplibre-gl';
 import navappLayersRaw from './navappLayer.json';
 import { REMOTE_DATA_ORIGIN } from '../dataUrls';
 import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
@@ -1275,6 +1275,23 @@ function getVisibilityForIhmLayer(
 }
 
 /**
+ * Sky-blue atmospheric dome + horizon fog for MapLibre 3D pitched / terrain views
+ * so the area above the horizon renders as sky blue instead of the dark root canvas.
+ */
+export function buildOutdoorSkySpec(theme: 'topo-day' | 'topo-dark' = 'topo-day'): SkySpecification {
+  const isDark = theme === 'topo-dark';
+  return {
+    'sky-color': isDark ? '#5A9BE6' : '#88C6FC',
+    'horizon-color': isDark ? '#A5CEFB' : '#DCEEFF',
+    'fog-color': isDark ? '#78ADE8' : '#E8F4FF',
+    'sky-horizon-blend': 0.55,
+    'horizon-fog-blend': 0.9,
+    'fog-ground-blend': 0.85,
+    'atmosphere-blend': 0.8,
+  };
+}
+
+/**
  * Generates the authentic Israel Hiking Map (IHM) Vector Style (247 layers + 72 sprite icons)
  * powered 100% offline by:
  *  - C:\dev\NavApp\data\Israel.osm.pmtiles (OpenMapTiles vector layers)
@@ -1492,6 +1509,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     version: 8,
     name: 'Israel Hiking Map (Official IHM Vector Style + 10m Contours + Offline Sprites)',
     sprite: `${origin}/assets/sprites/sprite`,
+    sky: buildOutdoorSkySpec(theme),
     sources,
     layers,
   };
@@ -1670,6 +1688,11 @@ export function applyLayerVisibilityToMap(
   }
 
   try {
+    if (typeof map.setSky === 'function' && !map.getSky?.()) {
+      const bgLayer = style.layers.find((l: any) => l.id === 'background') as any;
+      const isDarkStyle = bgLayer?.paint?.['background-color'] === '#0b1015';
+      map.setSky(buildOutdoorSkySpec(isDarkStyle ? 'topo-dark' : 'topo-day'));
+    }
     if (visibility.terrain3d && map.getSource('israel-dem')) {
       const currentTerrain = map.getTerrain?.();
       if (!currentTerrain || currentTerrain.source !== 'israel-dem') {

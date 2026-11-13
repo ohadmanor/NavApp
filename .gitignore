@@ -22,6 +22,7 @@ public/data/*.pmtiles
 public/data/*.geojson
 public/data/*.idx
 deploy_data/
+backups/
 
 # Environment & Keystores (keep credentials safe)
 .env
