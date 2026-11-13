@@ -899,13 +899,13 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               }`}
               title={
                 backgroundRouteIds.includes(route.id)
-                  ? 'הסר מהצגה ברקע לתכנון והשוואה'
-                  : 'השאר מסלול ברקע בזמן בחירה או תכנון'
+                  ? 'הסר נעיצה מהמפה'
+                  : 'נעץ מסלול במפה (יישאר מוצג גם בסגירת החלונית)'
               }
               aria-label={
                 backgroundRouteIds.includes(route.id)
-                  ? 'הסר מסלול מרקע'
-                  : 'השאר מסלול ברקע'
+                  ? 'הסר נעיצה מהמפה'
+                  : 'נעץ מסלול במפה'
               }
             >
               {backgroundRouteIds.includes(route.id) ? (
@@ -1227,8 +1227,8 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                                     className={`p-1.5 rounded-lg ${
                                       isPinnedBg ? 'text-sky-500 bg-sky-500/10' : t.muted
                                     } hover:bg-black/10`}
-                                    title={isPinnedBg ? 'הסר מרקע' : 'השאר ברקע לתכנון/השוואה'}
-                                    aria-label={isPinnedBg ? `הסר ${r.name} מרקע` : `השאר ${r.name} ברקע`}
+                                    title={isPinnedBg ? 'הסר נעיצה מהמפה' : 'נעץ במפה (יישאר מוצג גם בסגירת החלונית)'}
+                                    aria-label={isPinnedBg ? `הסר ${r.name} מנעיצה` : `נעץ ${r.name} במפה`}
                                   >
                                     {isPinnedBg ? (
                                       <PinOff className="w-3.5 h-3.5" />
@@ -1318,7 +1318,9 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               >
                 {routeDisplayMode === 'navigating'
                   ? 'מוצג במפה • ניווט פעיל'
-                  : 'מוצג במפה (יוסתר בסגירת החלונית)'}
+                  : backgroundRouteIds.includes(route.id)
+                    ? 'נעוץ במפה (יישאר מוצג בסגירת החלונית)'
+                    : 'מוצג במפה (יוסתר בסגירת החלונית)'}
               </span>
 
               {isSharedRoute && (
@@ -1402,7 +1404,11 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                       ? 'border-sky-500/60 bg-sky-500/10 text-sky-500'
                       : t.pillBtn
                   }`}
-                  title="השאר מסלול זה מוצג ברקע בעת בחירת מסלול אחר או תכנון"
+                  title={
+                    backgroundRouteIds.includes(route.id)
+                      ? 'הסר נעיצה מהמפה'
+                      : 'נעץ מסלול במפה (יישאר מוצג גם בסגירת החלונית)'
+                  }
                 >
                   {backgroundRouteIds.includes(route.id) ? (
                     <PinOff className="w-3.5 h-3.5" />
@@ -1494,7 +1500,11 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
                           ? 'border-sky-500/60 bg-sky-500/10 text-sky-500'
                           : t.pillBtn
                       }`}
-                      title="השאר מסלול זה מוצג ברקע בעת בחירת מסלול אחר או תכנון"
+                      title={
+                    backgroundRouteIds.includes(route.id)
+                      ? 'הסר נעיצה מהמפה'
+                      : 'נעץ מסלול במפה (יישאר מוצג גם בסגירת החלונית)'
+                  }
                     >
                       {backgroundRouteIds.includes(route.id) ? (
                         <PinOff className="w-3.5 h-3.5" />

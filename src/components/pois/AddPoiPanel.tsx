@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
-import { X, Crosshair, Check } from 'lucide-react';
-import type { PoiCategory, PoiRecord } from '../../core/db/NavDatabase';
+import { X, Crosshair, Check, Lock, LogIn } from 'lucide-react';
+import { db, type PoiCategory, type PoiRecord } from '../../core/db/NavDatabase';
+import type { NavUser } from '../../core/firebase/AuthService';
+import { GlobalPoiCloudService } from '../../core/firebase/GlobalPoiCloudService';
+import { canUserAddOrEditPoi } from '../../core/pois/poiPermissions';
 import { PoiManager } from '../../core/pois/PoiManager';
 import {
   POI_CATEGORIES,
@@ -15,13 +18,19 @@ import { PoiCategoryIcon } from './PoiCategoryIcon';
 interface AddPoiPanelProps {
   theme: MapTheme;
   centerCoords: { lon: number; lat: number; ele: number | null };
+  currentUser: NavUser | null;
+  isAuthBusy?: boolean;
+  onSignInGoogle?: () => void;
   onClose: () => void;
-  onCreated: (poi: PoiRecord) => void;
+  onCreated: (poi: PoiRecord, meta?: { queuedOffline?: boolean }) => void;
 }
 
 export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   theme,
   centerCoords,
+  currentUser,
+  isAuthBusy = false,
+  onSignInGoogle,
   onClose,
   onCreated,
 }) => {
@@ -30,8 +39,10 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   const [nameHe, setNameHe] = useState('');
   const [descHe, setDescHe] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const t = getSurfaceTheme(theme);
+  const canAdd = canUserAddOrEditPoi(currentUser);
   const milCoords = MilitaryGridService.toMilitaryCoords(centerCoords.lon, centerCoords.lat);
   const categorySymbols = POI_SYMBOLS_BY_CATEGORY[category] || [];
 
@@ -42,13 +53,15 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nameHe.trim() || isSaving) return;
+    if (!canAdd || !currentUser || !nameHe.trim() || isSaving) return;
     setIsSaving(true);
+    setErrorMsg(null);
+    let createdLocally: PoiRecord | null = null;
     try {
       const ele =
         centerCoords.ele ??
         (await ElevationService.getElevationAt(centerCoords.lon, centerCoords.lat, 12));
-      const created = await PoiManager.addCustomUserPoi({
+      createdLocally = await PoiManager.addCustomUserPoi({
         nameHe: nameHe.trim(),
         category,
         subcategory,
@@ -56,12 +69,60 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         lat: centerCoords.lat,
         ele,
         descHe: descHe.trim() || 'נקודת עניין שדווחה בשטח',
+        createdByUid: currentUser.uid,
       });
-      onCreated(created);
+      const cloudRes = await GlobalPoiCloudService.publishUserPoi(createdLocally, currentUser);
+      onCreated(createdLocally, { queuedOffline: cloudRes.queuedOffline });
+    } catch (err: any) {
+      if (createdLocally) {
+        await db.pois.delete(createdLocally.id).catch(() => undefined);
+      }
+      setErrorMsg(err?.message || 'שמירת הנקודה במפה הגלובלית נכשלה');
     } finally {
       setIsSaving(false);
     }
   };
+
+  if (!canAdd) {
+    return (
+      <div dir="rtl" className="p-4 space-y-3 overflow-y-auto">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <span className="text-xs font-bold text-sky-500 flex items-center gap-1">
+              <Lock className="w-3.5 h-3.5" />
+              <span>נדרשת התחברות</span>
+            </span>
+            <h3 className="text-base font-bold mt-0.5">דווח נקודת עניין בשטח</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1.5 rounded-lg border ${t.pillBtn}`}
+            title="סגור"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className={`p-3 rounded-xl border text-xs leading-relaxed space-y-2 ${t.subCard}`}>
+          <p className="font-semibold">
+            הוספת נקודת עניין פתוחה למשתמשים מחוברים בלבד. הנקודות נשמרות במפה הגלובלית וגלויות לכלל המשתמשים.
+          </p>
+          {onSignInGoogle && (
+            <button
+              type="button"
+              disabled={isAuthBusy}
+              onClick={onSignInGoogle}
+              className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>{isAuthBusy ? 'מתחבר...' : 'התחבר עם Google כדי להוסיף נקודה'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form dir="rtl" onSubmit={handleSubmit} className="p-4 space-y-3 overflow-y-auto">
@@ -160,6 +221,12 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         placeholder="תיאור או הערת עבירות/מים למטיילים..."
         className={`w-full rounded-xl border px-3 py-2 text-xs focus:outline-none focus:border-emerald-500 ${t.fieldBox}`}
       />
+
+      {errorMsg && (
+        <p className="text-xs font-semibold text-rose-500" role="alert">
+          {errorMsg}
+        </p>
+      )}
 
       <button
         type="submit"

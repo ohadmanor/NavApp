@@ -12,8 +12,13 @@ import {
   Tag,
   Trash2,
   RotateCcw,
+  Lock,
+  LogIn,
 } from 'lucide-react';
-import type { PoiCategory, PoiRecord } from '../../core/db/NavDatabase';
+import { db, type PoiCategory, type PoiRecord } from '../../core/db/NavDatabase';
+import type { NavUser } from '../../core/firebase/AuthService';
+import { GlobalPoiCloudService } from '../../core/firebase/GlobalPoiCloudService';
+import { canUserAddOrEditPoi, canUserDeletePoi } from '../../core/pois/poiPermissions';
 import { PoiManager } from '../../core/pois/PoiManager';
 import {
   POI_CATEGORIES,
@@ -31,6 +36,10 @@ interface PoiInspectorSheetProps {
   poi: PoiRecord | null;
   theme: MapTheme;
   referenceCoord: { lon: number; lat: number };
+  currentUser?: NavUser | null;
+  canDeletePoi?: boolean;
+  isAuthBusy?: boolean;
+  onSignInGoogle?: () => void;
   onClose: () => void;
   onFlyTo: (lon: number, lat: number) => void;
   onNavigateToPoi?: (poi: PoiRecord) => void;
@@ -72,6 +81,10 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   poi,
   theme,
   referenceCoord,
+  currentUser = null,
+  canDeletePoi,
+  isAuthBusy = false,
+  onSignInGoogle,
   onClose,
   onFlyTo,
   onNavigateToPoi,
@@ -143,6 +156,9 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   );
   const milCoords = MilitaryGridService.toMilitaryCoords(poi.lon, poi.lat);
 
+  const canEditCategory = canUserAddOrEditPoi(currentUser);
+  const allowDelete = Boolean((canDeletePoi ?? canUserDeletePoi(currentUser)) && onDeletePoi);
+
   const handleCopyCoords = (text: string) => {
     navigator.clipboard?.writeText(text).catch(() => {});
     onNotify?.(`הועתק ללוח: ${text}`);
@@ -164,29 +180,69 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   };
 
   const handleSaveCategoryChange = async () => {
-    if (isSavingCategory) return;
+    if (isSavingCategory || !canEditCategory || !currentUser) return;
     setIsSavingCategory(true);
+    const prevOverride = await PoiManager.getOverride(poi.id).catch(() => undefined);
     try {
-      const updated = await PoiManager.updatePoiCategory(poi, draftCategory, draftSubcategory);
-      setHasCategoryOverride(true);
-      setIsEditingCategory(false);
-      onPoiUpdated(updated);
-      onNotify?.(`הנקודה הועברה לקטגוריית ${POI_CATEGORY_SPECS[draftCategory].labelHe}`);
+      const updated = await PoiManager.updatePoiCategory(
+        poi,
+        draftCategory,
+        draftSubcategory,
+        currentUser.uid
+      );
+      try {
+        const syncRes = await GlobalPoiCloudService.publishCategoryOverride(
+          poi,
+          updated,
+          currentUser
+        );
+        setHasCategoryOverride(!poi.id.startsWith('user-poi-'));
+        setIsEditingCategory(false);
+        onPoiUpdated(updated);
+        onNotify?.(
+          syncRes.queuedOffline
+            ? `הנקודה הועברה לקטגוריית ${POI_CATEGORY_SPECS[draftCategory].labelHe} (יסונכרן בחיבור לרשת)`
+            : `הנקודה הועברה לקטגוריית ${POI_CATEGORY_SPECS[draftCategory].labelHe}`
+        );
+      } catch (err: any) {
+        if (prevOverride) {
+          await db.poiOverrides.put(prevOverride).catch(() => undefined);
+        } else {
+          await db.poiOverrides.delete(poi.id).catch(() => undefined);
+        }
+        if (poi.id.startsWith('user-poi-')) {
+          await db.pois.put(poi).catch(() => undefined);
+        }
+        onNotify?.(err?.message || 'עדכון הקטגוריה בשרת נכשל');
+      }
     } finally {
       setIsSavingCategory(false);
     }
   };
 
   const handleResetCategory = async () => {
-    if (isSavingCategory) return;
+    if (isSavingCategory || !canEditCategory || !currentUser) return;
     setIsSavingCategory(true);
+    const prevOverride = await PoiManager.getOverride(poi.id).catch(() => undefined);
     try {
-      const restored = await PoiManager.resetPoiOverride(poi.id);
-      setHasCategoryOverride(false);
-      setIsEditingCategory(false);
-      if (restored) {
-        onPoiUpdated(restored);
-        onNotify?.('הקטגוריה אופסה לברירת המחדל');
+      const restored = await PoiManager.resetPoiOverride(poi.id, currentUser.uid);
+      try {
+        const syncRes = await GlobalPoiCloudService.publishCategoryReset(poi.id, currentUser);
+        setHasCategoryOverride(false);
+        setIsEditingCategory(false);
+        if (restored) {
+          onPoiUpdated(restored);
+          onNotify?.(
+            syncRes.queuedOffline
+              ? 'הקטגוריה אופסה לברירת המחדל (יסונכרן בחיבור לרשת)'
+              : 'הקטגוריה אופסה לברירת המחדל'
+          );
+        }
+      } catch (err: any) {
+        if (prevOverride) {
+          await db.poiOverrides.put(prevOverride).catch(() => undefined);
+        }
+        onNotify?.(err?.message || 'איפוס הקטגוריה בשרת נכשל');
       }
     } finally {
       setIsSavingCategory(false);
@@ -194,7 +250,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   };
 
   const handleConfirmDelete = async () => {
-    if (isDeleting || !onDeletePoi) return;
+    if (isDeleting || !allowDelete || !onDeletePoi) return;
     setIsDeleting(true);
     try {
       await onDeletePoi(poi);
@@ -455,11 +511,15 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
                     : t.pillBtn
                 }`}
               >
-                <Tag className="w-3.5 h-3.5" />
+                {canEditCategory ? (
+                  <Tag className="w-3.5 h-3.5" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 text-amber-500" />
+                )}
                 <span>שנה קטגוריה / סמל</span>
               </button>
 
-              {onDeletePoi && !confirmDelete && (
+              {allowDelete && !confirmDelete && (
                 <button
                   type="button"
                   onClick={() => {
@@ -474,7 +534,26 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
               )}
             </div>
 
-            {isEditingCategory && (
+            {isEditingCategory && !canEditCategory && (
+              <div className={`p-3 rounded-xl border space-y-2 text-xs ${t.subCard}`}>
+                <p className="font-semibold leading-relaxed">
+                  שינוי קטגוריה מתעדכן גלובלית במפה ופתוח למשתמשים מחוברים בלבד.
+                </p>
+                {onSignInGoogle && (
+                  <button
+                    type="button"
+                    disabled={isAuthBusy}
+                    onClick={onSignInGoogle}
+                    className="w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>{isAuthBusy ? 'מתחבר...' : 'התחבר עם Google כדי לערוך'}</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {isEditingCategory && canEditCategory && (
               <div className={`p-3 rounded-xl border space-y-2.5 ${t.subCard}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold">בחר קטגוריה בלעדית:</span>
@@ -556,7 +635,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
               </div>
             )}
 
-            {confirmDelete && onDeletePoi && (
+            {confirmDelete && allowDelete && (
               <div className="p-2.5 rounded-xl border border-rose-500/40 bg-rose-500/10 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-rose-500">
                   להסיר את הנקודה מהמפה?

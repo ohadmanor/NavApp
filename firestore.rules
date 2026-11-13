@@ -5,6 +5,133 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isPoiDeleteAdmin() {
+      return signedIn() &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() in ['ohad.manor@gmail.com', 'nabibesk@gmail.com'];
+    }
+
+    function validPoiCategory(cat) {
+      return cat in ['water', 'heritage', 'campsite', 'offroad', 'peak', 'user'];
+    }
+
+    function validGlobalPoi(data, poiId) {
+      return data.keys().hasOnly([
+          'id',
+          'name',
+          'nameHe',
+          'nameEn',
+          'category',
+          'subcategory',
+          'lon',
+          'lat',
+          'ele',
+          'waterStatus',
+          'difficulty4x4',
+          'descHe',
+          'descEn',
+          'source',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasAll([
+          'id',
+          'name',
+          'nameHe',
+          'nameEn',
+          'category',
+          'subcategory',
+          'lon',
+          'lat',
+          'ele',
+          'waterStatus',
+          'difficulty4x4',
+          'descHe',
+          'descEn',
+          'source',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.id == poiId &&
+        data.id.size() > 0 &&
+        data.id.size() <= 128 &&
+        data.name is string &&
+        data.name.size() > 0 &&
+        data.name.size() <= 200 &&
+        data.nameHe is string &&
+        data.nameHe.size() > 0 &&
+        data.nameHe.size() <= 200 &&
+        data.nameEn is string &&
+        data.nameEn.size() <= 200 &&
+        data.category is string &&
+        validPoiCategory(data.category) &&
+        data.subcategory is string &&
+        data.subcategory.size() > 0 &&
+        data.subcategory.size() <= 64 &&
+        (data.lon is int || data.lon is float) &&
+        data.lon >= -180 &&
+        data.lon <= 180 &&
+        (data.lat is int || data.lat is float) &&
+        data.lat >= -90 &&
+        data.lat <= 90 &&
+        (data.ele == null || data.ele is int || data.ele is float) &&
+        (data.waterStatus == null || (data.waterStatus is string && data.waterStatus.size() <= 200)) &&
+        (data.difficulty4x4 == null || (data.difficulty4x4 is string && data.difficulty4x4.size() <= 200)) &&
+        data.descHe is string &&
+        data.descHe.size() <= 4000 &&
+        data.descEn is string &&
+        data.descEn.size() <= 4000 &&
+        data.source is string &&
+        data.source.size() <= 200 &&
+        data.createdByUid is string &&
+        data.createdByUid.size() > 0 &&
+        data.createdByUid.size() <= 128 &&
+        data.createdAt is string &&
+        data.createdAt.size() > 0 &&
+        data.createdAt.size() <= 64 &&
+        data.updatedByUid is string &&
+        data.updatedByUid.size() > 0 &&
+        data.updatedByUid.size() <= 128 &&
+        data.updatedAt is string &&
+        data.updatedAt.size() > 0 &&
+        data.updatedAt.size() <= 64;
+    }
+
+    function validPoiOverride(data, poiId) {
+      return data.keys().hasOnly([
+          'id',
+          'deleted',
+          'category',
+          'subcategory',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasAll([
+          'id',
+          'deleted',
+          'category',
+          'subcategory',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.id == poiId &&
+        data.id.size() > 0 &&
+        data.id.size() <= 128 &&
+        data.deleted is bool &&
+        (data.category == null || (data.category is string && validPoiCategory(data.category))) &&
+        (data.subcategory == null || (data.subcategory is string && data.subcategory.size() <= 64)) &&
+        data.updatedByUid is string &&
+        data.updatedByUid.size() > 0 &&
+        data.updatedByUid.size() <= 128 &&
+        data.updatedAt is string &&
+        data.updatedAt.size() > 0 &&
+        data.updatedAt.size() <= 64;
+    }
+
     function annotationPath(trailId) {
       return /databases/$(database)/documents/trail_annotations/$(trailId);
     }
@@ -250,6 +377,35 @@ service cloud.firestore {
         (request.auth.token.email != null &&
           request.auth.token.email.lower() in resource.data.sharedWithEmails)
       );
+    }
+
+    match /global_pois/{poiId} {
+      allow get, list: if true;
+      allow create: if signedIn() &&
+        validGlobalPoi(request.resource.data, poiId) &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.updatedByUid == request.auth.uid;
+      allow update: if signedIn() &&
+        validGlobalPoi(request.resource.data, poiId) &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedByUid == request.auth.uid;
+      allow delete: if isPoiDeleteAdmin();
+    }
+
+    match /poi_overrides/{poiId} {
+      allow get, list: if true;
+      allow create: if validPoiOverride(request.resource.data, poiId) &&
+        request.resource.data.updatedByUid == request.auth.uid &&
+        (request.resource.data.deleted == true
+          ? isPoiDeleteAdmin()
+          : signedIn() && request.resource.data.category != null);
+      allow update: if validPoiOverride(request.resource.data, poiId) &&
+        request.resource.data.updatedByUid == request.auth.uid &&
+        ((request.resource.data.deleted == true || resource.data.deleted == true)
+          ? isPoiDeleteAdmin()
+          : signedIn());
+      allow delete: if isPoiDeleteAdmin();
     }
 
     match /planing_tracks/{userId}/settings/{settingId} {

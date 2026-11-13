@@ -13,7 +13,7 @@ export interface RouteDisplayContext {
   isNavigating: boolean;
   /** Route ID currently open in planner waypoint edit mode (static copy hidden) */
   editingRouteId?: string | null;
-  /** Explicit user-pinned background reference route IDs (only shown while planning or selecting) */
+  /** Explicit user-pinned background reference route IDs (remain visible on map when closing drawer) */
   pinnedBackgroundIds?: ReadonlySet<string> | string[];
   /** Whether background reference routes are visible while inside the Route Planner */
   showBackgroundWhilePlanning?: boolean;
@@ -33,11 +33,14 @@ export interface ResolvedMapRouteDisplay {
 
 /**
  * Deterministic visibility state machine (PRD 2):
- * A route renders on the map ONLY when at least one of these holds:
+ * A route renders on the map when:
  *   (a) User is planning a route or selecting from the Routes drawer
  *   (b) User is editing an existing route
  *   (c) User selected a route and pressed Start Navigation
- * When none hold (idle map), NO routes clutter the map.
+ *   (d) User explicitly pinned routes ("השאר ברקע" / נעוץ במפה), which stay visible
+ *       on the map even after closing the Routes drawer (cleared during active navigation
+ *       or when toggled off inside the Route Planner).
+ * Unpinned routes are never shown on the idle map.
  */
 export function resolveMapRouteDisplay(
   allRoutes: SavedRouteRecord[],
@@ -71,10 +74,11 @@ export function resolveMapRouteDisplay(
   const activeRouteToDisplay =
     canShowActive && activeRoute && activeRoute.id !== editingHiddenId ? activeRoute : null;
 
-  // Background reference routes ("השאר מסלול ברקע"):
-  // Only rendered while comparing in Routes drawer OR when enabled while Planning.
+  // Pinned background reference routes ("השאר מסלול ברקע"):
+  // Remain visible on the map in idle/selecting/planning modes (unless hidden in planner),
+  // and are suppressed during active turn-by-turn navigation to keep navigation uncluttered.
   const allowBackgroundRefs =
-    pinnedSet.size > 0 && (ctx.isSelecting || (ctx.isPlanning && showBgPlanner));
+    pinnedSet.size > 0 && !ctx.isNavigating && (!ctx.isPlanning || showBgPlanner);
 
   const backgroundRoutesToDisplay = allowBackgroundRefs
     ? allRoutes.filter(

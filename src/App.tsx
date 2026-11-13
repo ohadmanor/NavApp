@@ -94,6 +94,7 @@ import {
   type SnappedPoint,
 } from './core/routing/ClientRoutePlannerEngine';
 import { AuthService, type NavUser } from './core/firebase/AuthService';
+import { GlobalPoiCloudService } from './core/firebase/GlobalPoiCloudService';
 import {
   PlannedTracksCloudService,
   getDeletedPlannedRouteIds,
@@ -101,6 +102,7 @@ import {
   markSharedRouteDismissed,
 } from './core/firebase/PlannedTracksCloudService';
 import { UserDirectoryService } from './core/firebase/UserDirectoryService';
+import { canUserDeletePoi } from './core/pois/poiPermissions';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
 import { PoiCategoryIcon } from './components/pois/PoiCategoryIcon';
@@ -156,6 +158,7 @@ type MobileOverlayMode =
 type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'user-icon' | null;
 
 const LAST_AUTH_UID_STORAGE_KEY = 'navapp.lastAuthUid.v1';
+const PINNED_ROUTES_STORAGE_KEY = 'navapp.pinnedBackgroundRoutes.v1';
 
 function readStoredLastAuthUid(): string | null {
   try {
@@ -169,6 +172,31 @@ function writeStoredLastAuthUid(uid: string | null): void {
   try {
     if (uid) {
       window.localStorage.setItem(LAST_AUTH_UID_STORAGE_KEY, uid);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function readStoredPinnedRouteIds(): string[] {
+  try {
+    const raw = window.localStorage.getItem(PINNED_ROUTES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? Array.from(new Set(parsed.filter((id): id is string => typeof id === 'string' && id.length > 0)))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredPinnedRouteIds(ids: string[]): void {
+  try {
+    if (ids.length === 0) {
+      window.localStorage.removeItem(PINNED_ROUTES_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(PINNED_ROUTES_STORAGE_KEY, JSON.stringify(ids));
     }
   } catch {
     // Ignore storage errors
@@ -383,9 +411,36 @@ export const App: React.FC = () => {
   const [isRoutingLeg, setIsRoutingLeg] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
-  const [pinnedBackgroundRouteIds, setPinnedBackgroundRouteIds] = useState<string[]>([]);
+  const [pinnedBackgroundRouteIds, setPinnedBackgroundRouteIds] = useState<string[]>(() =>
+    readStoredPinnedRouteIds()
+  );
   const [showBackgroundInPlanner, setShowBackgroundInPlanner] = useState<boolean>(true);
   const [bgHydrationSeq, setBgHydrationSeq] = useState<number>(0);
+
+  useEffect(() => {
+    writeStoredPinnedRouteIds(pinnedBackgroundRouteIds);
+  }, [pinnedBackgroundRouteIds]);
+
+  useEffect(() => {
+    if (pinnedBackgroundRouteIds.length === 0 || routes.length === 0) return;
+    const routeById = new Map(routes.map((r) => [r.id, r]));
+    const idsToHydrate = pinnedBackgroundRouteIds.filter((id) => {
+      const rec = routeById.get(id);
+      if (!rec) return false;
+      return !RouteManager.isHydratedRoute(rec) && !RouteManager.getCachedFullRoute(id);
+    });
+    if (idsToHydrate.length === 0) return;
+
+    let cancelled = false;
+    void Promise.all(idsToHydrate.map((id) => RouteManager.loadFullRoute(id))).then((loaded) => {
+      if (!cancelled && loaded.some(Boolean)) {
+        setBgHydrationSeq((s) => s + 1);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pinnedBackgroundRouteIds, routes]);
   const [planElevStats, setPlanElevStats] = useState<{ ascent: number; descent: number }>({
     ascent: 0,
     descent: 0,
@@ -583,6 +638,7 @@ export const App: React.FC = () => {
   const wasNavigationActiveRef = useRef<boolean>(false);
   const currentUserRef = useRef<NavUser | null>(currentUser);
   currentUserRef.current = currentUser;
+  const canDeletePoi = canUserDeletePoi(currentUser);
   const lastSyncedConfigJsonRef = useRef<string>(JSON.stringify(initialConfig));
   const lastRecordedCameraRef = useRef<SavedMapCamera>({ ...initialCamera });
   const lastNavCamPersistTsRef = useRef<number>(0);
@@ -622,12 +678,12 @@ export const App: React.FC = () => {
     [hasCameraChangedMeaningfully]
   );
 
-  const syncPoiOverridesToCloud = useCallback(() => {
-    void PoiManager.getOverrides().then((ovs) => {
-      const localCount = UserStateSyncService.loadLocalState().poiOverrides?.length ?? 0;
-      if (ovs.length > 0 || localCount > 0) {
-        UserStateSyncService.recordLocalPoiOverrides(ovs, currentUserRef.current);
-      }
+  const refreshPoisFromStore = useCallback(async () => {
+    const allPois = await PoiManager.getAllPois();
+    setPois(allPois);
+    setSelectedPoi((cur) => {
+      if (!cur) return null;
+      return allPois.find((p) => p.id === cur.id) || null;
     });
   }, []);
 
@@ -678,18 +734,6 @@ export const App: React.FC = () => {
           lat: Number(cam.lat.toFixed(4)),
           zoom: Number(cam.zoom.toFixed(1)),
         }));
-      }
-
-      if (result.applyRemotePoiOverrides && result.merged.poiOverrides?.length) {
-        void PoiManager.applyRemoteOverrides(result.merged.poiOverrides)
-          .then(() => PoiManager.getAllPois())
-          .then((allPois) => {
-            setPois(allPois);
-            setSelectedPoi((cur) => {
-              if (!cur) return null;
-              return allPois.find((p) => p.id === cur.id) || null;
-            });
-          });
       }
 
       if (result.merged.lastSyncedAt) {
@@ -923,6 +967,7 @@ export const App: React.FC = () => {
     setOffRouteWarning(null);
     setRemainingDistKm(null);
     setPinnedBackgroundRouteIds([]);
+    writeStoredPinnedRouteIds([]);
     editingRouteIdRef.current = null;
     setEditingRouteId(null);
     setPlanRouteName('');
@@ -932,6 +977,19 @@ export const App: React.FC = () => {
     setPlanCursorCoord(null);
     setDisconnectedCandidate(null);
   }, []);
+
+  // Global POIs live sync (readable by all users, signed-in or anonymous)
+  useEffect(() => {
+    if (!isOnline || !AuthService.isAvailable()) return;
+    const unsubGlobalPois = GlobalPoiCloudService.subscribeGlobalPois((changed) => {
+      if (changed) {
+        void refreshPoisFromStore();
+      }
+    });
+    return () => {
+      unsubGlobalPois();
+    };
+  }, [isOnline, refreshPoisFromStore]);
 
   // Scoped route ownership isolation + Cloud sync on sign-in / user switch / sign-out
   const prevAuthUidRef = useRef<string | null>(currentUser?.uid ?? null);
@@ -999,14 +1057,38 @@ export const App: React.FC = () => {
         if (!isOnline) return;
         setIsSyncingCloud(true);
 
-        const [mergedState, syncedCount, downloaded, sharedRes] = await Promise.all([
+        const [mergedState, syncedCount, downloaded, sharedRes, migrationRes] = await Promise.all([
           UserStateSyncService.pullAndMergeCloudState(currentUser),
           PlannedTracksCloudService.syncPendingRoutesForUser(currentUser),
           PlannedTracksCloudService.fetchUserPlannedRoutes(currentUser),
           PlannedTracksCloudService.fetchSharedWithMeRoutes(currentUser),
+          GlobalPoiCloudService.migrateLegacyOhadPoiData(currentUser).catch((err) => {
+            console.warn('[NavApp] Global POI migration warning:', err);
+            return { migratedOverrides: 0, migratedPois: 0 };
+          }),
           UserDirectoryService.registerCurrentUser(currentUser),
         ]);
         if (cancelled) return;
+
+        const flushedPoiOps = await GlobalPoiCloudService.flushPendingOperations(currentUser).catch(
+          () => 0
+        );
+        const globalPoisChanged = await GlobalPoiCloudService.fetchAndReconcileGlobalPois().catch(
+          () => false
+        );
+        if (cancelled) return;
+
+        if (
+          migrationRes.migratedOverrides > 0 ||
+          migrationRes.migratedPois > 0 ||
+          flushedPoiOps > 0 ||
+          globalPoisChanged
+        ) {
+          void refreshPoisFromStore();
+          if (migrationRes.migratedOverrides > 0 || migrationRes.migratedPois > 0) {
+            showToast('נתוני נקודות העניין הועברו למפה הגלובלית');
+          }
+        }
 
         if (mergedState) {
           applyRemoteMergedState(mergedState);
@@ -1032,6 +1114,10 @@ export const App: React.FC = () => {
           );
           if (!cancelled) {
             setRoutes(all);
+            if (sharedRes.revokedIds.length > 0) {
+              const revokedSet = new Set(sharedRes.revokedIds);
+              setPinnedBackgroundRouteIds((prev) => prev.filter((id) => !revokedSet.has(id)));
+            }
             if (syncedCount > 0) {
               showToast(`סונכרנו ${syncedCount} מסלולים מתוכננים ל-Firebase`);
             }
@@ -1080,14 +1166,17 @@ export const App: React.FC = () => {
           setRoutes(all.filter((r) => !deletedRouteIdsRef.current.has(r.id)));
         });
 
-        if (
-          event.revokedIds.length > 0 &&
-          activeRouteRef.current &&
-          event.revokedIds.includes(activeRouteRef.current.id) &&
-          !isNavigationActiveRef.current
-        ) {
-          setActiveRoute(null);
-          showToast('הגישה למסלול המשותף בוטלה ע״י הבעלים');
+        if (event.revokedIds.length > 0) {
+          const revokedSet = new Set(event.revokedIds);
+          setPinnedBackgroundRouteIds((prev) => prev.filter((id) => !revokedSet.has(id)));
+          if (
+            activeRouteRef.current &&
+            event.revokedIds.includes(activeRouteRef.current.id) &&
+            !isNavigationActiveRef.current
+          ) {
+            setActiveRoute(null);
+            showToast('הגישה למסלול המשותף בוטלה ע״י הבעלים');
+          }
         }
 
         if (event.newlyArrived.length > 0) {
@@ -1118,7 +1207,7 @@ export const App: React.FC = () => {
       unsubRemoteState();
       unsubSharedRoutes();
     };
-  }, [currentUser, isOnline, showToast, applyRemoteMergedState, resetRouteSessionState]);
+  }, [currentUser, isOnline, showToast, applyRemoteMergedState, resetRouteSessionState, refreshPoisFromStore]);
 
   // Toggle map interaction feedback while route planning or community way selection is active.
   useEffect(() => {
@@ -3664,41 +3753,76 @@ export const App: React.FC = () => {
           ? prev.map((p) => (p.id === updated.id ? updated : p))
           : [...prev, updated]
       );
-      syncPoiOverridesToCloud();
     },
-    [syncPoiOverridesToCloud]
+    []
   );
 
   const handleDeletePoi = useCallback(
     async (poi: PoiRecord) => {
-      const snapshot = await PoiManager.deletePoi(poi);
+      if (!canUserDeletePoi(currentUser) || !currentUser) {
+        showToast('מחיקת נקודות עניין מותרת למשתמשים מורשים בלבד.');
+        return;
+      }
+      const actor = currentUser;
+      const snapshot = await PoiManager.deletePoi(poi, actor.uid);
       setPois((prev) => prev.filter((p) => p.id !== poi.id));
       setSelectedPoi((prev) => (prev?.id === poi.id ? null : prev));
       setDesktopDrawer((prev) => (prev === 'poi' ? null : prev));
       setMobilePlanningOverlay((prev) => (prev === 'poi' ? null : prev));
       setMobileNavOverlay((prev) => (prev === 'poi-mini' ? null : prev));
-      syncPoiOverridesToCloud();
 
-      setUndoDeletedPoi(snapshot);
-      setToastMessage(`הנקודה "${poi.nameHe || poi.name}" נמחקה`);
+      try {
+        const res = await GlobalPoiCloudService.deleteGlobalPoi(poi, actor);
+        setUndoDeletedPoi(snapshot);
+        setToastMessage(
+          res.queuedOffline
+            ? `הנקודה "${poi.nameHe || poi.name}" נמחקה מקומית ותסונכרן בענן כשיתאפשר`
+            : `הנקודה "${poi.nameHe || poi.name}" נמחקה`
+        );
+      } catch (err) {
+        const restored = await PoiManager.restoreDeletedPoi(snapshot, actor.uid);
+        setPois((prev) => (prev.some((p) => p.id === restored.id) ? prev : [...prev, restored]));
+        setSelectedPoi(restored);
+        setUndoDeletedPoi(null);
+        showToast(err instanceof Error ? err.message : 'מחיקת הנקודה נדחתה בשרת');
+        return;
+      }
+
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
       toastTimerRef.current = window.setTimeout(() => {
         setToastMessage(null);
         setUndoDeletedPoi(null);
       }, 6000);
     },
-    [syncPoiOverridesToCloud]
+    [currentUser, showToast]
   );
 
   const handleUndoDeletePoi = useCallback(async () => {
     if (!undoDeletedPoi) return;
-    const restored = await PoiManager.restoreDeletedPoi(undoDeletedPoi);
+    if (!canUserDeletePoi(currentUser) || !currentUser) {
+      showToast('שחזור נקודות מחוקות מותר למשתמשים מורשים בלבד.');
+      return;
+    }
+    const actor = currentUser;
+    const snapshot = undoDeletedPoi;
+    const restored = await PoiManager.restoreDeletedPoi(snapshot, actor.uid);
     setUndoDeletedPoi(null);
     setPois((prev) => (prev.some((p) => p.id === restored.id) ? prev : [...prev, restored]));
     setSelectedPoi(restored);
-    syncPoiOverridesToCloud();
-    showToast(`הנקודה "${restored.nameHe || restored.name}" שוחזרה`);
-  }, [undoDeletedPoi, showToast, syncPoiOverridesToCloud]);
+    try {
+      const res = await GlobalPoiCloudService.restoreDeletedGlobalPoi(snapshot, actor);
+      showToast(
+        res.queuedOffline
+          ? `הנקודה "${restored.nameHe || restored.name}" שוחזרה מקומית ותסונכרן כשיתאפשר`
+          : `הנקודה "${restored.nameHe || restored.name}" שוחזרה`
+      );
+    } catch (err) {
+      await PoiManager.deletePoi(restored, actor.uid).catch(() => undefined);
+      setPois((prev) => prev.filter((p) => p.id !== restored.id));
+      setSelectedPoi((prev) => (prev?.id === restored.id ? null : prev));
+      showToast(err instanceof Error ? err.message : 'שחזור הנקודה נדחה בשרת');
+    }
+  }, [currentUser, undoDeletedPoi, showToast]);
 
   const handleSelectRoute = useCallback(
     async (route: SavedRouteRecord | null, options?: { flyTo?: boolean }) => {
@@ -3945,7 +4069,9 @@ export const App: React.FC = () => {
         const exists = prev.includes(routeId);
         const next = exists ? prev.filter((id) => id !== routeId) : [...prev, routeId];
         showToast(
-          exists ? 'המסלול הוסר מהצגה ברקע' : 'המסלול נעוץ ברקע לתכנון והשוואת מסלולים'
+          exists
+            ? 'המסלול הוסר מנעיצה במפה'
+            : 'המסלול נעוץ במפה — יישאר מוצג גם לאחר סגירת החלונית'
         );
         if (!exists && !RouteManager.getCachedFullRoute(routeId)) {
           void RouteManager.loadFullRoute(routeId).then((loaded) => {
@@ -5212,6 +5338,10 @@ export const App: React.FC = () => {
                       poi={selectedPoi}
                       theme={theme}
                       referenceCoord={referenceCoord}
+                      currentUser={currentUser}
+                      canDeletePoi={canDeletePoi}
+                      isAuthBusy={isAuthBusy}
+                      onSignInGoogle={handleSignInGoogle}
                       embedded
                       onClose={() => {
                         setSelectedPoi(null);
@@ -5220,7 +5350,7 @@ export const App: React.FC = () => {
                       onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                       onNavigateToPoi={handleNavigateToPoi}
                       onPoiUpdated={handlePoiUpdated}
-                      onDeletePoi={handleDeletePoi}
+                      onDeletePoi={canDeletePoi ? handleDeletePoi : undefined}
                       onNotify={showToast}
                     />
                   )}
@@ -5334,12 +5464,19 @@ export const App: React.FC = () => {
                     <AddPoiPanel
                       theme={theme}
                       centerCoords={cursorCoords}
+                      currentUser={currentUser}
+                      isAuthBusy={isAuthBusy}
+                      onSignInGoogle={handleSignInGoogle}
                       onClose={() => setDesktopDrawer(null)}
-                      onCreated={(created) => {
+                      onCreated={(created, meta) => {
                         setPois((prev) => [...prev, created]);
                         setSelectedPoi(created);
                         setDesktopDrawer('poi');
-                        showToast(`הנקודה "${created.nameHe}" נשמרה במפה!`);
+                        showToast(
+                          meta?.queuedOffline
+                            ? `הנקודה "${created.nameHe}" נשמרה מקומית ותסונכרן בענן כשיתאפשר`
+                            : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
+                        );
                       }}
                     />
                   )}
@@ -6016,6 +6153,10 @@ export const App: React.FC = () => {
                   poi={selectedPoi}
                   theme={theme}
                   referenceCoord={referenceCoord}
+                  currentUser={currentUser}
+                  canDeletePoi={canDeletePoi}
+                  isAuthBusy={isAuthBusy}
+                  onSignInGoogle={handleSignInGoogle}
                   embedded
                   isExpanded={mobileSheetExpanded}
                   onToggleExpand={() => setMobileSheetExpanded(!mobileSheetExpanded)}
@@ -6026,7 +6167,7 @@ export const App: React.FC = () => {
                   onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                   onNavigateToPoi={handleNavigateToPoi}
                   onPoiUpdated={handlePoiUpdated}
-                  onDeletePoi={handleDeletePoi}
+                  onDeletePoi={canDeletePoi ? handleDeletePoi : undefined}
                   onNotify={showToast}
                 />
               </div>
@@ -6058,12 +6199,19 @@ export const App: React.FC = () => {
                 <AddPoiPanel
                   theme={theme}
                   centerCoords={cursorCoords}
+                  currentUser={currentUser}
+                  isAuthBusy={isAuthBusy}
+                  onSignInGoogle={handleSignInGoogle}
                   onClose={() => setMobilePlanningOverlay(null)}
-                  onCreated={(created) => {
+                  onCreated={(created, meta) => {
                     setPois((prev) => [...prev, created]);
                     setSelectedPoi(created);
                     setMobilePlanningOverlay('poi');
-                    showToast(`הנקודה "${created.nameHe}" נשמרה במפה!`);
+                    showToast(
+                      meta?.queuedOffline
+                        ? `הנקודה "${created.nameHe}" נשמרה מקומית ותסונכרן בענן כשיתאפשר`
+                        : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
+                    );
                   }}
                 />
               </div>
@@ -6409,12 +6557,19 @@ export const App: React.FC = () => {
               <AddPoiPanel
                 theme={theme}
                 centerCoords={cursorCoords}
+                currentUser={currentUser}
+                isAuthBusy={isAuthBusy}
+                onSignInGoogle={handleSignInGoogle}
                 onClose={() => setMobileNavOverlay(null)}
-                onCreated={(created) => {
+                onCreated={(created, meta) => {
                   setPois((prev) => [...prev, created]);
                   setSelectedPoi(created);
                   setMobileNavOverlay('poi-mini');
-                  showToast(`הנקודה "${created.nameHe}" נשמרה במפה!`);
+                  showToast(
+                    meta?.queuedOffline
+                      ? `הנקודה "${created.nameHe}" נשמרה מקומית ותסונכרן בענן כשיתאפשר`
+                      : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
+                  );
                 }}
               />
             </div>
@@ -6423,6 +6578,10 @@ export const App: React.FC = () => {
               poi={selectedPoi}
               theme={theme}
               referenceCoord={referenceCoord}
+              currentUser={currentUser}
+              canDeletePoi={canDeletePoi}
+              isAuthBusy={isAuthBusy}
+              onSignInGoogle={handleSignInGoogle}
               compactNavigating
               onClose={() => setMobileNavOverlay(null)}
               onOpenFullPlanning={() => {
@@ -6434,7 +6593,7 @@ export const App: React.FC = () => {
               }}
               onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
               onPoiUpdated={handlePoiUpdated}
-              onDeletePoi={handleDeletePoi}
+              onDeletePoi={canDeletePoi ? handleDeletePoi : undefined}
               onNotify={showToast}
             />
           ) : (

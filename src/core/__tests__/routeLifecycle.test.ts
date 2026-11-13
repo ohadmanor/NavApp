@@ -624,9 +624,14 @@ describe('Route Planning, Import, Edit & Display Bug Fixes', () => {
   });
 
   it('enforces deterministic route map display policy across idle, planning, selecting, editing, and navigation (PRD 2)', () => {
-    const mkRoute = (id: string, visible = true): SavedRouteRecord => ({
+    const mkRoute = (
+      id: string,
+      visible = true,
+      ownership: 'mine' | 'shared' = 'mine'
+    ): SavedRouteRecord => ({
       id,
       name: `Route ${id}`,
+      ownership,
       sourceFormat: 'planned',
       planningMode: '4x4',
       distanceKm: 4.2,
@@ -644,20 +649,34 @@ describe('Route Planning, Import, Edit & Display Bug Fixes', () => {
     const r1 = mkRoute('r1', false); // legacy visible=false should NOT block explicit select/navigate
     const r2 = mkRoute('r2', true);
     const r3 = mkRoute('r3', true);
-    const allRoutes = [r1, r2, r3];
+    const rShared = mkRoute('rShared', true, 'shared');
+    const allRoutes = [r1, r2, r3, rShared];
 
-    // 1. Idle map: 0 routes displayed even with activeRoute retained and routes having visible=true
-    const idleRes = resolveMapRouteDisplay(allRoutes, r1, {
+    // 1a. Idle map with no pins: 0 routes displayed even with activeRoute retained and routes having visible=true
+    const idleUnpinnedRes = resolveMapRouteDisplay(allRoutes, r1, {
       isPlanning: false,
       isEditing: false,
       isSelecting: false,
       isNavigating: false,
-      pinnedBackgroundIds: ['r2'],
+      pinnedBackgroundIds: [],
     });
-    expect(idleRes.mode).toBe('idle');
-    expect(idleRes.activeRouteToDisplay).toBeNull();
-    expect(idleRes.backgroundRoutesToDisplay).toEqual([]);
-    expect(idleRes.shouldShowPlanOverlay).toBe(false);
+    expect(idleUnpinnedRes.mode).toBe('idle');
+    expect(idleUnpinnedRes.activeRouteToDisplay).toBeNull();
+    expect(idleUnpinnedRes.backgroundRoutesToDisplay).toEqual([]);
+    expect(idleUnpinnedRes.shouldShowPlanOverlay).toBe(false);
+
+    // 1b. Idle map with pinned routes (including shared planning tracks): remain visible after closing the drawer
+    const idlePinnedRes = resolveMapRouteDisplay(allRoutes, rShared, {
+      isPlanning: false,
+      isEditing: false,
+      isSelecting: false,
+      isNavigating: false,
+      pinnedBackgroundIds: ['r2', 'rShared'],
+    });
+    expect(idlePinnedRes.mode).toBe('idle');
+    expect(idlePinnedRes.activeRouteToDisplay).toBeNull();
+    expect(idlePinnedRes.backgroundRoutesToDisplay.map((r) => r.id)).toEqual(['r2', 'rShared']);
+    expect(idlePinnedRes.shouldShowPlanOverlay).toBe(false);
 
     // 2. Selecting in Routes drawer: activeRoute displays (even if visible=false); unpinned routes stay hidden; pinned r2 renders in background
     const selectRes = resolveMapRouteDisplay(allRoutes, r1, {

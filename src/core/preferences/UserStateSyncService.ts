@@ -566,20 +566,20 @@ export class UserStateSyncService {
     if (!services) return false;
 
     const current = this.loadLocalState();
-    if (
-      current.cameraUpdatedAt === 0 &&
-      current.configUpdatedAt === 0 &&
-      (current.poiOverridesUpdatedAt ?? 0) === 0 &&
-      (current.poiOverrides?.length ?? 0) === 0
-    ) {
+    if (current.cameraUpdatedAt === 0 && current.configUpdatedAt === 0) {
       cloudSyncDirty = false;
       return false;
     }
 
     const deviceId = getOrCreateDeviceId();
     const syncedIso = new Date().toISOString();
+    const {
+      poiOverrides: _omitOverrides,
+      poiOverridesUpdatedAt: _omitOverridesTs,
+      ...stateWithoutPois
+    } = current;
     const payload = stripUndefinedDeep({
-      ...current,
+      ...stateWithoutPois,
       lastUpdatedByDeviceId: deviceId,
       lastSyncedAt: syncedIso,
       ownerUid: targetUser.uid,

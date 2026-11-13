@@ -43,14 +43,18 @@ export interface PoiRecord {
   likes?: number;
   priority?: number;
   userNotes?: string;
+  createdByUid?: string;
+  createdAt?: string;
+  updatedByUid?: string;
   updatedAt?: string;
 }
 
 export interface PoiOverrideRecord {
   id: string;
   deleted?: boolean;
-  category?: PoiCategory;
-  subcategory?: string;
+  category?: PoiCategory | null;
+  subcategory?: string | null;
+  updatedByUid?: string;
   updatedAt: string;
 }
 

@@ -539,7 +539,8 @@ export class PoiManager {
   static async updatePoiCategory(
     poi: PoiRecord,
     nextCategory: PoiCategory,
-    nextSubcategory?: string
+    nextSubcategory?: string,
+    updatedByUid?: string
   ): Promise<PoiRecord> {
     const updatedAt = new Date().toISOString();
     if (!PoiManager.originalBaseById.has(poi.id)) {
@@ -556,6 +557,7 @@ export class PoiManager {
       deleted: false,
       category: nextCategory,
       subcategory: normalizedSub,
+      ...(updatedByUid ? { updatedByUid } : {}),
       updatedAt,
     });
     PoiManager.deletedSignatures.delete(poi.id);
@@ -579,6 +581,7 @@ export class PoiManager {
         subcategory: normalizedSub,
         priority: poi.id.startsWith('il-poi-') ? poi.priority : undefined,
       }),
+      ...(updatedByUid ? { updatedByUid } : {}),
       updatedAt,
     };
 
@@ -595,6 +598,7 @@ export class PoiManager {
         waterStatus: updated.waterStatus,
         difficulty4x4: updated.difficulty4x4,
         priority: updated.priority,
+        ...(updatedByUid ? { updatedByUid } : {}),
         updatedAt,
       };
     }
@@ -602,8 +606,23 @@ export class PoiManager {
     return updated;
   }
 
-  static async resetPoiOverride(poiId: string): Promise<PoiRecord | undefined> {
-    await db.poiOverrides.delete(poiId);
+  static async resetPoiOverride(
+    poiId: string,
+    updatedByUid?: string
+  ): Promise<PoiRecord | undefined> {
+    const updatedAt = new Date().toISOString();
+    if (poiId.startsWith('user-poi-') || poiId.startsWith('import-')) {
+      await db.poiOverrides.delete(poiId);
+    } else {
+      await db.poiOverrides.put({
+        id: poiId,
+        deleted: false,
+        category: null,
+        subcategory: null,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
+      });
+    }
     PoiManager.deletedSignatures.delete(poiId);
     PoiManager.overriddenPoiIds.delete(poiId);
 
@@ -615,6 +634,8 @@ export class PoiManager {
         category: base.category,
         subcategory: base.subcategory,
         priority: base.priority,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
       };
       await db.pois.put(restored);
       return restored;
@@ -638,7 +659,7 @@ export class PoiManager {
     return cached ? normalizeLegacyPoiRecord(cached) : undefined;
   }
 
-  static async deletePoi(poi: PoiRecord): Promise<DeletedPoiUndoSnapshot> {
+  static async deletePoi(poi: PoiRecord, updatedByUid?: string): Promise<DeletedPoiUndoSnapshot> {
     const updatedAt = new Date().toISOString();
     const [existingInDb, previousOverride] = await Promise.all([
       db.pois.get(poi.id),
@@ -646,16 +667,20 @@ export class PoiManager {
     ]);
     const offroadIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poi.id);
 
-    await db.poiOverrides.put({
-      id: poi.id,
-      deleted: true,
-      category: previousOverride?.category,
-      subcategory: previousOverride?.subcategory,
-      updatedAt,
-    });
-
-    if (existingInDb && (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-'))) {
-      await db.pois.delete(poi.id);
+    if (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
+      if (existingInDb) {
+        await db.pois.delete(poi.id);
+      }
+      await db.poiOverrides.delete(poi.id);
+    } else {
+      await db.poiOverrides.put({
+        id: poi.id,
+        deleted: true,
+        category: previousOverride?.category ?? null,
+        subcategory: previousOverride?.subcategory ?? null,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
+      });
     }
 
     PoiManager.deletedSignatures.set(poi.id, {
@@ -675,22 +700,38 @@ export class PoiManager {
     };
   }
 
-  static async restoreDeletedPoi(snapshot: DeletedPoiUndoSnapshot): Promise<PoiRecord> {
+  static async restoreDeletedPoi(
+    snapshot: DeletedPoiUndoSnapshot,
+    updatedByUid?: string
+  ): Promise<PoiRecord> {
     const { poi, hadRecordInDb, previousOverride } = snapshot;
+    const updatedAt = new Date().toISOString();
     if (previousOverride) {
       await db.poiOverrides.put({
         ...previousOverride,
         deleted: false,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
       });
       if (isValidPoiCategory(previousOverride.category)) {
         PoiManager.overriddenPoiIds.add(poi.id);
       }
-    } else {
+    } else if (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
       await db.poiOverrides.delete(poi.id);
+      PoiManager.overriddenPoiIds.delete(poi.id);
+    } else {
+      await db.poiOverrides.put({
+        id: poi.id,
+        deleted: false,
+        category: null,
+        subcategory: null,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
+      });
       PoiManager.overriddenPoiIds.delete(poi.id);
     }
 
-    if (hadRecordInDb) {
+    if (hadRecordInDb || poi.id.startsWith('user-poi-')) {
       await db.pois.put(poi);
     }
 
@@ -713,6 +754,126 @@ export class PoiManager {
     if (toWrite.length > 0) {
       await db.poiOverrides.bulkPut(toWrite);
     }
+  }
+
+  /**
+   * Reconciles the local IndexedDB global POI cache (`user-poi-*` and `poiOverrides`)
+   * with the authoritative global Firestore snapshot while preserving local personal `userNotes`
+   * and any locally pending offline edits.
+   */
+  static async reconcileRemoteGlobalPoisAndOverrides(
+    remotePois: PoiRecord[],
+    remoteOverrides: PoiOverrideRecord[],
+    options?: {
+      pendingPoiIds?: ReadonlySet<string>;
+      pendingOverrideIds?: ReadonlySet<string>;
+      pendingDeleteIds?: ReadonlySet<string>;
+      preserveUnpublishedLocalUserPois?: boolean;
+    }
+  ): Promise<{ poisChanged: boolean; overridesChanged: boolean }> {
+    const pendingPoiIds = options?.pendingPoiIds ?? new Set<string>();
+    const pendingOverrideIds = options?.pendingOverrideIds ?? new Set<string>();
+    const pendingDeleteIds = options?.pendingDeleteIds ?? new Set<string>();
+
+    const [localPois, localOverrides] = await Promise.all([
+      db.pois.toArray(),
+      db.poiOverrides.toArray(),
+    ]);
+
+    const localPoiById = new Map(localPois.map((p) => [p.id, p]));
+    const remotePoiIds = new Set<string>();
+    const poisToPut: PoiRecord[] = [];
+    const poisToDeleteIds: string[] = [];
+
+    for (const rawRemote of remotePois) {
+      if (!rawRemote?.id) continue;
+      remotePoiIds.add(rawRemote.id);
+      if (pendingPoiIds.has(rawRemote.id) || pendingDeleteIds.has(rawRemote.id)) {
+        continue;
+      }
+      const normalized = normalizeLegacyPoiRecord(rawRemote);
+      const local = localPoiById.get(normalized.id);
+      const nextRecord: PoiRecord = {
+        ...normalized,
+        userNotes: local?.userNotes || '',
+      };
+      if (
+        !local ||
+        (nextRecord.updatedAt || '') > (local.updatedAt || '') ||
+        local.category !== nextRecord.category ||
+        local.subcategory !== nextRecord.subcategory ||
+        local.nameHe !== nextRecord.nameHe ||
+        local.descHe !== nextRecord.descHe
+      ) {
+        if (!local || (nextRecord.updatedAt || '') >= (local.updatedAt || '')) {
+          poisToPut.push(nextRecord);
+        }
+      }
+    }
+
+    for (const local of localPois) {
+      if (!local.id.startsWith('user-poi-')) continue;
+      if (remotePoiIds.has(local.id)) continue;
+      if (pendingPoiIds.has(local.id)) continue;
+      if (options?.preserveUnpublishedLocalUserPois && !local.createdByUid) continue;
+      poisToDeleteIds.push(local.id);
+    }
+
+    if (poisToPut.length > 0 || poisToDeleteIds.length > 0) {
+      await db.transaction('rw', db.pois, async () => {
+        if (poisToDeleteIds.length > 0) {
+          await db.pois.bulkDelete(poisToDeleteIds);
+        }
+        if (poisToPut.length > 0) {
+          await db.pois.bulkPut(poisToPut);
+        }
+      });
+    }
+
+    const localOvById = new Map(localOverrides.map((o) => [o.id, o]));
+    const remoteOvIds = new Set<string>();
+    const ovToPut: PoiOverrideRecord[] = [];
+    const ovToDeleteIds: string[] = [];
+
+    for (const remote of remoteOverrides) {
+      if (!remote?.id || !remote.updatedAt) continue;
+      remoteOvIds.add(remote.id);
+      if (pendingOverrideIds.has(remote.id) || pendingDeleteIds.has(remote.id)) {
+        continue;
+      }
+      const local = localOvById.get(remote.id);
+      const differs =
+        !local ||
+        remote.updatedAt > local.updatedAt ||
+        Boolean(remote.deleted) !== Boolean(local.deleted) ||
+        (remote.category ?? null) !== (local.category ?? null) ||
+        (remote.subcategory ?? null) !== (local.subcategory ?? null);
+      if (differs && (!local || remote.updatedAt >= local.updatedAt)) {
+        ovToPut.push(remote);
+      }
+    }
+
+    for (const local of localOverrides) {
+      if (remoteOvIds.has(local.id)) continue;
+      if (pendingOverrideIds.has(local.id) || pendingDeleteIds.has(local.id)) continue;
+      ovToDeleteIds.push(local.id);
+    }
+
+    if (ovToPut.length > 0 || ovToDeleteIds.length > 0) {
+      await db.transaction('rw', db.poiOverrides, async () => {
+        if (ovToDeleteIds.length > 0) {
+          await db.poiOverrides.bulkDelete(ovToDeleteIds);
+        }
+        if (ovToPut.length > 0) {
+          await db.poiOverrides.bulkPut(ovToPut);
+        }
+      });
+    }
+
+    return {
+      poisChanged: poisToPut.length > 0 || poisToDeleteIds.length > 0,
+      overridesChanged: ovToPut.length > 0 || ovToDeleteIds.length > 0,
+    };
   }
 
   static async searchPois(query: string, categoryFilter?: PoiCategory | 'all'): Promise<PoiRecord[]> {
@@ -773,6 +934,7 @@ export class PoiManager {
   }
 
   static async addCustomUserPoi(params: {
+    id?: string;
     nameHe: string;
     nameEn?: string;
     category: PoiCategory;
@@ -782,10 +944,13 @@ export class PoiManager {
     ele: number | null;
     descHe: string;
     userNotes?: string;
+    createdByUid?: string;
   }): Promise<PoiRecord> {
     const normalizedSub = normalizeSubcategoryForCategory(params.category, params.subcategory);
+    const nowIso = new Date().toISOString();
+    const randomSuffix = Math.random().toString(36).slice(2, 6);
     const record: PoiRecord = {
-      id: `user-poi-${Date.now()}`,
+      id: params.id || `user-poi-${Date.now()}-${randomSuffix}`,
       name: params.nameHe,
       nameHe: params.nameHe,
       nameEn: params.nameEn || params.nameHe,
@@ -801,7 +966,11 @@ export class PoiManager {
       source: 'User Field Report (דיווח מטייל)',
       wikipedia: null,
       userNotes: params.userNotes || '',
-      updatedAt: new Date().toISOString(),
+      ...(params.createdByUid
+        ? { createdByUid: params.createdByUid, updatedByUid: params.createdByUid }
+        : {}),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
     await db.pois.put(record);
     return record;
