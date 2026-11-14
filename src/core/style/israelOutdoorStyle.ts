@@ -1007,6 +1007,8 @@ function getModernVectorPoiLayerUpdates(
   const standardZoomScale = ['interpolate', ['linear'], ['zoom'], 11.5, 0.45, 13, 0.62, 14, 0.78, 15.5, 1.0, 17.5, 1.26];
   const secondaryZoomScale = ['interpolate', ['linear'], ['zoom'], 11.5, 0.42, 13, 0.58, 14, 0.74, 15.5, 0.94, 17.5, 1.18];
   const lateZoomScale = ['interpolate', ['linear'], ['zoom'], 13, 0.6, 14, 0.78, 15.5, 1.0, 17.5, 1.26];
+  // Matches `offroad` scale in buildPoiIconSizeExpression()
+  const offroadZoomScale = ['interpolate', ['linear'], ['zoom'], 11.5, 0.459, 13, 0.632, 14, 0.796, 15.5, 1.02, 17.5, 1.306];
 
   const origTextField = originalLayout?.['text-field'];
   const textFieldStep =
@@ -1036,7 +1038,6 @@ function getModernVectorPoiLayerUpdates(
         minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
       };
     case 'water-well':
-    case 'water-tank':
       return {
         iconImage: 'poi-water-cistern',
         iconSize: lateZoomScale,
@@ -1046,13 +1047,6 @@ function getModernVectorPoiLayerUpdates(
     case 'water-waterfall':
       return {
         iconImage: 'poi-water-waterfall',
-        iconSize: lateZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
-      };
-    case 'water-drinking':
-      return {
-        iconImage: 'poi-water-tap',
         iconSize: lateZoomScale,
         iconPadding: 1.5,
         minzoom: POI_CATEGORY_ZOOM_RULES.water.iconMinZoom,
@@ -1098,55 +1092,6 @@ function getModernVectorPoiLayerUpdates(
         minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
         ...(textFieldStep ? { textField: textFieldStep } : {}),
       };
-    case 'icon-memorial':
-      return {
-        iconImage: 'poi-heritage-monument',
-        iconSize: secondaryZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
-        ...(textFieldStep ? { textField: textFieldStep } : {}),
-      };
-    case 'icon-holy':
-    case 'icon-jewish':
-    case 'icon-muslim':
-    case 'icon-christian':
-      return {
-        iconImage: 'poi-heritage-holy',
-        iconSize: secondaryZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
-        ...(textFieldStep ? { textField: textFieldStep } : {}),
-      };
-    case 'icon-tree':
-      return {
-        iconImage: 'poi-heritage-nature',
-        iconSize: secondaryZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
-        ...(textFieldStep ? { textField: textFieldStep } : {}),
-      };
-    case 'icon-guidepost':
-      return {
-        iconImage: 'poi-heritage-landmark',
-        iconSize: secondaryZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.heritage.iconMinZoom,
-        ...(textFieldStep ? { textField: textFieldStep } : {}),
-      };
-    case 'icon-fuel':
-      return {
-        iconImage: 'poi-offroad-service',
-        iconSize: lateZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.offroad.iconMinZoom,
-      };
-    case 'icon-parking':
-      return {
-        iconImage: 'poi-offroad-track',
-        iconSize: lateZoomScale,
-        iconPadding: 1.5,
-        minzoom: POI_CATEGORY_ZOOM_RULES.offroad.iconMinZoom,
-      };
     case 'name-peak':
       return {
         iconImage: 'poi-peak-summit',
@@ -1154,6 +1099,29 @@ function getModernVectorPoiLayerUpdates(
         iconPadding: 1.5,
         minzoom: POI_CATEGORY_ZOOM_RULES.peak.iconMinZoom,
         ...(textFieldStep ? { textField: textFieldStep } : {}),
+      };
+    case 'icon-parking':
+      return {
+        iconSize: offroadZoomScale,
+        iconPadding: 1.5,
+        minzoom: 16,
+      };
+    case 'icon-fuel':
+    case 'icon-rail_station':
+    case 'icon-jewish':
+    case 'icon-muslim':
+    case 'icon-christian':
+    case 'icon-holy':
+    case 'icon-guidepost':
+    case 'icon-memorial':
+    case 'icon-tree':
+    case 'water-tank':
+    case 'water-drinking':
+    case 'icon-quarry':
+    case 'icon-cemerery':
+      return {
+        iconSize: offroadZoomScale,
+        iconPadding: 1.5,
       };
     default:
       return null;

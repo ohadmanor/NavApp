@@ -231,25 +231,65 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
     expect(JSON.stringify(buildPoiTextColorExpression(false))).toContain(POI_CATEGORY_SPECS.water.textDayHex);
     expect(JSON.stringify(buildPoiTextColorExpression(true))).toContain(POI_CATEGORY_SPECS.water.textDarkHex);
 
-    // Ensure vector POI layers honor exact minzoom & text-field zoom thresholds without maxzoom cutoffs
+    // Ensure hiking vector POI layers use modern poi-* symbols and honor minzoom & text-field thresholds,
+    // while standard base-map symbols (parking, fuel, places of worship, guideposts, etc.) retain standard icons.
     const style = buildIsraelOutdoorStyle({ visibility: DEFAULT_LAYER_VISIBILITY, theme: 'topo-day' });
     const peakVt = style.layers.find((l) => l.id === 'name-peak') as any;
     const campVt = style.layers.find((l) => l.id === 'icon-camp_site') as any;
     const heritageVt = style.layers.find((l) => l.id === 'icon-viewpoint') as any;
     const waterVt = style.layers.find((l) => l.id === 'name-water-point') as any;
-    const offroadVt = style.layers.find((l) => l.id === 'icon-parking') as any;
-    for (const layer of [peakVt, campVt, heritageVt, waterVt, offroadVt]) {
+    for (const layer of [peakVt, campVt, heritageVt, waterVt]) {
       expect(layer).toBeDefined();
       expect(layer.maxzoom).toBeUndefined();
     }
     expect(peakVt.minzoom).toBe(11.5);
+    expect(peakVt.layout['icon-image']).toBe('poi-peak-summit');
     expect(peakVt.layout['text-field'].slice(0, 4)).toEqual(['step', ['zoom'], '', 12.5]);
     expect(campVt.minzoom).toBe(13);
+    expect(campVt.layout['icon-image']).toBe('poi-campsite-night');
     expect(campVt.layout['text-field'].slice(0, 4)).toEqual(['step', ['zoom'], '', 14]);
     expect(heritageVt.minzoom).toBe(13);
+    expect(heritageVt.layout['icon-image']).toBe('poi-heritage-viewpoint');
     expect(heritageVt.layout['text-field'].slice(0, 4)).toEqual(['step', ['zoom'], '', 14]);
     expect(waterVt.minzoom).toBe(14);
-    expect(offroadVt.minzoom).toBe(14);
+    expect(JSON.stringify(waterVt.layout['icon-image'])).toContain('poi-water-spring');
+
+    const expectedStandardSprites: Record<string, string> = {
+      'icon-parking': 'parking',
+      'icon-fuel': 'gas',
+      'icon-jewish': 'synagogue',
+      'icon-muslim': 'mosque',
+      'icon-christian': 'church',
+      'icon-holy': 'holy_place',
+      'icon-guidepost': 'sign',
+      'icon-rail_station': 'square',
+      'icon-memorial': 'monument',
+      'icon-tree': 'tree',
+      'water-tank': 'water_tank',
+      'water-drinking': 'tap',
+    };
+    for (const [layerId, spriteName] of Object.entries(expectedStandardSprites)) {
+      const layer = style.layers.find((l) => l.id === layerId) as any;
+      expect(layer, `Missing standard layer ${layerId}`).toBeDefined();
+      expect(layer.layout['icon-image']).toBe(spriteName);
+      expect(layer.layout['icon-size']).toEqual([
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        11.5,
+        0.459,
+        13,
+        0.632,
+        14,
+        0.796,
+        15.5,
+        1.02,
+        17.5,
+        1.306,
+      ]);
+    }
+    const parkingLayer = style.layers.find((l) => l.id === 'icon-parking') as any;
+    expect(parkingLayer.minzoom).toBe(16);
 
     // Validate full style + all 3 tiered GeoJSON POI layers against MapLibre style-spec
     // (catches illegal nested ["zoom"] expressions that cause MapLibre to reject layers)

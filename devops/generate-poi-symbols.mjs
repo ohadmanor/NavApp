@@ -51,8 +51,8 @@ function findBrowserExecutable() {
   throw new Error('Could not find Chrome/Edge executable to rasterize SVG sprites.');
 }
 
-async function loadSymbolSvgEntries() {
-  const entryPath = path.join(ROOT_DIR, 'src', 'core', 'pois', 'poiSymbolSvg.ts');
+async function loadTsExports(entryRelPath) {
+  const entryPath = path.join(ROOT_DIR, entryRelPath);
   const bundled = await esbuild.build({
     entryPoints: [entryPath],
     bundle: true,
@@ -68,19 +68,34 @@ async function loadSymbolSvgEntries() {
     console,
   });
   vm.runInContext(bundled.outputFiles[0].text, context);
-  const { getAllPoiSymbolSvgEntries } = moduleShim.exports;
+  return moduleShim.exports;
+}
+
+async function loadAllSpriteSvgEntries() {
+  const [{ getAllPoiSymbolSvgEntries }, { getAllStandardMapSymbolSvgEntries, MODERN_STANDARD_MAP_SYMBOL_IDS }] =
+    await Promise.all([
+      loadTsExports(path.join('src', 'core', 'pois', 'poiSymbolSvg.ts')),
+      loadTsExports(path.join('src', 'core', 'style', 'standardMapSymbolSvg.ts')),
+    ]);
   if (typeof getAllPoiSymbolSvgEntries !== 'function') {
     throw new Error('Failed to load getAllPoiSymbolSvgEntries');
   }
-  return getAllPoiSymbolSvgEntries();
+  if (typeof getAllStandardMapSymbolSvgEntries !== 'function') {
+    throw new Error('Failed to load getAllStandardMapSymbolSvgEntries');
+  }
+  return {
+    poiEntries: getAllPoiSymbolSvgEntries(),
+    standardEntries: getAllStandardMapSymbolSvgEntries(),
+    standardIds: MODERN_STANDARD_MAP_SYMBOL_IDS,
+  };
 }
 
-function getBaseCropExtent(spriteJson, pixelRatio) {
+function getBaseCropExtent(spriteJson, pixelRatio, replacedIds) {
   let maxX = 0;
   let maxY = 0;
   const cleaned = {};
   for (const [k, v] of Object.entries(spriteJson)) {
-    if (k.startsWith('poi-')) continue;
+    if (k.startsWith('poi-') || replacedIds.has(k)) continue;
     cleaned[k] = v;
     const right = Number(v.x || 0) + Number(v.width || 0);
     const bottom = Number(v.y || 0) + Number(v.height || 0);
@@ -95,12 +110,15 @@ function getBaseCropExtent(spriteJson, pixelRatio) {
 }
 
 async function main() {
-  const entries = await loadSymbolSvgEntries();
+  const { poiEntries, standardEntries, standardIds } = await loadAllSpriteSvgEntries();
+  const entries = [...poiEntries, ...standardEntries];
   fs.mkdirSync(SVG_OUT_DIR, { recursive: true });
-  for (const entry of entries) {
+  for (const entry of poiEntries) {
     fs.writeFileSync(path.join(SVG_OUT_DIR, `${entry.id}.svg`), entry.svg1x, 'utf-8');
   }
-  console.log(`[POI Symbols] Wrote ${entries.length} standalone SVGs to public/assets/poi-symbols/`);
+  console.log(
+    `[POI Symbols] Wrote ${poiEntries.length} standalone hiking SVGs to public/assets/poi-symbols/ (+${standardEntries.length} modern standard map glyphs for sprite atlas)`
+  );
 
   const spriteJson1Path = path.join(SPRITES_DIR, 'sprite.json');
   const spritePng1Path = path.join(SPRITES_DIR, 'sprite.png');
@@ -112,8 +130,8 @@ async function main() {
   const rawPng1 = fs.readFileSync(spritePng1Path);
   const rawPng2 = fs.readFileSync(spritePng2Path);
 
-  const base1 = getBaseCropExtent(rawJson1, 1);
-  const base2 = getBaseCropExtent(rawJson2, 2);
+  const base1 = getBaseCropExtent(rawJson1, 1, standardIds);
+  const base2 = getBaseCropExtent(rawJson2, 2, standardIds);
 
   const browserPath = findBrowserExecutable();
   const cols = 10;
@@ -362,7 +380,7 @@ run();
   }
 
   console.log(
-    `[POI Symbols] Generated sprite.png (${outWidth1x}x${outHeight1x}) and sprite@2x.png (${outWidth2x}x${outHeight2x}) with ${entries.length} exclusive poi-* glyphs.`
+    `[POI Symbols] Generated sprite.png (${outWidth1x}x${outHeight1x}) and sprite@2x.png (${outWidth2x}x${outHeight2x}) with ${poiEntries.length} hiking poi-* glyphs and ${standardEntries.length} modern standard glyphs.`
   );
 }
 

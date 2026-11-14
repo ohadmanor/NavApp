@@ -2775,6 +2775,32 @@ export const App: React.FC = () => {
       }
     };
 
+    const geoJsonPoiLayerIds = ['israel-pois-labels', 'israel-pois-midzoom', 'israel-pois-peaks'];
+    const isSelectableRenderedFeature = (
+      f: any,
+      fallbackLngLat: { lng: number; lat: number }
+    ): boolean => {
+      const lid = String(f?.layer?.id || '');
+      if (geoJsonPoiLayerIds.includes(lid)) return true;
+      const fp = (f?.properties || {}) as Record<string, any>;
+      const coords =
+        f?.geometry && f.geometry.type === 'Point'
+          ? (f.geometry as GeoJSON.Point).coordinates
+          : undefined;
+      const fLon = Number(fp.lon ?? coords?.[0] ?? fallbackLngLat.lng);
+      const fLat = Number(fp.lat ?? coords?.[1] ?? fallbackLngLat.lat);
+      return (
+        PoiManager.resolveRenderedVectorPoi({
+          featureProps: fp,
+          layerId: lid,
+          lon: fLon,
+          lat: fLat,
+          existingPois: poisRef.current,
+          vectorCategory: getVectorPoiLayerCategory(lid),
+        }) !== null
+      );
+    };
+
     const handleMapClick = (e: maplibregl.MapMouseEvent) => {
       if (isCancelled) return;
       if (isPlanningRouteRef.current) {
@@ -2808,7 +2834,6 @@ export const App: React.FC = () => {
         return;
       }
 
-      const geoJsonPoiLayerIds = ['israel-pois-labels', 'israel-pois-midzoom', 'israel-pois-peaks'];
       const clickableLayers = [...geoJsonPoiLayerIds, ...Array.from(POI_STYLE_LAYER_IDS)].filter((id) =>
         Boolean(map.getLayer(id))
       );
@@ -2821,27 +2846,7 @@ export const App: React.FC = () => {
         { layers: clickableLayers }
       );
       if (!hitFeatures || hitFeatures.length === 0) return;
-      const activeHits = hitFeatures.filter((f) => {
-        const lid = String(f.layer?.id || '');
-        if (geoJsonPoiLayerIds.includes(lid)) return true;
-        const fp = (f.properties || {}) as Record<string, any>;
-        const coords =
-          f.geometry && f.geometry.type === 'Point'
-            ? (f.geometry as GeoJSON.Point).coordinates
-            : undefined;
-        const fLon = Number(fp.lon ?? coords?.[0] ?? e.lngLat.lng);
-        const fLat = Number(fp.lat ?? coords?.[1] ?? e.lngLat.lat);
-        return (
-          PoiManager.resolveRenderedVectorPoi({
-            featureProps: fp,
-            layerId: lid,
-            lon: fLon,
-            lat: fLat,
-            existingPois: poisRef.current,
-            vectorCategory: getVectorPoiLayerCategory(lid),
-          }) !== null
-        );
-      });
+      const activeHits = hitFeatures.filter((f) => isSelectableRenderedFeature(f, e.lngLat));
       if (activeHits.length === 0) return;
       const preferred =
         activeHits.find((f) => geoJsonPoiLayerIds.includes(String(f.layer?.id || ''))) || activeHits[0];
@@ -2860,16 +2865,22 @@ export const App: React.FC = () => {
 
     map.on('click', handleMapClick);
     map.on('dblclick', handleMapPlanDblClick);
-    for (const poiHoverLayerId of [
-      'israel-pois-labels',
-      'israel-pois-midzoom',
-      'israel-pois-peaks',
-      ...Array.from(POI_STYLE_LAYER_IDS),
-    ]) {
-      map.on('mouseenter', poiHoverLayerId, () => {
-        if (!isPlanningRouteRef.current) {
+    const hoverPoiLayerIds = [...geoJsonPoiLayerIds, ...Array.from(POI_STYLE_LAYER_IDS)];
+    for (const poiHoverLayerId of hoverPoiLayerIds) {
+      map.on('mousemove', poiHoverLayerId, (e) => {
+        if (isPlanningRouteRef.current || isTrailMarkingModeRef.current) return;
+        const hovered = (e.features || []).some((f) => isSelectableRenderedFeature(f, e.lngLat));
+        if (hovered) {
           map.getCanvas().style.cursor = 'pointer';
+          return;
         }
+        const activeLayers = hoverPoiLayerIds.filter((id) => Boolean(map.getLayer(id)));
+        const anySelectable =
+          activeLayers.length > 0 &&
+          map
+            .queryRenderedFeatures(e.point, { layers: activeLayers })
+            .some((f) => isSelectableRenderedFeature(f, e.lngLat));
+        map.getCanvas().style.cursor = anySelectable ? 'pointer' : '';
       });
       map.on('mouseleave', poiHoverLayerId, () => {
         map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
