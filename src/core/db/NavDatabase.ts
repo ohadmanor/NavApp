@@ -22,6 +22,16 @@ export interface MapArchiveRecord {
 }
 
 export type PoiCategory = 'water' | 'heritage' | 'campsite' | 'offroad' | 'peak' | 'user';
+export type PoiVisibility = 'private' | 'global';
+export type PoiOwnership = 'mine' | 'shared';
+
+export interface PoiShareRecipient {
+  uid?: string | null;
+  email: string;
+  displayName?: string | null;
+  photoURL?: string | null;
+  sharedAt: string;
+}
 
 export interface PoiRecord {
   id: string;
@@ -43,6 +53,18 @@ export interface PoiRecord {
   likes?: number;
   priority?: number;
   userNotes?: string;
+  visibility?: PoiVisibility;
+  ownership?: PoiOwnership;
+  ownerUid?: string | null;
+  ownerEmail?: string | null;
+  ownerDisplayName?: string | null;
+  sharedByUid?: string | null;
+  sharedByName?: string | null;
+  sharedByEmail?: string | null;
+  sharedForUid?: string | null;
+  sharedWith?: PoiShareRecipient[];
+  sharedWithUids?: string[];
+  sharedWithEmails?: string[];
   createdByUid?: string;
   createdAt?: string;
   updatedByUid?: string;
@@ -280,6 +302,19 @@ export class NavDatabase extends Dexie {
     this.version(6).stores({
       mapRegistry: 'id, role, storageKind, createdUtc',
       pois: 'id, category, subcategory, nameHe, nameEn, source',
+      poiOverrides: 'id, deleted, category, updatedAt',
+      routes:
+        'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
+      routePayloads: 'id, updatedAt',
+      tracks: 'id, startedAt',
+      searchIndexCache: 'fingerprint, createdUtc',
+      trailAnnotations: 'id, status, updatedAt, selectionReleaseId, *wayIds',
+      trailGeometryCache: 'id, wayId, releaseId',
+      trailAnnotationDrafts: 'id, ownerUid, updatedAt',
+    });
+    this.version(7).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source, visibility, ownerUid, ownership',
       poiOverrides: 'id, deleted, category, updatedAt',
       routes:
         'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',

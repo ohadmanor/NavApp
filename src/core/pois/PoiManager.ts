@@ -1,4 +1,11 @@
-import { db, type PoiRecord, type PoiCategory, type PoiOverrideRecord } from '../db/NavDatabase';
+import {
+  db,
+  type PoiRecord,
+  type PoiCategory,
+  type PoiOverrideRecord,
+  type PoiVisibility,
+  type PoiShareRecipient,
+} from '../db/NavDatabase';
 import { offlineDataFiles } from '../pmtiles/OfflineDataFiles';
 import { isValidPoiCategory, normalizeSubcategoryForCategory, resolvePoiSymbolId } from './poiTaxonomy';
 import { classifyPoiWithText } from './poiClassifier';
@@ -651,7 +658,8 @@ export class PoiManager {
     updatedByUid?: string
   ): Promise<PoiRecord> {
     const updatedAt = new Date().toISOString();
-    if (!PoiManager.originalBaseById.has(poi.id)) {
+    const isPrivate = poi.visibility === 'private';
+    if (!isPrivate && !PoiManager.originalBaseById.has(poi.id)) {
       PoiManager.originalBaseById.set(poi.id, {
         category: poi.category,
         subcategory: poi.subcategory,
@@ -660,16 +668,18 @@ export class PoiManager {
     }
 
     const normalizedSub = normalizeSubcategoryForCategory(nextCategory, nextSubcategory);
-    await db.poiOverrides.put({
-      id: poi.id,
-      deleted: false,
-      category: nextCategory,
-      subcategory: normalizedSub,
-      ...(updatedByUid ? { updatedByUid } : {}),
-      updatedAt,
-    });
-    PoiManager.deletedSignatures.delete(poi.id);
-    PoiManager.overriddenPoiIds.add(poi.id);
+    if (!isPrivate) {
+      await db.poiOverrides.put({
+        id: poi.id,
+        deleted: false,
+        category: nextCategory,
+        subcategory: normalizedSub,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
+      });
+      PoiManager.deletedSignatures.delete(poi.id);
+      PoiManager.overriddenPoiIds.add(poi.id);
+    }
 
     const updated: PoiRecord = {
       ...poi,
@@ -693,7 +703,7 @@ export class PoiManager {
       updatedAt,
     };
 
-    if (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
+    if (isPrivate || poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
       await db.pois.put(updated);
     }
 
@@ -769,11 +779,25 @@ export class PoiManager {
 
   static async deletePoi(poi: PoiRecord, updatedByUid?: string): Promise<DeletedPoiUndoSnapshot> {
     const updatedAt = new Date().toISOString();
+    const isPrivate = poi.visibility === 'private';
     const [existingInDb, previousOverride] = await Promise.all([
       db.pois.get(poi.id),
-      db.poiOverrides.get(poi.id),
+      isPrivate ? Promise.resolve(undefined) : db.poiOverrides.get(poi.id),
     ]);
     const offroadIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poi.id);
+
+    if (isPrivate) {
+      if (existingInDb) {
+        await db.pois.delete(poi.id);
+      }
+      return {
+        poi: { ...poi },
+        hadRecordInDb: Boolean(existingInDb),
+        hadRecordInOffroadCache: false,
+        offroadCacheIndex: -1,
+        previousOverride: undefined,
+      };
+    }
 
     if (poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
       if (existingInDb) {
@@ -813,6 +837,11 @@ export class PoiManager {
     updatedByUid?: string
   ): Promise<PoiRecord> {
     const { poi, hadRecordInDb, previousOverride } = snapshot;
+    if (poi.visibility === 'private') {
+      await db.pois.put(poi);
+      return poi;
+    }
+
     const updatedAt = new Date().toISOString();
     if (previousOverride) {
       await db.poiOverrides.put({
@@ -903,6 +932,7 @@ export class PoiManager {
       const local = localPoiById.get(normalized.id);
       const nextRecord: PoiRecord = {
         ...normalized,
+        visibility: 'global',
         userNotes: local?.userNotes || '',
       };
       if (
@@ -911,7 +941,8 @@ export class PoiManager {
         local.category !== nextRecord.category ||
         local.subcategory !== nextRecord.subcategory ||
         local.nameHe !== nextRecord.nameHe ||
-        local.descHe !== nextRecord.descHe
+        local.descHe !== nextRecord.descHe ||
+        (local.visibility ?? 'global') !== 'global'
       ) {
         if (!local || (nextRecord.updatedAt || '') >= (local.updatedAt || '')) {
           poisToPut.push(nextRecord);
@@ -921,6 +952,7 @@ export class PoiManager {
 
     for (const local of localPois) {
       if (!local.id.startsWith('user-poi-')) continue;
+      if (local.visibility === 'private') continue;
       if (remotePoiIds.has(local.id)) continue;
       if (pendingPoiIds.has(local.id)) continue;
       if (options?.preserveUnpublishedLocalUserPois && !local.createdByUid) continue;
@@ -982,6 +1014,202 @@ export class PoiManager {
       poisChanged: poisToPut.length > 0 || poisToDeleteIds.length > 0,
       overridesChanged: ovToPut.length > 0 || ovToDeleteIds.length > 0,
     };
+  }
+
+  /**
+   * Reconciles the signed-in user's own private POIs and POIs shared with them
+   * into IndexedDB `db.pois`, preserving local personal `userNotes` and pending offline edits.
+   */
+  static async reconcilePrivateAndSharedPois(params: {
+    ownPrivatePois: PoiRecord[];
+    sharedWithMePois: PoiRecord[];
+    activeUid: string;
+    pendingPrivateIds?: ReadonlySet<string>;
+    pendingDeleteIds?: ReadonlySet<string>;
+    dismissedSharedIds?: ReadonlySet<string>;
+    allowRevokeOwn?: boolean;
+    allowRevokeShared?: boolean;
+  }): Promise<{
+    changed: boolean;
+    newlyArrivedShared: PoiRecord[];
+    revokedSharedIds: string[];
+  }> {
+    const { activeUid } = params;
+    if (!activeUid) {
+      return { changed: false, newlyArrivedShared: [], revokedSharedIds: [] };
+    }
+    const pendingPrivateIds = params.pendingPrivateIds ?? new Set<string>();
+    const pendingDeleteIds = params.pendingDeleteIds ?? new Set<string>();
+    const dismissedSharedIds = params.dismissedSharedIds ?? new Set<string>();
+
+    const localPois = await db.pois.toArray();
+    const localById = new Map(localPois.map((p) => [p.id, p]));
+
+    const toPut: PoiRecord[] = [];
+    const toDeleteIds: string[] = [];
+    const newlyArrivedShared: PoiRecord[] = [];
+    const revokedSharedIds: string[] = [];
+
+    // Purge any foreign private/shared POIs left behind from another user
+    for (const local of localPois) {
+      if (local.visibility !== 'private') continue;
+      if (local.ownership === 'shared') {
+        if (local.sharedForUid && local.sharedForUid !== activeUid) {
+          toDeleteIds.push(local.id);
+        }
+      } else {
+        const owner = local.ownerUid || local.createdByUid;
+        if (owner && owner !== activeUid) {
+          toDeleteIds.push(local.id);
+        }
+      }
+    }
+
+    const remoteOwnIds = new Set<string>();
+    for (const rawOwn of params.ownPrivatePois) {
+      if (!rawOwn?.id) continue;
+      remoteOwnIds.add(rawOwn.id);
+      if (pendingPrivateIds.has(rawOwn.id) || pendingDeleteIds.has(rawOwn.id)) continue;
+
+      const normalized = normalizeLegacyPoiRecord(rawOwn);
+      const local = localById.get(normalized.id);
+      if (
+        local &&
+        (local.visibility ?? 'global') === 'global' &&
+        (local.updatedAt || '') > (normalized.updatedAt || '')
+      ) {
+        continue;
+      }
+      const nextRecord: PoiRecord = {
+        ...normalized,
+        visibility: 'private',
+        ownership: 'mine',
+        ownerUid: normalized.ownerUid || normalized.createdByUid || activeUid,
+        userNotes: local?.userNotes || '',
+      };
+
+      const changedRecord =
+        !local ||
+        local.visibility !== 'private' ||
+        local.ownership !== 'mine' ||
+        (nextRecord.updatedAt || '') > (local.updatedAt || '') ||
+        local.category !== nextRecord.category ||
+        local.subcategory !== nextRecord.subcategory ||
+        local.nameHe !== nextRecord.nameHe ||
+        local.descHe !== nextRecord.descHe ||
+        JSON.stringify(local.sharedWithUids || []) !== JSON.stringify(nextRecord.sharedWithUids || []) ||
+        JSON.stringify(local.sharedWithEmails || []) !==
+          JSON.stringify(nextRecord.sharedWithEmails || []);
+
+      if (changedRecord && (!local || (nextRecord.updatedAt || '') >= (local.updatedAt || ''))) {
+        toPut.push(nextRecord);
+      }
+    }
+
+    if (params.allowRevokeOwn) {
+      for (const local of localPois) {
+        if (local.visibility !== 'private' || local.ownership === 'shared') continue;
+        const owner = local.ownerUid || local.createdByUid;
+        if (owner !== activeUid) continue;
+        if (remoteOwnIds.has(local.id) || pendingPrivateIds.has(local.id)) continue;
+        toDeleteIds.push(local.id);
+      }
+    }
+
+    const remoteSharedIds = new Set<string>();
+    for (const rawShared of params.sharedWithMePois) {
+      if (!rawShared?.id) continue;
+      if ((rawShared.ownerUid || rawShared.createdByUid) === activeUid) continue;
+      if (dismissedSharedIds.has(rawShared.id)) continue;
+      remoteSharedIds.add(rawShared.id);
+
+      const normalized = normalizeLegacyPoiRecord(rawShared);
+      const local = localById.get(normalized.id);
+      const nextRecord: PoiRecord = {
+        ...normalized,
+        visibility: 'private',
+        ownership: 'shared',
+        sharedForUid: activeUid,
+        userNotes: local?.userNotes || '',
+      };
+
+      if (!local) {
+        toPut.push(nextRecord);
+        newlyArrivedShared.push(nextRecord);
+      } else if (
+        local.visibility !== 'private' ||
+        local.ownership !== 'shared' ||
+        local.sharedForUid !== activeUid ||
+        (nextRecord.updatedAt || '') > (local.updatedAt || '') ||
+        local.category !== nextRecord.category ||
+        local.subcategory !== nextRecord.subcategory ||
+        local.nameHe !== nextRecord.nameHe ||
+        local.descHe !== nextRecord.descHe
+      ) {
+        if ((nextRecord.updatedAt || '') >= (local.updatedAt || '')) {
+          toPut.push(nextRecord);
+        }
+      }
+    }
+
+    if (params.allowRevokeShared) {
+      for (const local of localPois) {
+        if (local.visibility !== 'private' || local.ownership !== 'shared') continue;
+        if (local.sharedForUid && local.sharedForUid !== activeUid) continue;
+        if (!remoteSharedIds.has(local.id)) {
+          toDeleteIds.push(local.id);
+          revokedSharedIds.push(local.id);
+        }
+      }
+    }
+
+    const uniqueDeleteIds = Array.from(new Set(toDeleteIds));
+    if (toPut.length > 0 || uniqueDeleteIds.length > 0) {
+      await db.transaction('rw', db.pois, async () => {
+        if (uniqueDeleteIds.length > 0) {
+          await db.pois.bulkDelete(uniqueDeleteIds);
+        }
+        if (toPut.length > 0) {
+          await db.pois.bulkPut(toPut);
+        }
+      });
+    }
+
+    return {
+      changed: toPut.length > 0 || uniqueDeleteIds.length > 0,
+      newlyArrivedShared,
+      revokedSharedIds,
+    };
+  }
+
+  /**
+   * Removes cached private & shared POIs that do not belong to `activeUid`
+   * (or all private & shared POIs when signed out with `activeUid === null`).
+   */
+  static async purgePrivateAndSharedPoisForUserSwitch(activeUid: string | null): Promise<number> {
+    const localPois = await db.pois.toArray();
+    const deleteIds: string[] = [];
+    for (const p of localPois) {
+      if (p.visibility !== 'private') continue;
+      if (!activeUid) {
+        deleteIds.push(p.id);
+        continue;
+      }
+      if (p.ownership === 'shared') {
+        if (p.sharedForUid !== activeUid) {
+          deleteIds.push(p.id);
+        }
+      } else {
+        const owner = p.ownerUid || p.createdByUid;
+        if (owner !== activeUid) {
+          deleteIds.push(p.id);
+        }
+      }
+    }
+    if (deleteIds.length > 0) {
+      await db.pois.bulkDelete(deleteIds);
+    }
+    return deleteIds.length;
   }
 
   static async searchPois(query: string, categoryFilter?: PoiCategory | 'all'): Promise<PoiRecord[]> {
@@ -1052,11 +1280,22 @@ export class PoiManager {
     ele: number | null;
     descHe: string;
     userNotes?: string;
+    visibility?: PoiVisibility;
     createdByUid?: string;
+    ownerUid?: string | null;
+    ownerEmail?: string | null;
+    ownerDisplayName?: string | null;
+    sharedWith?: PoiShareRecipient[];
+    sharedWithUids?: string[];
+    sharedWithEmails?: string[];
   }): Promise<PoiRecord> {
     const normalizedSub = normalizeSubcategoryForCategory(params.category, params.subcategory);
     const nowIso = new Date().toISOString();
     const randomSuffix = Math.random().toString(36).slice(2, 6);
+    const visibility: PoiVisibility = params.visibility ?? 'private';
+    const ownerUid = params.ownerUid ?? params.createdByUid ?? null;
+    const isPrivate = visibility === 'private';
+
     const record: PoiRecord = {
       id: params.id || `user-poi-${Date.now()}-${randomSuffix}`,
       name: params.nameHe,
@@ -1071,12 +1310,22 @@ export class PoiManager {
       difficulty4x4: params.category === 'offroad' ? 'דיווח עבירות 4x4' : null,
       descHe: params.descHe,
       descEn: params.descHe,
-      source: 'User Field Report (דיווח מטייל)',
+      source: isPrivate ? 'נקודה פרטית (משתמש)' : 'User Field Report (דיווח מטייל)',
       wikipedia: null,
       userNotes: params.userNotes || '',
-      ...(params.createdByUid
-        ? { createdByUid: params.createdByUid, updatedByUid: params.createdByUid }
+      visibility,
+      ...(isPrivate
+        ? {
+            ownership: 'mine' as const,
+            ownerUid,
+            ownerEmail: params.ownerEmail ?? null,
+            ownerDisplayName: params.ownerDisplayName ?? null,
+            sharedWith: params.sharedWith ?? [],
+            sharedWithUids: params.sharedWithUids ?? [],
+            sharedWithEmails: params.sharedWithEmails ?? [],
+          }
         : {}),
+      ...(ownerUid ? { createdByUid: ownerUid, updatedByUid: ownerUid } : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -1094,6 +1343,7 @@ export class PoiManager {
       poiOffroad: boolean;
       poiPeaks: boolean;
       poiUser?: boolean;
+      poiPrivate?: boolean;
     }
   ): GeoJSON.FeatureCollection {
     if (visibility.pois === false) {
@@ -1105,6 +1355,7 @@ export class PoiManager {
 
     const filtered = pois
       .filter((p) => {
+        if (p.visibility === 'private' && visibility.poiPrivate === false) return false;
         if (p.category === 'water') return visibility.poiWater;
         if (p.category === 'heritage') return visibility.poiHeritage;
         if (p.category === 'campsite') return visibility.poiCampsites;
@@ -1243,6 +1494,8 @@ export class PoiManager {
           subcategory: p.subcategory,
           symbolId: resolvePoiSymbolId(p.category, p.subcategory),
           priority: getPoiSortPriority(p),
+          visibility: p.visibility || 'global',
+          ownership: p.ownership || 'global',
         },
       })),
     };

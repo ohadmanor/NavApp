@@ -365,6 +365,9 @@ export class GlobalPoiCloudService {
     if (!canUserAddOrEditPoi(user)) {
       throw new Error('נדרשת התחברות עם Google כדי להוסיף נקודת עניין למפה הגלובלית.');
     }
+    if (poi.visibility === 'private') {
+      throw new Error('לא ניתן לפרסם נקודה פרטית לאוסף הגלובלי ישירות. יש להפוך אותה לגלובלית קודם.');
+    }
     const actor = user!;
     const services = getFirebaseServices();
     if (!services || !isOnlineNow()) {

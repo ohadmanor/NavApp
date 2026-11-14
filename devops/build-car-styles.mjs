@@ -63,6 +63,7 @@ export async function generateCarStyleAssets() {
       osmProtocolUrl: '__OSM_URL__',
       demProtocolUrl: '__DEM_URL__',
       contourProtocolUrl: undefined, // MapLibre Native renders vector trails + DEM hillshade directly
+      tacticalGridProtocolUrl: null, // Web tactical-grid:// protocol is JS-only
       visibility: {
         ...DEFAULT_LAYER_VISIBILITY,
         terrain3d: false,

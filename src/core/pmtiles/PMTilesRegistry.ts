@@ -22,6 +22,7 @@ import {
 } from './dataFileProbe';
 import { registerOfflineGlyphsProtocol } from '../style/offlineGlyphsProtocol';
 import { registerOfflineRtlTextPlugin } from '../style/hebrewBidiProcessor';
+import { registerTacticalGridProtocol } from '../navigation/TacticalGridTileProtocol';
 
 export interface MountedArchiveInfo {
   id: 'israel-dem' | 'israel-osm';
@@ -175,6 +176,7 @@ export class PMTilesRegistry {
     maplibregl.addProtocol('pmtiles', this.protocol.tile);
     registerOfflineGlyphsProtocol();
     registerOfflineRtlTextPlugin();
+    registerTacticalGridProtocol();
 
     // Pre-register default local (/data on localhost) or remote Firebase sources so MapLibre can stream immediately
     const defaultOsmUrl = pmtilesUrl('Israel.osm.pmtiles');

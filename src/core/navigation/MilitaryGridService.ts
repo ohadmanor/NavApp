@@ -21,24 +21,112 @@ export interface MilitaryCoordReadout {
   utmFormatted: string;     // e.g. "36R 0673420E 3412580N"
 }
 
+export interface GridZoomSpec {
+  minorStepMeters: number;
+  majorStepMeters: number;
+  labelMinor: boolean;
+  labelHalfKm?: boolean;
+}
+
 export class MilitaryGridService {
+  private static readonly ITM_LON0 = 35.2045169444;
+  private static readonly ITM_LAT0 = 31.7343936111;
+  private static readonly ITM_FE = 219529.584;
+  private static readonly ITM_FN = 626907.39;
+  private static readonly ITM_K0 = 1.0000067;
+
+  /**
+   * Returns true if the coordinate falls within the Israel & Levant region where ITM (EPSG:2039)
+   * is the standard topographic reference grid. Outside this region, UTM is used.
+   */
+  static isInsideItmRegion(lon: number, lat: number): boolean {
+    return lon >= 31.5 && lon <= 39.0 && lat >= 27.5 && lat <= 35.5;
+  }
+
+  /**
+   * Returns metric grid spacing and label rules for a given MapLibre zoom level.
+   */
+  static getGridZoomSpec(zoom: number): GridZoomSpec {
+    const z = Math.floor(zoom);
+    if (z <= 7) {
+      return { minorStepMeters: 50_000, majorStepMeters: 100_000, labelMinor: false };
+    }
+    if (z === 8) {
+      return { minorStepMeters: 20_000, majorStepMeters: 100_000, labelMinor: false };
+    }
+    if (z === 9) {
+      return { minorStepMeters: 10_000, majorStepMeters: 50_000, labelMinor: false };
+    }
+    if (z === 10) {
+      return { minorStepMeters: 5_000, majorStepMeters: 10_000, labelMinor: false };
+    }
+    if (z === 11) {
+      return { minorStepMeters: 2_000, majorStepMeters: 10_000, labelMinor: false };
+    }
+    if (z === 12) {
+      return { minorStepMeters: 1_000, majorStepMeters: 5_000, labelMinor: false };
+    }
+    if (z <= 15) {
+      return { minorStepMeters: 1_000, majorStepMeters: 5_000, labelMinor: true };
+    }
+    return { minorStepMeters: 100, majorStepMeters: 1_000, labelMinor: false, labelHalfKm: true };
+  }
+
+  /**
+   * Formats a metric grid coordinate (in meters) into its cartographic grid label.
+   */
+  static formatGridLabel(meters: number, isItm: boolean): string {
+    if (meters % 1000 === 0) {
+      const km = Math.round(meters / 1000);
+      return isItm ? String(km).padStart(3, '0') : String(km);
+    }
+    if (meters % 500 === 0) {
+      const kmHalf = (meters / 1000).toFixed(1);
+      return isItm && meters < 100_000 ? kmHalf.padStart(5, '0') : kmHalf;
+    }
+    return String(Math.round(meters));
+  }
+
+  /**
+   * Projects WGS84 (lon, lat) in degrees to ITM (EPSG:2039) easting/northing in meters.
+   */
+  static wgs84ToItm(lon: number, lat: number): { easting: number; northing: number } {
+    return this.projectTransverseMercator(
+      lon,
+      lat,
+      this.ITM_LON0,
+      this.ITM_LAT0,
+      this.ITM_FE,
+      this.ITM_FN,
+      this.ITM_K0
+    );
+  }
+
+  /**
+   * Projects WGS84 (lon, lat) in degrees to UTM easting/northing in meters for the given or natural zone.
+   */
+  static wgs84ToUtm(
+    lon: number,
+    lat: number,
+    forcedZone?: number
+  ): { zone: number; isNorthern: boolean; easting: number; northing: number } {
+    const zone =
+      typeof forcedZone === 'number'
+        ? forcedZone
+        : Math.max(1, Math.min(60, Math.floor((lon + 180) / 6) + 1));
+    const lon0 = (zone - 1) * 6 - 180 + 3;
+    const isNorthern = lat >= 0;
+    const falseNorthing = isNorthern ? 0.0 : 10_000_000.0;
+    const proj = this.projectTransverseMercator(lon, lat, lon0, 0.0, 500_000.0, falseNorthing, 0.9996);
+    return { zone, isNorthern, easting: proj.easting, northing: proj.northing };
+  }
+
   /**
    * Converts WGS84 (lon, lat) in degrees to ITM (Israel Transverse Mercator, EPSG:2039)
    * and UTM Zone 36N (EPSG:32636).
    */
   static toMilitaryCoords(lon: number, lat: number): MilitaryCoordReadout {
-    // 1. ITM (Israel Transverse Mercator - GRS80 ellipsoid)
-    // Central Meridian: 35°12'16.261" E (35.2045169444°), Origin Lat: 31°44'03.817" N (31.7343936111°)
-    // False Easting: 219529.584m, False Northing: 626907.390m, Scale Factor: 1.0000067
-    const itm = this.projectTransverseMercator(
-      lon,
-      lat,
-      35.2045169444,
-      31.7343936111,
-      219529.584,
-      626907.39,
-      1.0000067
-    );
+    const itm = this.wgs84ToItm(lon, lat);
 
     const itmEasting = Math.round(itm.easting);
     const itmNorthing = Math.round(itm.northing);
@@ -133,8 +221,8 @@ export class MilitaryGridService {
   }
 
   /**
-   * Builds a Military Tactical Grid GeoJSON overlay (1km / 5km / 10km grid lines + ITM labels)
-   * covering the current viewport bounds.
+   * Builds a Military Tactical Grid GeoJSON overlay using true metric ITM (EPSG:2039)
+   * or UTM coordinates covering the supplied geographic bounding box.
    */
   static buildTacticalGridGeoJSON(
     west: number,
@@ -144,58 +232,99 @@ export class MilitaryGridService {
     zoom: number
   ): GeoJSON.FeatureCollection {
     const features: GeoJSON.Feature[] = [];
+    if (zoom < 7 || east <= west || north <= south) {
+      return { type: 'FeatureCollection', features };
+    }
 
-    // Choose grid spacing in degrees (~1km at zoom>=13, ~5km at zoom>=10, ~10km at zoom<10)
-    const stepDeg = zoom >= 13 ? 0.01 : zoom >= 10.5 ? 0.05 : 0.1;
-    const majorEvery = 5;
+    const spec = this.getGridZoomSpec(zoom);
+    const stepM = spec.minorStepMeters;
+    const majorM = spec.majorStepMeters;
+    const centerLon = (west + east) / 2;
+    const centerLat = (south + north) / 2;
+    const useItm = this.isInsideItmRegion(centerLon, centerLat);
+    const utmZone = Math.max(1, Math.min(60, Math.floor((centerLon + 180) / 6) + 1));
+    const utmNorthern = centerLat >= 0;
 
-    const minLon = Math.max(33.8, Math.floor(west / stepDeg) * stepDeg);
-    const maxLon = Math.min(36.3, Math.ceil(east / stepDeg) * stepDeg);
-    const minLat = Math.max(29.2, Math.floor(south / stepDeg) * stepDeg);
-    const maxLat = Math.min(33.6, Math.ceil(north / stepDeg) * stepDeg);
+    const toProj = (lon: number, lat: number) =>
+      useItm ? this.wgs84ToItm(lon, lat) : this.wgs84ToUtm(lon, lat, utmZone);
+    const toWgs = (easting: number, northing: number) =>
+      useItm
+        ? this.itmToWgs84(easting, northing)
+        : this.utmToWgs84(easting, northing, utmZone, utmNorthern);
 
-    // Vertical Grid Meridians (Easting lines)
-    let colIdx = Math.round(minLon / stepDeg);
-    for (let lon = minLon; lon <= maxLon + 1e-6; lon += stepDeg, colIdx++) {
-      const isMajor = colIdx % majorEvery === 0;
-      const itm = this.toMilitaryCoords(lon, (minLat + maxLat) / 2);
-      const kmLabel = String(Math.floor(itm.itmEasting / 1000)).padStart(3, '0');
+    const sampleCorners = [
+      toProj(west, south),
+      toProj(east, south),
+      toProj(west, north),
+      toProj(east, north),
+    ];
+    let minE = Infinity;
+    let maxE = -Infinity;
+    let minN = Infinity;
+    let maxN = -Infinity;
+    for (const c of sampleCorners) {
+      if (c.easting < minE) minE = c.easting;
+      if (c.easting > maxE) maxE = c.easting;
+      if (c.northing < minN) minN = c.northing;
+      if (c.northing > maxN) maxN = c.northing;
+    }
 
+    const startE = Math.floor(minE / stepM) * stepM;
+    const endE = Math.ceil(maxE / stepM) * stepM;
+    const startN = Math.floor(minN / stepM) * stepM;
+    const endN = Math.ceil(maxN / stepM) * stepM;
+
+    const maxLinesPerAxis = 120;
+    const eCount = Math.round((endE - startE) / stepM);
+    const nCount = Math.round((endN - startN) / stepM);
+    if (eCount > maxLinesPerAxis || nCount > maxLinesPerAxis) {
+      return { type: 'FeatureCollection', features };
+    }
+
+    // Easting lines (roughly N-S)
+    for (let e = startE; e <= endE + 0.5; e += stepM) {
+      const roundedE = Math.round(e);
+      const isMajor = Math.abs(roundedE % majorM) === 0;
+      const coords: Array<[number, number]> = [];
+      for (let i = 0; i <= 4; i++) {
+        const n = startN + ((endN - startN) * i) / 4;
+        const p = toWgs(roundedE, n);
+        coords.push([p.lon, p.lat]);
+      }
       features.push({
         type: 'Feature',
         properties: {
           kind: isMajor ? 'major-grid' : 'minor-grid',
-          label: `${kmLabel}`,
+          axis: 'easting',
+          label: this.formatGridLabel(roundedE, useItm),
         },
         geometry: {
           type: 'LineString',
-          coordinates: [
-            [Number(lon.toFixed(5)), Number(minLat.toFixed(5))],
-            [Number(lon.toFixed(5)), Number(maxLat.toFixed(5))],
-          ],
+          coordinates: coords,
         },
       });
     }
 
-    // Horizontal Grid Parallels (Northing lines)
-    let rowIdx = Math.round(minLat / stepDeg);
-    for (let lat = minLat; lat <= maxLat + 1e-6; lat += stepDeg, rowIdx++) {
-      const isMajor = rowIdx % majorEvery === 0;
-      const itm = this.toMilitaryCoords((minLon + maxLon) / 2, lat);
-      const kmLabel = String(Math.floor(itm.itmNorthing / 1000)).padStart(3, '0');
-
+    // Northing lines (roughly E-W)
+    for (let n = startN; n <= endN + 0.5; n += stepM) {
+      const roundedN = Math.round(n);
+      const isMajor = Math.abs(roundedN % majorM) === 0;
+      const coords: Array<[number, number]> = [];
+      for (let i = 0; i <= 4; i++) {
+        const e = startE + ((endE - startE) * i) / 4;
+        const p = toWgs(e, roundedN);
+        coords.push([p.lon, p.lat]);
+      }
       features.push({
         type: 'Feature',
         properties: {
           kind: isMajor ? 'major-grid' : 'minor-grid',
-          label: `${kmLabel}`,
+          axis: 'northing',
+          label: this.formatGridLabel(roundedN, useItm),
         },
         geometry: {
           type: 'LineString',
-          coordinates: [
-            [Number(minLon.toFixed(5)), Number(lat.toFixed(5))],
-            [Number(maxLon.toFixed(5)), Number(lat.toFixed(5))],
-          ],
+          coordinates: coords,
         },
       });
     }
@@ -211,26 +340,61 @@ export class MilitaryGridService {
    * Uses iterative inversion of projectTransverseMercator to achieve millimeter accuracy.
    */
   static itmToWgs84(easting: number, northing: number): { lon: number; lat: number } {
-    let lon = 35.2045169444 + (easting - 219529.584) / 95000;
-    let lat = 31.7343936111 + (northing - 626907.39) / 110880;
+    return this.invertTransverseMercator(
+      easting,
+      northing,
+      this.ITM_LON0,
+      this.ITM_LAT0,
+      this.ITM_FE,
+      this.ITM_FN,
+      this.ITM_K0
+    );
+  }
 
-    // 4 Newton-style refinement steps against the exact forward TM projection
-    for (let i = 0; i < 4; i++) {
+  /**
+   * Converts UTM easting/northing in meters back to WGS84 (lon, lat).
+   */
+  static utmToWgs84(
+    easting: number,
+    northing: number,
+    zone: number,
+    isNorthern = true
+  ): { lon: number; lat: number } {
+    const lon0 = (zone - 1) * 6 - 180 + 3;
+    const falseNorthing = isNorthern ? 0.0 : 10_000_000.0;
+    return this.invertTransverseMercator(easting, northing, lon0, 0.0, 500_000.0, falseNorthing, 0.9996);
+  }
+
+  private static invertTransverseMercator(
+    easting: number,
+    northing: number,
+    lon0Deg: number,
+    lat0Deg: number,
+    falseEasting: number,
+    falseNorthing: number,
+    k0: number
+  ): { lon: number; lat: number } {
+    let lat = Math.max(-84, Math.min(84, lat0Deg + (northing - falseNorthing) / 110880));
+    const cosLatInit = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+    let lon = lon0Deg + (easting - falseEasting) / (111319.49 * cosLatInit);
+
+    // 6 Newton-style refinement steps against the exact forward TM projection
+    for (let i = 0; i < 6; i++) {
       const proj = this.projectTransverseMercator(
         lon,
         lat,
-        35.2045169444,
-        31.7343936111,
-        219529.584,
-        626907.39,
-        1.0000067
+        lon0Deg,
+        lat0Deg,
+        falseEasting,
+        falseNorthing,
+        k0
       );
       const dE = easting - proj.easting;
       const dN = northing - proj.northing;
-      if (Math.abs(dE) < 0.01 && Math.abs(dN) < 0.01) break;
+      if (Math.abs(dE) < 0.005 && Math.abs(dN) < 0.005) break;
       const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
       lon += dE / (111319.49 * cosLat);
-      lat += dN / 110880.0;
+      lat = Math.max(-85, Math.min(85, lat + dN / 110880.0));
     }
 
     return {

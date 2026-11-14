@@ -15,48 +15,8 @@ service cloud.firestore {
       return cat in ['water', 'heritage', 'campsite', 'offroad', 'peak', 'user'];
     }
 
-    function validGlobalPoi(data, poiId) {
-      return data.keys().hasOnly([
-          'id',
-          'name',
-          'nameHe',
-          'nameEn',
-          'category',
-          'subcategory',
-          'lon',
-          'lat',
-          'ele',
-          'waterStatus',
-          'difficulty4x4',
-          'descHe',
-          'descEn',
-          'source',
-          'createdByUid',
-          'createdAt',
-          'updatedByUid',
-          'updatedAt'
-        ]) &&
-        data.keys().hasAll([
-          'id',
-          'name',
-          'nameHe',
-          'nameEn',
-          'category',
-          'subcategory',
-          'lon',
-          'lat',
-          'ele',
-          'waterStatus',
-          'difficulty4x4',
-          'descHe',
-          'descEn',
-          'source',
-          'createdByUid',
-          'createdAt',
-          'updatedByUid',
-          'updatedAt'
-        ]) &&
-        data.id == poiId &&
+    function validBasePoiFields(data, poiId) {
+      return data.id == poiId &&
         data.id.size() > 0 &&
         data.id.size() <= 128 &&
         data.name is string &&
@@ -99,6 +59,120 @@ service cloud.firestore {
         data.updatedAt is string &&
         data.updatedAt.size() > 0 &&
         data.updatedAt.size() <= 64;
+    }
+
+    function validGlobalPoi(data, poiId) {
+      return data.keys().hasOnly([
+          'id',
+          'name',
+          'nameHe',
+          'nameEn',
+          'category',
+          'subcategory',
+          'lon',
+          'lat',
+          'ele',
+          'waterStatus',
+          'difficulty4x4',
+          'descHe',
+          'descEn',
+          'source',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasAll([
+          'id',
+          'name',
+          'nameHe',
+          'nameEn',
+          'category',
+          'subcategory',
+          'lon',
+          'lat',
+          'ele',
+          'waterStatus',
+          'difficulty4x4',
+          'descHe',
+          'descEn',
+          'source',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        validBasePoiFields(data, poiId);
+    }
+
+    function validPrivatePoi(data, poiId) {
+      return data.keys().hasOnly([
+          'id',
+          'name',
+          'nameHe',
+          'nameEn',
+          'category',
+          'subcategory',
+          'lon',
+          'lat',
+          'ele',
+          'waterStatus',
+          'difficulty4x4',
+          'descHe',
+          'descEn',
+          'source',
+          'visibility',
+          'ownerUid',
+          'ownerEmail',
+          'ownerDisplayName',
+          'sharedWith',
+          'sharedWithUids',
+          'sharedWithEmails',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasAll([
+          'id',
+          'name',
+          'nameHe',
+          'nameEn',
+          'category',
+          'subcategory',
+          'lon',
+          'lat',
+          'ele',
+          'waterStatus',
+          'difficulty4x4',
+          'descHe',
+          'descEn',
+          'source',
+          'visibility',
+          'ownerUid',
+          'ownerEmail',
+          'ownerDisplayName',
+          'sharedWith',
+          'sharedWithUids',
+          'sharedWithEmails',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        validBasePoiFields(data, poiId) &&
+        data.visibility == 'private' &&
+        data.ownerUid is string &&
+        data.ownerUid.size() > 0 &&
+        data.ownerUid.size() <= 128 &&
+        (data.ownerEmail == null || (data.ownerEmail is string && data.ownerEmail.size() <= 200)) &&
+        (data.ownerDisplayName == null || (data.ownerDisplayName is string && data.ownerDisplayName.size() <= 200)) &&
+        data.sharedWith is list &&
+        data.sharedWith.size() <= 50 &&
+        data.sharedWithUids is list &&
+        data.sharedWithUids.size() <= 50 &&
+        data.sharedWithEmails is list &&
+        data.sharedWithEmails.size() <= 50;
     }
 
     function validPoiOverride(data, poiId) {
@@ -391,6 +465,28 @@ service cloud.firestore {
         request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.updatedByUid == request.auth.uid;
       allow delete: if isPoiDeleteAdmin();
+    }
+
+    match /private_pois/{poiId} {
+      allow get, list: if signedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        request.auth.uid in resource.data.sharedWithUids ||
+        (request.auth.token.email != null &&
+          request.auth.token.email.lower() in resource.data.sharedWithEmails)
+      );
+      allow create: if signedIn() &&
+        validPrivatePoi(request.resource.data, poiId) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.updatedByUid == request.auth.uid;
+      allow update: if signedIn() &&
+        validPrivatePoi(request.resource.data, poiId) &&
+        resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedByUid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
     match /poi_overrides/{poiId} {

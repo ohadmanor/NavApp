@@ -12,8 +12,8 @@
   - [`route-planning-implementation-plan.md`](./route-planning-implementation-plan.md) — Client-side route planning (4x4, Foot, Bicycle) & Firebase `planing_tracks` sync design.
   - [`trail-annotations-implementation-plan.md`](./trail-annotations-implementation-plan.md) — Community highway/trail colors, numbers, descriptions, authenticated editing, audit history, and persistence across PMTiles updates.
   - [`route-planning-v2-implementation-plan.md`](./route-planning-v2-implementation-plan.md) — Route Planning v2 (scalable 100s+ route library, map visibility rules, My/Shared split, and user-to-user sharing).
-  - [`poi-refactoring-prds.md`](./poi-refactoring-prds.md) — Product Requirements Documents (PRDs) for strict 6-category POI taxonomy, text-integrated classifier, and POI edit/delete lifecycle.
-  - [`poi-refactoring-implementation-plan.md`](./poi-refactoring-implementation-plan.md) — Implementation plan for POI refactoring across Web, Search, Cloud Sync, and Android Auto.
+  - [`poi-refactoring-prds.md`](./poi-refactoring-prds.md) — Product Requirements Documents (PRDs) for strict 6-category POI taxonomy, text-integrated classifier, POI edit/delete lifecycle, and Private/Shared POIs & Global Promotion (PRD-4).
+  - [`poi-refactoring-implementation-plan.md`](./poi-refactoring-implementation-plan.md) — Implementation plan for POI refactoring across Web, Search, Cloud Sync, Android Auto, and Phase 6 Private/Shared POIs.
   - [`architecture-diagram.html`](./architecture-diagram.html) — Interactive 5-layer system architecture & offline data-flow diagram.
   - [`navapp-ui-mockup.html`](./navapp-ui-mockup.html) — Interactive Web Desktop & Mobile UI/UX mockup synced to the shipped application.
   - [`osm-zoom-levels.md`](./osm-zoom-levels.md) — Vector tile & contour zoom-level specification.

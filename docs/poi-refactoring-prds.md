@@ -198,3 +198,64 @@ Users currently have no way to curate the map when a POI is permanently gone/clo
 - Deleting any bundled (`osm-*`, `il-poi-*`, `or-*`) or user/imported (`user-poi-*`, `import-*`) POI removes it immediately from map, search, and nearby list, and **stays deleted after full browser reload / Capacitor app restart**.
 - Changing the category/symbol of any POI updates its map sprite, text color, layer toggle visibility (`poiWater`, etc.), search filter, and Android Auto payload immediately, and **persists across restarts**.
 - Undo within toast window cleanly restores the POI (including previous category/notes).
+
+---
+
+## PRD-4: Private POIs, Global Promotion & User-to-User Sharing
+
+### 4.1 Problem Statement
+Currently, every POI added by a signed-in user in [AddPoiPanel.tsx](../src/components/pois/AddPoiPanel.tsx) is published immediately to the shared `global_pois` collection via [GlobalPoiCloudService.ts](../src/core/firebase/GlobalPoiCloudService.ts), making it visible to every user worldwide—and once published globally, only designated admins (`ohad.manor@gmail.com`, `nabibesk@gmail.com` in [poiPermissions.ts](../src/core/pois/poiPermissions.ts)) can delete it. Hikers and 4x4 travelers frequently need to save **personal/private field points** (e.g., private camps, favorite trailheads, vehicle meeting points, trip waypoints) that default to **Private**, optionally share them selectively with specific friends/group members, or promote them to **Global** when ready for the broader community.
+
+### 4.2 Goals & Access Control Model
+1. **Default Private on Creation:** When a signed-in user creates a new POI, its visibility defaults to **`private`** (visible only to its creator), rather than publishing immediately to `global_pois`.
+2. **Creator Choice to Promote to Global:** The creator can choose **`global`** right at creation time in `AddPoiPanel`, OR promote an existing `private` POI to `global` later from `PoiInspectorSheet` (with clear confirmation that global POIs become visible to everyone and follow global deletion rules).
+3. **Selective Sharing on Private POIs:** While a POI is `private`, the owner can share it with specific NavApp users (by **in-app display name** or **Gmail address**, including pending email invites before the recipient's first sign-in—reusing the `/users/{uid}` directory in [UserDirectoryService.ts](../src/core/firebase/UserDirectoryService.ts)) and revoke access at any time.
+4. **Strict Ownership & Privacy Boundaries:**
+   - **Global / Bundled POIs:** Readable by everyone (including anonymous/signed-out users); authenticated users can add global POIs or recategorize; **only `POI_DELETE_ADMIN_EMAILS`** (`ohad.manor@gmail.com`, `nabibesk@gmail.com`) can delete global/bundled POIs.
+   - **Private POIs (Owner):** Stored privately in Firestore (`private_pois/{poiId}`) and scoped locally to `ownerUid`. Only the owner can read/list (besides shared recipients), edit category/details, manage sharing, promote to global, and **delete their own private POI** (owners do not need admin privileges to delete their own private POIs).
+   - **Private POIs (Shared Recipients):** Shared recipients have **read-only** cloud access to the owner's POI (view on map, search, navigate, inspect, save local personal `userNotes` on their own device, or dismiss/hide from their map locally), and cannot promote it to global, modify its sharing list, or delete it for the owner.
+   - **Account Isolation:** Signing out or switching Google accounts immediately clears the previous user's cached private and shared POIs from local state and IndexedDB while preserving global & bundled POIs.
+
+### 4.3 User Experience & Flows
+
+#### Flow A: Add New POI (`AddPoiPanel`) — Private by Default
+1. Signed-in user opens `AddPoiPanel` (`דווח נקודת עניין בשטח`).
+2. A **Visibility Selector** defaults to **`פרטי (רק אני)`** (`private`), with a toggle to **`גלובלי (כולם רואים)`** (`global`):
+   - When **`פרטי`** is selected (default):
+     - Helper copy explains: `"הנקודה תישמר באופן פרטי בחשבונך. תוכל לשתף אותה עם משתמשים נבחרים או להפוך אותה לגלובלית בכל עת."`
+     - Optional quick-action / post-save prompt or inline chip row `"שתף עם חברים (אופציונלי)"` lets the user select recipients immediately or immediately after saving in `PoiInspectorSheet`.
+   - When **`גלובלי`** is selected:
+     - Helper copy explains: `"הנקודה תפורסם במפה הגלובלית ותהיה גלויה לכל משתמשי האפליקציה."`
+3. Saving creates the POI locally in `db.pois` and syncs to **`private_pois`** (if `private`) or **`global_pois`** (if `global`), queuing offline cleanly if disconnected.
+
+#### Flow B: Share Private POI (`PoiInspectorSheet` + `SharePoiModal`)
+1. Opening a `private` POI owned by `currentUser` displays:
+   - Visibility badge: `🔒 פרטי (רק אני)` or `👥 פרטי משותף (N)` with recipient summary.
+   - **`שתף עם משתמשים`** button → opens `SharePoiModal` (parallel to [ShareRouteModal.tsx](../src/components/navigation/ShareRouteModal.tsx)):
+     - Live autocomplete search via `UserDirectoryService.searchUsers(...)` by display name or Gmail email.
+     - Direct Gmail invite support (`"הזמנה לפי אימייל (ממתין לכניסה)"`) if recipient has not logged in yet.
+     - Active recipients list with one-click revoke (`הסר גישה`).
+2. Updating recipients persists to local `db.pois` and updates `sharedWith`, `sharedWithUids`, and `sharedWithEmails` in Firestore `private_pois/{poiId}` (or queues offline if disconnected).
+
+#### Flow C: Promote Private POI to Global
+1. On any `private` POI owned by `currentUser`, `PoiInspectorSheet` provides an **`הפוך לגלובלי`** action with an inline two-step confirmation bar:
+   - `"להפוך נקודה זו לגלובלית? כל משתמשי NavApp יוכלו לראות אותה על המפה (פעולה זו אינה הפיכה למשתמש רגיל)."` `[הפוך לגלובלי]` / `[ביטול]`
+2. Confirming atomically promotes the POI:
+   - Sets `visibility: 'global'`, clears private sharing fields (`sharedWith`, `sharedWithUids`, `sharedWithEmails`, `ownership`), writes the document to `global_pois/{safeId}`, and deletes `private_pois/{safeId}` in a Firestore `writeBatch`.
+   - Updates local `db.pois`, React `pois` state, and MapLibre `israel-pois-src` immediately.
+
+#### Flow D: Viewing & Dismissing a Shared POI (Recipient)
+1. When User A shares a private POI with User B, User B's active `onSnapshot` listener (and sign-in fetch) reconciles the shared POI into User B's local `db.pois` with `visibility: 'private'`, `ownership: 'shared'`, `sharedByName`, `sharedByEmail`, and `sharedForUid: userB.uid`.
+2. A toast notifies User B on live arrival (`"<שם השולח> שיתף איתך נקודת עניין: <שם הנקודה>"`).
+3. Opening the POI shows attribution (`"שותף ע״י: <שם / אימייל>"`), allows navigation, elevation/coords inspection, and local personal `userNotes`, while hiding owner-only actions (promote to global, edit sharing, remote category edit, remote delete) and offering **`הסר מהמפה שלי`** (persists dismissed ID in local storage scoped by UID so it does not reappear unless re-shared/restored).
+
+#### Flow E: Deleting Own Private POI
+- The owner of a `private` POI sees **`מחק נקודה`** with the inline confirmation bar and 6-second Undo toast, deleting from both `db.pois` and Firestore `private_pois/{safeId}` (even if the user is not in `POI_DELETE_ADMIN_EMAILS`).
+
+### 4.4 Acceptance Criteria
+- Adding a new POI without changing the visibility toggle creates a **`private`** POI that is **never** written to `global_pois` and is **invisible** to other users and signed-out browsers.
+- Toggling visibility to **`global`** during creation or clicking **`הפוך לגלובלי`** later publishes the POI to `global_pois`, removes it from `private_pois`, and makes it visible to all users.
+- Sharing a private POI with User B (by display name or Gmail address) delivers it to User B's map and search (both live via `onSnapshot` and on next login, including pending email invites).
+- Revoking User B's access removes the POI from User B's map on sync.
+- Non-admin users can delete their **own** private POIs, while Firestore rules continue to block non-admin users from deleting `global_pois` or tampering with another user's `private_pois`.
+- Signing out or switching Google accounts immediately removes all previous user's private & shared POIs from map, search, and IndexedDB.

@@ -1,8 +1,18 @@
 import React, { useState } from 'react';
-import { X, Crosshair, Check, Lock, LogIn } from 'lucide-react';
-import { db, type PoiCategory, type PoiRecord } from '../../core/db/NavDatabase';
+import { X, Crosshair, Check, Lock, LogIn, Globe, Users, ChevronDown } from 'lucide-react';
+import {
+  db,
+  type PoiCategory,
+  type PoiRecord,
+  type PoiShareRecipient,
+  type PoiVisibility,
+} from '../../core/db/NavDatabase';
 import type { NavUser } from '../../core/firebase/AuthService';
 import { GlobalPoiCloudService } from '../../core/firebase/GlobalPoiCloudService';
+import {
+  PrivatePoiCloudService,
+  normalizePoiShareRecipients,
+} from '../../core/firebase/PrivatePoiCloudService';
 import { canUserAddOrEditPoi } from '../../core/pois/poiPermissions';
 import { PoiManager } from '../../core/pois/PoiManager';
 import {
@@ -12,6 +22,7 @@ import {
 } from '../../core/pois/poiTaxonomy';
 import { ElevationService } from '../../core/navigation/ElevationService';
 import { MilitaryGridService } from '../../core/navigation/MilitaryGridService';
+import { ShareRecipientsPicker } from '../sharing/ShareRecipientsPicker';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 import { PoiCategoryIcon } from './PoiCategoryIcon';
 
@@ -19,6 +30,8 @@ interface AddPoiPanelProps {
   theme: MapTheme;
   centerCoords: { lon: number; lat: number; ele: number | null };
   currentUser: NavUser | null;
+  isOnline?: boolean;
+  firebaseAvailable?: boolean;
   isAuthBusy?: boolean;
   onSignInGoogle?: () => void;
   onClose: () => void;
@@ -29,6 +42,8 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   theme,
   centerCoords,
   currentUser,
+  isOnline = true,
+  firebaseAvailable = true,
   isAuthBusy = false,
   onSignInGoogle,
   onClose,
@@ -38,6 +53,9 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   const [subcategory, setSubcategory] = useState<string>(POI_CATEGORY_SPECS.water.defaultSubcategory);
   const [nameHe, setNameHe] = useState('');
   const [descHe, setDescHe] = useState('');
+  const [poiVisibility, setPoiVisibility] = useState<PoiVisibility>('private');
+  const [showSharePicker, setShowSharePicker] = useState(false);
+  const [shareRecipients, setShareRecipients] = useState<PoiShareRecipient[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -51,6 +69,35 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
     setSubcategory(POI_CATEGORY_SPECS[nextCat].defaultSubcategory);
   };
 
+  const handleAddDraftRecipient = (recipient: PoiShareRecipient) => {
+    const emailLower = recipient.email.trim().toLowerCase();
+    setShareRecipients((prev) => {
+      if (
+        prev.some(
+          (r) =>
+            (recipient.uid && r.uid === recipient.uid) ||
+            (emailLower && r.email.trim().toLowerCase() === emailLower)
+        )
+      ) {
+        return prev;
+      }
+      return [...prev, recipient];
+    });
+  };
+
+  const handleRemoveDraftRecipient = (target: PoiShareRecipient) => {
+    const targetEmail = target.email.trim().toLowerCase();
+    setShareRecipients((prev) =>
+      prev.filter(
+        (r) =>
+          !(
+            (target.uid && r.uid && r.uid === target.uid) ||
+            (targetEmail && r.email.trim().toLowerCase() === targetEmail)
+          )
+      )
+    );
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canAdd || !currentUser || !nameHe.trim() || isSaving) return;
@@ -61,6 +108,11 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
       const ele =
         centerCoords.ele ??
         (await ElevationService.getElevationAt(centerCoords.lon, centerCoords.lat, 12));
+      const normalizedShare =
+        poiVisibility === 'private'
+          ? normalizePoiShareRecipients(shareRecipients)
+          : { sharedWith: [], sharedWithUids: [], sharedWithEmails: [] };
+
       createdLocally = await PoiManager.addCustomUserPoi({
         nameHe: nameHe.trim(),
         category,
@@ -69,15 +121,35 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         lat: centerCoords.lat,
         ele,
         descHe: descHe.trim() || 'נקודת עניין שדווחה בשטח',
+        visibility: poiVisibility,
         createdByUid: currentUser.uid,
+        ownerUid: currentUser.uid,
+        ownerEmail: currentUser.email,
+        ownerDisplayName: currentUser.displayName,
+        ...(poiVisibility === 'private'
+          ? {
+              sharedWith: normalizedShare.sharedWith,
+              sharedWithUids: normalizedShare.sharedWithUids,
+              sharedWithEmails: normalizedShare.sharedWithEmails,
+            }
+          : {}),
       });
-      const cloudRes = await GlobalPoiCloudService.publishUserPoi(createdLocally, currentUser);
+
+      const cloudRes =
+        poiVisibility === 'private'
+          ? await PrivatePoiCloudService.publishPrivatePoi(createdLocally, currentUser)
+          : await GlobalPoiCloudService.publishUserPoi(createdLocally, currentUser);
       onCreated(createdLocally, { queuedOffline: cloudRes.queuedOffline });
     } catch (err: any) {
       if (createdLocally) {
         await db.pois.delete(createdLocally.id).catch(() => undefined);
       }
-      setErrorMsg(err?.message || 'שמירת הנקודה במפה הגלובלית נכשלה');
+      setErrorMsg(
+        err?.message ||
+          (poiVisibility === 'private'
+            ? 'שמירת הנקודה הפרטית נכשלה'
+            : 'שמירת הנקודה במפה הגלובלית נכשלה')
+      );
     } finally {
       setIsSaving(false);
     }
@@ -106,7 +178,7 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
 
         <div className={`p-3 rounded-xl border text-xs leading-relaxed space-y-2 ${t.subCard}`}>
           <p className="font-semibold">
-            הוספת נקודת עניין פתוחה למשתמשים מחוברים בלבד. הנקודות נשמרות במפה הגלובלית וגלויות לכלל המשתמשים.
+            הוספת נקודת עניין פתוחה למשתמשים מחוברים בלבד. כברירת מחדל הנקודות נשמרות באופן פרטי בחשבונך, וניתן לשתף אותן עם חברים או להפוך לגלובליות.
           </p>
           {onSignInGoogle && (
             <button
@@ -222,6 +294,93 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         className={`w-full rounded-xl border px-3 py-2 text-xs focus:outline-none focus:border-emerald-500 ${t.fieldBox}`}
       />
 
+      {/* Visibility Selector (Private by default vs Global) */}
+      <div className={`p-2.5 rounded-xl border space-y-2 ${t.subCard}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold">פרטיות וחשיפה במפה</span>
+          <span className={`text-[11px] ${t.muted}`}>
+            {poiVisibility === 'private' ? 'ברירת מחדל: פרטי' : 'פתוח לכולם'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="חשיפת נקודת עניין">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={poiVisibility === 'private'}
+            onClick={() => setPoiVisibility('private')}
+            className={`py-2 px-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+              poiVisibility === 'private'
+                ? 'border-indigo-500 bg-indigo-500/15 text-indigo-400'
+                : t.pillBtn
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>פרטי (רק אני)</span>
+          </button>
+
+          <button
+            type="button"
+            role="radio"
+            aria-checked={poiVisibility === 'global'}
+            onClick={() => {
+              setPoiVisibility('global');
+              setShowSharePicker(false);
+            }}
+            className={`py-2 px-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+              poiVisibility === 'global'
+                ? 'border-emerald-500 bg-emerald-500/15 text-emerald-500'
+                : t.pillBtn
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>גלובלי (לכולם)</span>
+          </button>
+        </div>
+
+        <p className={`text-[11px] leading-relaxed ${t.muted}`}>
+          {poiVisibility === 'private'
+            ? 'הנקודה תישמר בחשבונך בלבד. תוכל לשתף אותה עם משתמשים נבחרים או להפוך לגלובלית בכל עת.'
+            : 'הנקודה תפורסם במפה הגלובלית ותהיה גלויה לכל משתמשי NavApp.'}
+        </p>
+
+        {poiVisibility === 'private' && (
+          <div className={`pt-1.5 border-t space-y-2 ${t.divider}`}>
+            <button
+              type="button"
+              onClick={() => setShowSharePicker((prev) => !prev)}
+              className={`w-full py-1.5 px-2.5 rounded-lg border text-xs font-semibold flex items-center justify-between gap-2 ${t.pillBtn}`}
+            >
+              <span className="flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-indigo-400" />
+                <span>
+                  שתף עם משתמשים{shareRecipients.length > 0 ? ` (${shareRecipients.length})` : ' (אופציונלי)'}
+                </span>
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${showSharePicker ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {showSharePicker && (
+              <ShareRecipientsPicker
+                theme={theme}
+                currentUser={currentUser}
+                isOnline={isOnline}
+                firebaseAvailable={firebaseAvailable}
+                recipients={shareRecipients}
+                isBusy={isSaving}
+                emptyText="עדיין לא נבחרו נמענים — הנקודה תישמר עבורך בלבד."
+                selfShareErrorText="לא ניתן לשתף נקודה פרטית עם עצמך."
+                inputId="add-poi-share-recipient-input"
+                onAddRecipient={handleAddDraftRecipient}
+                onRemoveRecipient={handleRemoveDraftRecipient}
+              />
+            )}
+          </div>
+        )}
+      </div>
+
       {errorMsg && (
         <p className="text-xs font-semibold text-rose-500" role="alert">
           {errorMsg}
@@ -234,7 +393,15 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
         className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
       >
         <Check className="w-4 h-4" />
-        <span>{isSaving ? 'שומר...' : 'שמור נקודה במפה'}</span>
+        <span>
+          {isSaving
+            ? 'שומר...'
+            : poiVisibility === 'private'
+              ? shareRecipients.length > 0
+                ? `שמור נקודה פרטית ושתף (${shareRecipients.length})`
+                : 'שמור נקודה פרטית'
+              : 'שמור נקודה במפה הגלובלית'}
+        </span>
       </button>
     </form>
   );

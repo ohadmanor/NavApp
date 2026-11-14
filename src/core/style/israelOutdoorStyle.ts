@@ -24,6 +24,7 @@ export interface OutdoorLayerVisibility {
   poiOffroad: boolean;
   poiPeaks: boolean;
   poiUser: boolean;
+  poiPrivate?: boolean;
 }
 
 export type PoiLayerKey =
@@ -67,6 +68,7 @@ export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   poiOffroad: true,
   poiPeaks: true,
   poiUser: true,
+  poiPrivate: true,
 };
 
 export function countActivePoiCategories(visibility: OutdoorLayerVisibility): number {
@@ -94,7 +96,11 @@ export function buildPoiLayerFilter(visibility: OutdoorLayerVisibility): any {
   if (visibility.poiCampsites) activeCategories.push('campsite');
   if (visibility.poiPeaks) activeCategories.push('peak');
   if (visibility.poiUser ?? true) activeCategories.push('user');
-  return ['in', ['get', 'category'], ['literal', activeCategories]];
+  const categoryExpr: any = ['in', ['get', 'category'], ['literal', activeCategories]];
+  if (visibility.poiPrivate === false) {
+    return ['all', categoryExpr, ['!=', ['coalesce', ['get', 'visibility'], 'global'], 'private']];
+  }
+  return categoryExpr;
 }
 
 export function buildPoiTieredLayerFilter(
@@ -104,7 +110,11 @@ export function buildPoiTieredLayerFilter(
   const activeCategories = categories.filter(
     (cat) => visibility[POI_VISIBILITY_KEY_BY_CATEGORY[cat]] ?? true
   );
-  return ['in', ['get', 'category'], ['literal', activeCategories]];
+  const categoryExpr: any = ['in', ['get', 'category'], ['literal', activeCategories]];
+  if (visibility.poiPrivate === false) {
+    return ['all', categoryExpr, ['!=', ['coalesce', ['get', 'visibility'], 'global'], 'private']];
+  }
+  return categoryExpr;
 }
 
 export function enableAllPoiVisibility(
@@ -162,6 +172,7 @@ export interface BuildIsraelStyleParams {
   osmProtocolUrl?: string | null;
   demProtocolUrl?: string | null;
   contourProtocolUrl?: string | null;
+  tacticalGridProtocolUrl?: string | null;
   visibility: OutdoorLayerVisibility;
   theme?: 'topo-day' | 'topo-dark';
 }
@@ -1157,6 +1168,14 @@ function getVisibilityForIhmLayer(
     return visibility.googleSatellite;
   }
 
+  if (
+    layerId === 'tactical-grid-minor' ||
+    layerId === 'tactical-grid-major' ||
+    layerId === 'tactical-grid-labels'
+  ) {
+    return visibility.tacticalGrid && !visibility.googleSatellite;
+  }
+
   if (!IHM_STYLE_LAYER_IDS.has(layerId)) {
     return null;
   }
@@ -1303,6 +1322,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     osmProtocolUrl,
     demProtocolUrl,
     contourProtocolUrl,
+    tacticalGridProtocolUrl = 'tactical-grid://{z}/{x}/{y}',
     visibility,
     theme = 'topo-day',
   } = params;
@@ -1377,6 +1397,15 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       tiles: [contourProtocolUrl],
       minzoom: 10,
       maxzoom: 14,
+    };
+  }
+
+  if (tacticalGridProtocolUrl) {
+    sources['tactical-grid'] = {
+      type: 'vector',
+      tiles: [tacticalGridProtocolUrl],
+      minzoom: 7,
+      maxzoom: 16,
     };
   }
 
@@ -1502,6 +1531,87 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       layers.splice(contourInsertIdx, 0, terrainLayer);
     } else {
       layers.push(terrainLayer);
+    }
+  }
+
+  // Insert dynamic ITM/UTM tactical grid vector layers above terrain/roads/buildings
+  // and below contour/place/POI labels so map names retain collision priority.
+  if (tacticalGridProtocolUrl) {
+    const showTacticalGrid = visibility.tacticalGrid && !visibility.googleSatellite;
+    const gridVis = showTacticalGrid ? 'visible' : 'none';
+    const gridLayers: LayerSpecification[] = [
+      {
+        id: 'tactical-grid-minor',
+        type: 'line',
+        source: 'tactical-grid',
+        'source-layer': 'grid',
+        minzoom: 7,
+        filter: ['==', ['get', 'kind'], 'minor'],
+        layout: {
+          visibility: gridVis,
+          'line-cap': 'butt',
+          'line-join': 'miter',
+        },
+        paint: {
+          'line-color': isDark ? '#64748b' : '#7f7f7f',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.5, 11, 0.9, 15, 1.0],
+          'line-opacity': ['step', ['zoom'], isDark ? 0.35 : 0.42, 16, isDark ? 0.22 : 0.26],
+        },
+      },
+      {
+        id: 'tactical-grid-major',
+        type: 'line',
+        source: 'tactical-grid',
+        'source-layer': 'grid',
+        minzoom: 7,
+        filter: ['==', ['get', 'kind'], 'major'],
+        layout: {
+          visibility: gridVis,
+          'line-cap': 'butt',
+          'line-join': 'miter',
+        },
+        paint: {
+          'line-color': isDark ? '#94a3b8' : '#64748b',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.0, 12, 1.6, 16, 1.8],
+          'line-opacity': isDark ? 0.55 : 0.65,
+        },
+      },
+      {
+        id: 'tactical-grid-labels',
+        type: 'symbol',
+        source: 'tactical-grid',
+        'source-layer': 'grid',
+        minzoom: 7,
+        filter: ['==', ['get', 'showLabel'], true],
+        layout: {
+          visibility: gridVis,
+          'symbol-placement': 'line',
+          'symbol-spacing': 360,
+          'text-field': ['get', 'label'],
+          'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
+          'text-size': ['case', ['==', ['get', 'kind'], 'major'], 11.5, 10],
+          'text-padding': 6,
+          'text-keep-upright': true,
+        },
+        paint: {
+          'text-color': isDark ? '#cbd5e1' : '#52525b',
+          'text-halo-color': isDark ? '#0b1015' : '#ffffff',
+          'text-halo-width': 2.5,
+          'text-halo-blur': 1,
+        },
+      },
+    ];
+    const labelInsertIdx = layers.findIndex(
+      (l) =>
+        l.id === 'contour-label' ||
+        l.id === 'name-building' ||
+        l.id === 'name-water-line' ||
+        l.id === 'place-farm'
+    );
+    if (labelInsertIdx !== -1) {
+      layers.splice(labelInsertIdx, 0, ...gridLayers);
+    } else {
+      layers.push(...gridLayers);
     }
   }
 

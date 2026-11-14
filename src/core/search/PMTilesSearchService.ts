@@ -638,7 +638,16 @@ export class PMTilesSearchService {
           title: poi.nameHe || poi.name || poi.nameEn,
           subtitle: poi.descHe || poi.descEn || poi.source,
           locality: '',
-          categoryLabel: poi.userNotes ? 'נקודת שטח (עם הערה)' : 'נקודת טיול מומלצת',
+          categoryLabel:
+            poi.visibility === 'private'
+              ? poi.ownership === 'shared'
+                ? `שותף ע״י ${poi.sharedByName || poi.sharedByEmail || 'משתמש NavApp'}`
+                : (poi.sharedWith?.length || 0) > 0
+                  ? `פרטי משותף (${poi.sharedWith?.length})`
+                  : 'נקודה פרטית'
+              : poi.userNotes
+                ? 'נקודת שטח (עם הערה)'
+                : 'נקודת טיול מומלצת',
           emoji: subcatEmoji,
           filterGroup: matchesPoiFilter(poi, 'nature')
             ? 'nature'
@@ -654,7 +663,12 @@ export class PMTilesSearchService {
           distanceKm: distKm,
           recommendedZoom: poi.category === 'peak' ? 15.1 : 15.3,
           score: totalScore,
-          sourceLabel: poi.source || 'IsraelHiking / OSM',
+          sourceLabel:
+            poi.visibility === 'private'
+              ? poi.ownership === 'shared'
+                ? `שותף ע״י ${poi.sharedByName || poi.sharedByEmail || 'משתמש NavApp'}`
+                : 'נקודה פרטית'
+              : poi.source || 'IsraelHiking / OSM',
           poiRecord: poi,
           toPoiRecord: () => poi,
         });

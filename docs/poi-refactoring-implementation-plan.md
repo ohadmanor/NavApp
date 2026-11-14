@@ -1,7 +1,7 @@
 # NavApp — POI Refactoring Implementation Plan
 
 > [!IMPORTANT]
-> This plan pairs with [poi_refactoring_prds.md](./poi-refactoring-prds.md). **No source code or dataset edits have been made yet**—awaiting your approval before implementation.
+> This plan pairs with [poi-refactoring-prds.md](./poi-refactoring-prds.md) (PRD-1 through PRD-4). Phases 1–5 are implemented; **Phase 6 (Private POIs, Global Promotion & User-to-User Sharing — PRD-4) is planned below and awaits your approval before implementation.**
 
 ---
 
@@ -14,8 +14,10 @@ flowchart TD
     Tax --> Icons["src/components/pois/PoiCategoryIcon.tsx (Unified React SVG Icons)"]
     Classifier --> Migration["devops/recategorize-pois.mjs & fetch/convert scripts -> Israel*.pois.geojson"]
     Classifier --> Importer["src/core/pois/CommunityPoiImporter.ts"]
-    Tax --> PoiMgr["src/core/pois/PoiManager.ts + NavDatabase v5 (poiOverrides)"]
-    PoiMgr --> MapUI["App.tsx / PoiInspectorSheet / AddPoiPanel / LayerSwitcherSheet"]
+    Tax --> PoiMgr["src/core/pois/PoiManager.ts + NavDatabase (poiOverrides + private/shared scope)"]
+    Cloud["GlobalPoiCloudService.ts + PrivatePoiCloudService.ts (global_pois vs private_pois)"] --> PoiMgr
+    UserDir["UserDirectoryService.ts (/users/{uid})"] --> Cloud
+    PoiMgr --> MapUI["App.tsx / PoiInspectorSheet / AddPoiPanel / SharePoiModal / LayerSwitcherSheet"]
     PoiMgr --> Search["PMTilesSearchService.ts"]
     PoiMgr --> CarSync["CarSyncService.ts + NativeMapStore.java + CarMapController.java"]
 ```
@@ -172,3 +174,132 @@ Extend [src/core/__tests__/navapp.test.ts](../src/core/__tests__/navapp.test.ts)
   - Tapping a POI -> changing category & symbol -> verifying pin icon and color change immediately -> reloading page and verifying persistence.
   - Deleting a POI -> verifying Undo toast -> deleting permanently -> reloading page and verifying POI stays absent from map and search.
 - Verify Android compilation (`./gradlew assembleDebug` in `android/` if SDK configured cleanly) after CarMapController / NativeMapStore parity updates.
+
+---
+
+## Phase 6: Private POIs, Global Promotion & User-to-User Sharing (PRD-4)
+
+> [!NOTE]
+> **Status:** Planned — no Phase 6 source code edits have been made yet. Builds on the shipped global POI pipeline ([GlobalPoiCloudService.ts](../src/core/firebase/GlobalPoiCloudService.ts)), [poiPermissions.ts](../src/core/pois/poiPermissions.ts), and the `/users/{uid}` directory ([UserDirectoryService.ts](../src/core/firebase/UserDirectoryService.ts)).
+
+### 6.1 Data Model & Permissions
+- **[MODIFY] [src/core/db/NavDatabase.ts](../src/core/db/NavDatabase.ts)**
+  - Add visibility & sharing types and fields on `PoiRecord`:
+    - `export type PoiVisibility = 'private' | 'global';` (absent/`undefined` on bundled & legacy `global_pois` POIs is treated as `'global'`).
+    - `export type PoiOwnership = 'mine' | 'shared';` (for private POIs; `'shared'` when received from another user).
+    - `visibility?: PoiVisibility`, `ownership?: PoiOwnership`, `ownerUid?: string | null`, `ownerEmail?: string | null`, `ownerDisplayName?: string | null`, `sharedByUid?: string | null`, `sharedByName?: string | null`, `sharedByEmail?: string | null`, `sharedForUid?: string | null`, `sharedWith?: PoiShareRecipient[]`, `sharedWithUids?: string[]`, `sharedWithEmails?: string[]`.
+  - Bump Dexie schema to `this.version(7)` adding `visibility, ownerUid, ownership` indexes on `pois` (zero data loss on upgrade from `v6`).
+- **[MODIFY] [src/core/pois/poiPermissions.ts](../src/core/pois/poiPermissions.ts)**
+  - Keep existing global delete restriction (`POI_DELETE_ADMIN_EMAILS`: `ohad.manor@gmail.com`, `nabibesk@gmail.com`) for `global` and bundled POIs.
+  - Add POI-aware helpers:
+    - `isPrivatePoi(poi)`: `poi.visibility === 'private'`.
+    - `isOwnedPrivatePoi(poi, user)`: `isPrivatePoi(poi) && Boolean(user?.uid) && (poi.ownerUid || poi.createdByUid) === user.uid && poi.ownership !== 'shared'`.
+    - `isSharedWithMePoi(poi, user)`: `isPrivatePoi(poi) && poi.ownership === 'shared'` (or `(poi.ownerUid || poi.createdByUid) !== user?.uid`).
+    - `canUserDeletePoi(user, poi?)`:
+      - If `poi` is an owned private POI (`isOwnedPrivatePoi(poi, user)`): **`true`** for any signed-in owner.
+      - If `poi` is a shared-with-me POI: **`false`** for remote delete (recipient uses local dismiss instead).
+      - If `poi` is global/bundled (or omitted): **`true` only for `POI_DELETE_ADMIN_EMAILS`**.
+    - `canUserEditPoiCategory(user, poi?)`:
+      - For `global`/bundled POIs: any signed-in user (`canUserAddOrEditPoi(user)`).
+      - For `private` POIs: **owner only** (`isOwnedPrivatePoi(poi, user)`).
+    - `canUserShareOrPromotePoi(user, poi)`: `isOwnedPrivatePoi(poi, user)`.
+
+### 6.2 Firestore Collection, Security Rules & Cloud Sync
+- **Firestore Collection Choice (`private_pois/{poiId}` top-level collection):**
+  - Store private/shared user POIs in a dedicated top-level collection `private_pois/{poiId}` (keeping `global_pois/{poiId}` strictly public/global).
+  - **Why top-level `private_pois/{poiId}`:**
+    1. Standard Firestore automatic single-field indexes support `where('ownerUid', '==', uid)`, `where('sharedWithUids', 'array-contains', uid)`, and `where('sharedWithEmails', 'array-contains', emailLower)` immediately with **zero `collectionGroup` index provisioning delay**.
+    2. Promoting a private POI to global can execute as a single atomic Firestore `writeBatch` (`set` in `global_pois/{poiId}` + `delete` in `private_pois/{poiId}`).
+- **[MODIFY] [firestore.rules](../firestore.rules)**
+  - Add strict `validPrivatePoi(data, poiId)` validator + rules for `match /private_pois/{poiId}`:
+    - `allow get, list: if signedIn() && (resource.data.ownerUid == request.auth.uid || request.auth.uid in resource.data.sharedWithUids || (request.auth.token.email != null && request.auth.token.email.lower() in resource.data.sharedWithEmails));`
+    - `allow create: if signedIn() && validPrivatePoi(request.resource.data, poiId) && request.resource.data.ownerUid == request.auth.uid && request.resource.data.createdByUid == request.auth.uid && request.resource.data.updatedByUid == request.auth.uid;`
+    - `allow update: if signedIn() && validPrivatePoi(request.resource.data, poiId) && resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == resource.data.ownerUid && request.resource.data.createdByUid == resource.data.createdByUid && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.updatedByUid == request.auth.uid;`
+    - `allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;`
+  - Keep `global_pois/{poiId}` and `poi_overrides/{poiId}` rules unchanged (including `isPoiDeleteAdmin()` for global deletes).
+- **[NEW] [src/core/firebase/PrivatePoiCloudService.ts](../src/core/firebase/PrivatePoiCloudService.ts)**
+  - Serialize/deserialize `private_pois` documents (`ownerUid`, `ownerEmail`, `ownerDisplayName`, `sharedWith`, `sharedWithUids`, `sharedWithEmails` normalized lowercase + deduplicated).
+  - CRUD & Sharing methods with offline retry queues (keyed in `localStorage` per `actorUid`, parallel to `GlobalPoiCloudService`):
+    - `publishPrivatePoi(poi, user)`: writes to `private_pois/{safeId}` (or queues offline).
+    - `updatePrivatePoiSharing(poi, recipients, user)`: updates local `db.pois` + `private_pois/{safeId}` (`sharedWith`, `sharedWithUids`, `sharedWithEmails`), or queues offline.
+    - `promotePrivatePoiToGlobal(poi, user)`: updates `poi` locally to `visibility: 'global'` (stripping sharing fields), executes atomic `writeBatch` (`set global_pois/{safeId}` + `delete private_pois/{safeId}`), and cancels any queued pending private upload/share/delete for `poi.id` in favor of global publish if offline.
+    - `deletePrivatePoi(poi, user)` & `restoreDeletedPrivatePoi(snapshot, user)`: deletes/restores from `private_pois/{safeId}` (or queues offline).
+    - `flushPendingOperations(user)`: flushes only queued ops where `op.actorUid === user.uid`.
+    - `fetchPrivateAndSharedPois(user)` + `subscribePrivateAndSharedPois(user, onUpdate)`:
+      - Subscribes to 3 queries:
+        1. `where('ownerUid', '==', user.uid)` (my private POIs)
+        2. `where('sharedWithUids', 'array-contains', user.uid)` (shared with me by UID)
+        3. `where('sharedWithEmails', 'array-contains', normalizedEmail)` (shared with me by Gmail, including pending pre-login invites)
+      - Filters out dismissed shared POI IDs (`navapp.dismissedSharedPois.v1` scoped per UID) and triggers toast notifications for newly arrived shared POIs.
+
+### 6.3 Local Store Reconciliation & Account Isolation
+- **[MODIFY] [src/core/pois/PoiManager.ts](../src/core/pois/PoiManager.ts)**
+  - Update `addCustomUserPoi(...)`:
+    - Accept `visibility?: PoiVisibility` (default `'private'`), `ownerUid`, `ownerEmail`, `ownerDisplayName`, `sharedWith`, `sharedWithUids`, `sharedWithEmails`.
+    - Default `visibility` to `'private'` and `ownership` to `'mine'` when `visibility === 'private'`.
+  - **Fix `reconcileRemoteGlobalPoisAndOverrides(...)`:**
+    - Do **NOT** treat `local.visibility === 'private'` POIs as stale/deleted when reconciling `global_pois`! Only `user-poi-*` records with `(local.visibility ?? 'global') === 'global'` participate in global-collection deletion reconciliation.
+  - Add `reconcilePrivateAndSharedPois(...)`:
+    - Reconciles `mine` private POIs (`visibility === 'private'`, `ownership !== 'shared'`) and `shared` POIs (`visibility === 'private'`, `ownership === 'shared'`, `sharedForUid === user.uid`) into `db.pois` while preserving local `userNotes` and pending offline edits.
+    - Removes revoked shared POIs cleanly on sync when no longer returned by Firestore listeners.
+  - Add `purgePrivateAndSharedPoisForUserSwitch(activeUid: string | null)`:
+    - Called on sign-out (`activeUid === null`) and on Google account switch (`prevUid !== nextUid`): removes all `visibility === 'private'` POIs not owned by / shared for `activeUid` from `db.pois` immediately so private/shared POIs never leak across users on the same device.
+  - Update `updatePoiCategory(...)` & `deletePoi(...)` & `restoreDeletedPoi(...)`:
+    - When `poi.visibility === 'private'`, update/delete/restore `db.pois` directly without writing into global `db.poiOverrides` (preventing private POI edits/deletes from leaking into `poi_overrides`).
+  - Update `toCompactMapGeoJSON(pois)` to emit `visibility: p.visibility || 'global'` and `ownership: p.ownership || 'global'` in feature `properties` for styling/filtering.
+
+### 6.4 User Interface & App Integration
+- **[MODIFY] [src/components/pois/AddPoiPanel.tsx](../src/components/pois/AddPoiPanel.tsx)**
+  - Add **Visibility Toggle** defaulting to **`פרטי (רק אני)`** (`visibility = 'private'`), alongside **`גלובלי (כל המשתמשים)`** (`visibility = 'global'`).
+  - When `visibility === 'private'`, optionally allow picking initial share recipients inline (or show a `"שמור ושתף"` / `"שתף"` button immediately on save) via the shared recipient picker.
+  - Route save flow cleanly:
+    - `visibility === 'private'` → `PrivatePoiCloudService.publishPrivatePoi(...)`
+    - `visibility === 'global'` → `GlobalPoiCloudService.publishUserPoi(...)`
+- **[NEW] [src/components/pois/SharePoiModal.tsx](../src/components/pois/SharePoiModal.tsx)**
+  - Modal dialog mirroring [ShareRouteModal.tsx](../src/components/navigation/ShareRouteModal.tsx) (or extracting a shared `RecipientPicker` helper used by both):
+    - Autocomplete search via `UserDirectoryService.searchUsers(...)` by in-app display name or Gmail email.
+    - Pending invite support for valid emails not yet in `/users`.
+    - Active recipients list with one-click revoke (`הסר גישה`), disabled when offline warning shown cleanly.
+- **[MODIFY] [src/components/pois/PoiInspectorSheet.tsx](../src/components/pois/PoiInspectorSheet.tsx)**
+  - Display clear visibility/ownership pill in the header (`🔒 פרטי`, `👥 פרטי משותף (N)`, `👥 שותף איתי ע״י <שם/אימייל>`, or `🌍 גלובלי`).
+  - For **owned private POIs**:
+    - Show **`שתף עם משתמשים`** button (opens `SharePoiModal`) + current recipient chips.
+    - Show **`הפוך לגלובלי`** button with inline two-step confirmation (`[הפוך לגלובלי]` / `[ביטול]`).
+    - Show **`מחק נקודה`** for the owner (even if not a global delete admin).
+    - Route category/symbol changes through `PrivatePoiCloudService` instead of `GlobalPoiCloudService`.
+  - For **shared-with-me POIs**:
+    - Keep read-only protection (hide remote category edit, hide promote-to-global, hide share management, hide remote delete; keep local personal `userNotes`).
+    - Provide **`הסר מהמפה שלי`** button to dismiss the shared POI locally.
+- **[MODIFY] [src/components/map/LayerSwitcherSheet.tsx](../src/components/map/LayerSwitcherSheet.tsx)** & **[src/App.tsx](../src/App.tsx)**
+  - Optional map visibility filter toggles for POI scope (`הצג נקודות פרטיות ומשותפות` alongside category toggles, defaulting ON when signed in).
+  - In `App.tsx`:
+    - Subscribe to `PrivatePoiCloudService.subscribePrivateAndSharedPois(currentUser, ...)` when signed in & online; purge private/shared POIs immediately on sign-out or user switch (mirroring the route isolation `useEffect` in `App.tsx`).
+    - Flush `PrivatePoiCloudService.flushPendingOperations(currentUser)` on sign-in and reconnect.
+    - Wire `handleDeletePoi` / `handleUndoDeletePoi` to branch cleanly between `PrivatePoiCloudService` (for owned private POIs) and `GlobalPoiCloudService` (for global/bundled POIs, still gated by `canUserDeletePoi`).
+    - Wire `handlePromotePoiToGlobal` and `handleUpdatePoiSharing` callbacks into `PoiInspectorSheet` and `SharePoiModal`.
+    - Add a subtle visual indicator on private/shared map markers (e.g., subtle lock/share badge or ring styling in MapLibre symbol layer / `PoiCategoryIcon` while preserving the canonical 6-category symbol).
+
+### 6.5 Search & Android Auto Parity
+- **[MODIFY] [src/core/search/PMTilesSearchService.ts](../src/core/search/PMTilesSearchService.ts)**
+  - Include `visibility` / `ownership` label in `SearchResultItem.sourceLabel` (e.g., `"נקודה פרטית"` / `"שותף ע״י <שם>"`) so private & shared POIs are clearly labeled in search results.
+- **[MODIFY] [src/core/car/CarSyncService.ts](../src/core/car/CarSyncService.ts)**
+  - `selectCarSyncablePois` already includes `user-poi-*`; ensure private/shared POIs belonging to the signed-in user sync to Android Auto while logged in and are excluded from `CarSyncService` payload immediately upon sign-out (`purgePrivateAndSharedPoisForUserSwitch`).
+
+### 6.6 Phase 6 Verification Plan
+1. **Firestore Rules Unit Tests (`src/core/__tests__/privatePois.rules.test.ts`):**
+   - Unauthenticated users cannot read/write `private_pois`.
+   - Owner can create, read, update, share (`sharedWithUids` / `sharedWithEmails`), and delete their own `private_pois` (even when NOT in `POI_DELETE_ADMIN_EMAILS`).
+   - Recipient in `sharedWithUids` or `sharedWithEmails` (case-insensitive email) can read/list the shared POI, and gets `permission-denied` on update or delete.
+   - Non-owner, non-recipient user gets `permission-denied` on read, update, and delete.
+   - Non-admin user still gets `permission-denied` when attempting to delete `global_pois`.
+2. **Unit & Integration Tests (`src/core/__tests__/privatePois.test.ts`):**
+   - `PoiManager.addCustomUserPoi` defaults `visibility` to `'private'`; does not write to `global_pois`.
+   - `PoiManager.reconcileRemoteGlobalPoisAndOverrides` preserves local `private` POIs even when absent from `global_pois`.
+   - `PrivatePoiCloudService.promotePrivatePoiToGlobal` atomically writes to `global_pois`, deletes from `private_pois`, clears sharing fields, and reconciles offline queues cleanly.
+   - Recipient reconciliation handles live arrival, pending email claim, access revocation, local dismiss, and account sign-out / user-switch purge (`purgePrivateAndSharedPoisForUserSwitch`).
+   - `canUserDeletePoi` / `canUserEditPoiCategory` permission matrix across anonymous, regular owner, recipient, other user, and global admin.
+3. **Manual / Runtime E2E Verification (`npm test`, `npm run build`, Browser & Emulator):**
+   - Sign in as Account A -> Add POI (verify default is `פרטי`) -> verify Account B (and signed-out browser) does NOT see it.
+   - Account A shares the private POI with Account B (by display name & by Gmail) -> verify Account B sees it live with sender attribution and cannot delete/promote it -> revoke access -> verify it disappears from Account B.
+   - Account A promotes a private POI to `גלובלי` -> verify it disappears from `private_pois`, appears in `global_pois`, and becomes visible to Account B and signed-out users (with delete restricted to admins).
+   - Account A deletes their own private POI -> verify Undo works and permanent delete persists across reload.

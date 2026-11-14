@@ -79,6 +79,7 @@ import type { SearchFilterCategory } from './core/search/searchTaxonomy';
 import {
   db,
   type PoiRecord,
+  type PoiShareRecipient,
   type RouteShareRecipient,
   type SavedRouteRecord,
   type PlannedWaypoint,
@@ -94,6 +95,7 @@ import {
 } from './core/routing/ClientRoutePlannerEngine';
 import { AuthService, type NavUser } from './core/firebase/AuthService';
 import { GlobalPoiCloudService } from './core/firebase/GlobalPoiCloudService';
+import { PrivatePoiCloudService } from './core/firebase/PrivatePoiCloudService';
 import {
   PlannedTracksCloudService,
   getDeletedPlannedRouteIds,
@@ -101,9 +103,14 @@ import {
   markSharedRouteDismissed,
 } from './core/firebase/PlannedTracksCloudService';
 import { UserDirectoryService } from './core/firebase/UserDirectoryService';
-import { canUserDeletePoi } from './core/pois/poiPermissions';
+import {
+  canUserDeletePoi,
+  isOwnedPrivatePoi,
+  isPrivatePoi,
+} from './core/pois/poiPermissions';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
+import { SharePoiModal } from './components/pois/SharePoiModal';
 import { PoiCategoryIcon } from './components/pois/PoiCategoryIcon';
 import { MapStorageModal } from './components/maps-manager/MapStorageModal';
 import { ElevationProfileDrawer } from './components/navigation/ElevationProfileDrawer';
@@ -339,6 +346,7 @@ export const App: React.FC = () => {
   const [routes, setRoutes] = useState<SavedRouteRecord[]>([]);
   const [activeRoute, setActiveRoute] = useState<SavedRouteRecord | null>(null);
   const [shareModalRouteId, setShareModalRouteId] = useState<string | null>(null);
+  const [shareModalPoiId, setShareModalPoiId] = useState<string | null>(null);
   const [unseenSharedCount, setUnseenSharedCount] = useState(0);
   const [isNavigatingRoute, setIsNavigatingRoute] = useState(false);
   const [offRouteWarning, setOffRouteWarning] = useState<number | null>(null);
@@ -617,7 +625,6 @@ export const App: React.FC = () => {
   const cameraTransitionTimerRef = useRef<number | null>(null);
   const userZoomingRef = useRef<boolean>(false);
   const lastNavFollowMoveEndTsRef = useRef<number>(0);
-  const lastNavFollowGridTsRef = useRef<number>(0);
   const lastBearingUiUpdateRef = useRef<{ ts: number; bearing: number }>({
     ts: 0,
     bearing: 0,
@@ -637,7 +644,6 @@ export const App: React.FC = () => {
   const wasNavigationActiveRef = useRef<boolean>(false);
   const currentUserRef = useRef<NavUser | null>(currentUser);
   currentUserRef.current = currentUser;
-  const canDeletePoi = canUserDeletePoi(currentUser);
   const lastSyncedConfigJsonRef = useRef<string>(JSON.stringify(initialConfig));
   const lastRecordedCameraRef = useRef<SavedMapCamera>({ ...initialCamera });
   const lastNavCamPersistTsRef = useRef<number>(0);
@@ -961,6 +967,7 @@ export const App: React.FC = () => {
     RouteManager.clearHydratedCache();
     setActiveRoute(null);
     setShareModalRouteId(null);
+    setShareModalPoiId(null);
     setUnseenSharedCount(0);
     setIsNavigatingRoute(false);
     setOffRouteWarning(null);
@@ -1000,19 +1007,27 @@ export const App: React.FC = () => {
     const prevStoredUid = readStoredLastAuthUid();
 
     if (!currentUser) {
-      // Signed out: immediately hide/purge any signed-in or shared routes
+      // Signed out: immediately hide/purge any signed-in or shared routes and private/shared POIs
       if (prevUid) {
         writeStoredLastAuthUid(prevUid);
         resetRouteSessionState();
         setRoutes((prev) => prev.filter((r) => RouteManager.isRouteVisibleForUser(r, null)));
+        setPois((prev) => prev.filter((p) => p.visibility !== 'private'));
+        setSelectedPoi((cur) => (cur && isPrivatePoi(cur) ? null : cur));
       }
-      void RouteManager.purgeOtherUsersCachedRoutes(null).then(async () => {
+      void Promise.all([
+        RouteManager.purgeOtherUsersCachedRoutes(null),
+        PoiManager.purgePrivateAndSharedPoisForUserSwitch(null),
+      ]).then(async ([, purgedPois]) => {
         if (cancelled) return;
         const anonRoutes = (await RouteManager.listRouteSummaries(null)).filter(
           (r) => !deletedRouteIdsRef.current.has(r.id)
         );
         if (!cancelled) {
           setRoutes(anonRoutes);
+          if (purgedPois > 0) {
+            void refreshPoisFromStore();
+          }
         }
       });
       return () => {
@@ -1034,13 +1049,18 @@ export const App: React.FC = () => {
         // Ignore storage errors
       }
       setRoutes((prev) => prev.filter((r) => RouteManager.isRouteVisibleForUser(r, nextUid)));
+      setPois((prev) => prev.filter((p) => p.visibility !== 'private'));
+      setSelectedPoi((cur) => (cur && isPrivatePoi(cur) ? null : cur));
     }
     writeStoredLastAuthUid(nextUid);
 
     (async () => {
       try {
         if (switchedFromAnotherUser) {
-          await RouteManager.purgeOtherUsersCachedRoutes(nextUid);
+          await Promise.all([
+            RouteManager.purgeOtherUsersCachedRoutes(nextUid),
+            PoiManager.purgePrivateAndSharedPoisForUserSwitch(nextUid),
+          ]);
         } else {
           await RouteManager.claimUnownedRoutesForUser(currentUser);
         }
@@ -1069,23 +1089,40 @@ export const App: React.FC = () => {
         ]);
         if (cancelled) return;
 
-        const flushedPoiOps = await GlobalPoiCloudService.flushPendingOperations(currentUser).catch(
-          () => 0
-        );
-        const globalPoisChanged = await GlobalPoiCloudService.fetchAndReconcileGlobalPois().catch(
-          () => false
-        );
+        const [flushedPoiOps, flushedPrivatePoiOps] = await Promise.all([
+          GlobalPoiCloudService.flushPendingOperations(currentUser).catch(() => 0),
+          PrivatePoiCloudService.flushPendingOperations(currentUser).catch(() => 0),
+        ]);
+        const [globalPoisChanged, privatePoisRes] = await Promise.all([
+          GlobalPoiCloudService.fetchAndReconcileGlobalPois().catch(() => false),
+          PrivatePoiCloudService.fetchPrivateAndSharedPois(currentUser).catch(() => ({
+            changed: false,
+            newlyArrivedShared: [] as PoiRecord[],
+            revokedSharedIds: [] as string[],
+          })),
+        ]);
         if (cancelled) return;
 
         if (
           migrationRes.migratedOverrides > 0 ||
           migrationRes.migratedPois > 0 ||
           flushedPoiOps > 0 ||
-          globalPoisChanged
+          flushedPrivatePoiOps > 0 ||
+          globalPoisChanged ||
+          privatePoisRes.changed
         ) {
           void refreshPoisFromStore();
           if (migrationRes.migratedOverrides > 0 || migrationRes.migratedPois > 0) {
             showToast('נתוני נקודות העניין הועברו למפה הגלובלית');
+          }
+          if (privatePoisRes.newlyArrivedShared.length > 0) {
+            const firstPoi = privatePoisRes.newlyArrivedShared[0];
+            const sender = firstPoi.sharedByName || firstPoi.sharedByEmail || 'משתמש NavApp';
+            showToast(
+              privatePoisRes.newlyArrivedShared.length === 1
+                ? `${sender} שיתף איתך נקודת עניין: ${firstPoi.nameHe || firstPoi.name}`
+                : `התקבלו ${privatePoisRes.newlyArrivedShared.length} נקודות עניין משותפות חדשות`
+            );
           }
         }
 
@@ -1201,10 +1238,40 @@ export const App: React.FC = () => {
       }
     );
 
+    const unsubPrivatePois = PrivatePoiCloudService.subscribePrivateAndSharedPois(
+      currentUser,
+      (event) => {
+        if (cancelled) return;
+        if (event.changed) {
+          void refreshPoisFromStore();
+        }
+        if (!event.isInitial && event.newlyArrivedShared.length > 0) {
+          const firstPoi = event.newlyArrivedShared[0];
+          const sender = firstPoi.sharedByName || firstPoi.sharedByEmail || 'משתמש NavApp';
+          showToast(
+            event.newlyArrivedShared.length === 1
+              ? `${sender} שיתף איתך נקודת עניין: ${firstPoi.nameHe || firstPoi.name}`
+              : `התקבלו ${event.newlyArrivedShared.length} נקודות עניין משותפות חדשות`
+          );
+        }
+        if (event.revokedSharedIds.length > 0) {
+          const revokedSet = new Set(event.revokedSharedIds);
+          setSelectedPoi((cur) => {
+            if (cur && revokedSet.has(cur.id)) {
+              showToast('הגישה לנקודת העניין המשותפת הוסרה ע״י הבעלים');
+              return null;
+            }
+            return cur;
+          });
+        }
+      }
+    );
+
     return () => {
       cancelled = true;
       unsubRemoteState();
       unsubSharedRoutes();
+      unsubPrivatePois();
     };
   }, [currentUser, isOnline, showToast, applyRemoteMergedState, resetRouteSessionState, refreshPoisFromStore]);
 
@@ -1753,89 +1820,7 @@ export const App: React.FC = () => {
     }
   }, [isNavigationActive, navOrientation, isMapReady, resolveCurrentHeading, beginCameraTransition]);
 
-  // Update Military Tactical UTM/ITM Grid GeoJSON on the map
-  const updateTacticalGridOnMap = useCallback(
-    (map: maplibregl.Map, showGrid: boolean, currentTheme: MapTheme) => {
-      try {
-        if (!map.getStyle()) return;
-
-        const bounds = map.getBounds();
-        const zoom = map.getZoom();
-        const gridGeoJson: GeoJSON.FeatureCollection = showGrid
-          ? MilitaryGridService.buildTacticalGridGeoJSON(
-              bounds.getWest(),
-              bounds.getSouth(),
-              bounds.getEast(),
-              bounds.getNorth(),
-              zoom
-            )
-          : { type: 'FeatureCollection', features: [] };
-
-        const existingGridSrc = map.getSource('tactical-grid-src') as maplibregl.GeoJSONSource;
-        if (existingGridSrc) {
-          existingGridSrc.setData(gridGeoJson);
-        } else {
-          map.addSource('tactical-grid-src', {
-            type: 'geojson',
-            data: gridGeoJson,
-          });
-          map.addLayer({
-            id: 'tactical-grid-minor',
-            type: 'line',
-            source: 'tactical-grid-src',
-            filter: ['==', ['get', 'kind'], 'minor-grid'],
-            layout: {
-              visibility: showGrid ? 'visible' : 'none',
-            },
-            paint: {
-              'line-color': currentTheme === 'topo-dark' ? '#64748b' : 'rgb(127, 127, 127)',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.5, 11, 1],
-              'line-opacity': currentTheme === 'topo-dark' ? 0.35 : 0.45,
-            },
-          });
-          map.addLayer({
-            id: 'tactical-grid-major',
-            type: 'line',
-            source: 'tactical-grid-src',
-            filter: ['==', ['get', 'kind'], 'major-grid'],
-            layout: {
-              visibility: showGrid ? 'visible' : 'none',
-            },
-            paint: {
-              'line-color': currentTheme === 'topo-dark' ? '#94a3b8' : 'rgb(127, 127, 127)',
-              'line-width': 1.8,
-              'line-opacity': currentTheme === 'topo-dark' ? 0.55 : 0.65,
-            },
-          });
-          map.addLayer({
-            id: 'tactical-grid-labels',
-            type: 'symbol',
-            source: 'tactical-grid-src',
-            filter: ['==', ['get', 'kind'], 'major-grid'],
-            layout: {
-              visibility: showGrid ? 'visible' : 'none',
-              'symbol-placement': 'line',
-              'symbol-spacing': 380,
-              'text-field': ['get', 'label'],
-              'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
-              'text-size': 11,
-            },
-            paint: {
-              'text-color': currentTheme === 'topo-dark' ? '#94a3b8' : '#7F7F7F',
-              'text-halo-color': currentTheme === 'topo-dark' ? '#0b1015' : 'white',
-              'text-halo-width': 3,
-              'text-halo-blur': 1.5,
-            },
-          });
-        }
-      } catch (err) {
-        console.warn('[NavApp] updateTacticalGridOnMap error:', err);
-      }
-    },
-    []
-  );
-
-  // Mount GeoJSON overlays (Tactical Grid + POIs + Search Highlight + Saved/Active Routes + Live Recorded Track + Route Planner)
+  // Mount GeoJSON overlays (POIs + Search Highlight + Saved/Active Routes + Live Recorded Track + Route Planner)
   const syncOverlaySourcesToMap = useCallback(
     (
       map: maplibregl.Map,
@@ -1851,12 +1836,6 @@ export const App: React.FC = () => {
     ) => {
       try {
         if (!map.getStyle()) return;
-
-        updateTacticalGridOnMap(
-          map,
-          currentVis.tacticalGrid && !currentVis.googleSatellite,
-          currentTheme
-        );
 
         const routeHighlightColor: any = [
           'case',
@@ -2501,7 +2480,7 @@ export const App: React.FC = () => {
         console.warn('[NavApp] syncOverlaySourcesToMap error:', err);
       }
     },
-    [updateTacticalGridOnMap]
+    []
   );
 
   // Initialize MapLibre immediately
@@ -2904,13 +2883,19 @@ export const App: React.FC = () => {
         const prevStoredUid = readStoredLastAuthUid();
         if (bootUser) {
           if (prevStoredUid && prevStoredUid !== bootUser.uid) {
-            await RouteManager.purgeOtherUsersCachedRoutes(bootUser.uid);
+            await Promise.all([
+              RouteManager.purgeOtherUsersCachedRoutes(bootUser.uid),
+              PoiManager.purgePrivateAndSharedPoisForUserSwitch(bootUser.uid),
+            ]);
           } else {
             await RouteManager.claimUnownedRoutesForUser(bootUser);
           }
           writeStoredLastAuthUid(bootUser.uid);
         } else {
-          await RouteManager.purgeOtherUsersCachedRoutes(null);
+          await Promise.all([
+            RouteManager.purgeOtherUsersCachedRoutes(null),
+            PoiManager.purgePrivateAndSharedPoisForUserSwitch(null),
+          ]);
         }
         const [{ dem, osm }, loadedPois, loadedRoutes] = await Promise.all([
           pmtilesRegistry.initializeDefaultIsraelArchives(),
@@ -2968,30 +2953,6 @@ export const App: React.FC = () => {
       map.remove();
     };
   }, [syncOverlaySourcesToMap, showToast]);
-
-  // Refresh tactical grid when panning/zooming (throttled during 60fps nav follow)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !isMapReady) return;
-    const onMoveEnd = (ev?: any) => {
-      if (ev?.navFollowTick) {
-        const perfNow = performance.now();
-        if (perfNow - lastNavFollowGridTsRef.current < 800) {
-          return;
-        }
-        lastNavFollowGridTsRef.current = perfNow;
-      }
-      updateTacticalGridOnMap(
-        map,
-        visibility.tacticalGrid && !visibility.googleSatellite,
-        theme
-      );
-    };
-    map.on('moveend', onMoveEnd);
-    return () => {
-      map.off('moveend', onMoveEnd);
-    };
-  }, [isMapReady, visibility.tacticalGrid, visibility.googleSatellite, theme, updateTacticalGridOnMap]);
 
   // Effect A: Rebuild style only when theme or PMTiles archive URL changes
   useEffect(() => {
@@ -3336,6 +3297,7 @@ export const App: React.FC = () => {
 
     for (let i = 0; i < pois.length; i++) {
       const p = pois[i];
+      if (p.visibility === 'private' && visibility.poiPrivate === false) continue;
       if (p.category === 'water' && !visibility.poiWater) continue;
       if (p.category === 'heritage' && !visibility.poiHeritage) continue;
       if (p.category === 'campsite' && !visibility.poiCampsites) continue;
@@ -3383,6 +3345,7 @@ export const App: React.FC = () => {
     visibility.poiOffroad,
     visibility.poiPeaks,
     visibility.poiUser,
+    visibility.poiPrivate,
   ]);
 
   const handleFlyTo = useCallback(
@@ -3749,20 +3712,23 @@ export const App: React.FC = () => {
 
   const handleDeletePoi = useCallback(
     async (poi: PoiRecord) => {
-      if (!canUserDeletePoi(currentUser) || !currentUser) {
-        showToast('מחיקת נקודות עניין מותרת למשתמשים מורשים בלבד.');
+      if (!canUserDeletePoi(currentUser, poi) || !currentUser) {
+        showToast('מחיקת נקודה זו מותרת רק לבעלים (בנקודה פרטית) או למשתמש מורשה.');
         return;
       }
       const actor = currentUser;
       const snapshot = await PoiManager.deletePoi(poi, actor.uid);
       setPois((prev) => prev.filter((p) => p.id !== poi.id));
       setSelectedPoi((prev) => (prev?.id === poi.id ? null : prev));
+      setShareModalPoiId((prev) => (prev === poi.id ? null : prev));
       setDesktopDrawer((prev) => (prev === 'poi' ? null : prev));
       setMobilePlanningOverlay((prev) => (prev === 'poi' ? null : prev));
       setMobileNavOverlay((prev) => (prev === 'poi-mini' ? null : prev));
 
       try {
-        const res = await GlobalPoiCloudService.deleteGlobalPoi(poi, actor);
+        const res = isPrivatePoi(poi)
+          ? await PrivatePoiCloudService.deletePrivatePoi(poi, actor)
+          : await GlobalPoiCloudService.deleteGlobalPoi(poi, actor);
         setUndoDeletedPoi(snapshot);
         setToastMessage(
           res.queuedOffline
@@ -3789,8 +3755,8 @@ export const App: React.FC = () => {
 
   const handleUndoDeletePoi = useCallback(async () => {
     if (!undoDeletedPoi) return;
-    if (!canUserDeletePoi(currentUser) || !currentUser) {
-      showToast('שחזור נקודות מחוקות מותר למשתמשים מורשים בלבד.');
+    if (!canUserDeletePoi(currentUser, undoDeletedPoi.poi) || !currentUser) {
+      showToast('שחזור נקודות מחוקות מותר לבעלים או למשתמשים מורשים בלבד.');
       return;
     }
     const actor = currentUser;
@@ -3800,7 +3766,9 @@ export const App: React.FC = () => {
     setPois((prev) => (prev.some((p) => p.id === restored.id) ? prev : [...prev, restored]));
     setSelectedPoi(restored);
     try {
-      const res = await GlobalPoiCloudService.restoreDeletedGlobalPoi(snapshot, actor);
+      const res = isPrivatePoi(snapshot.poi)
+        ? await PrivatePoiCloudService.restoreDeletedPrivatePoi(snapshot, actor)
+        : await GlobalPoiCloudService.restoreDeletedGlobalPoi(snapshot, actor);
       showToast(
         res.queuedOffline
           ? `הנקודה "${restored.nameHe || restored.name}" שוחזרה מקומית ותסונכרן כשיתאפשר`
@@ -3813,6 +3781,85 @@ export const App: React.FC = () => {
       showToast(err instanceof Error ? err.message : 'שחזור הנקודה נדחה בשרת');
     }
   }, [currentUser, undoDeletedPoi, showToast]);
+
+  const shareModalPoi = useMemo(() => {
+    if (!shareModalPoiId) return null;
+    return (
+      pois.find((p) => p.id === shareModalPoiId) ||
+      (selectedPoi?.id === shareModalPoiId ? selectedPoi : null)
+    );
+  }, [shareModalPoiId, pois, selectedPoi]);
+
+  const handleOpenSharePoiModal = useCallback(
+    (poi: PoiRecord) => {
+      if (!isOwnedPrivatePoi(poi, currentUser)) {
+        showToast('ניתן לשתף רק נקודה פרטית שבבעלותך');
+        return;
+      }
+      setShareModalPoiId(poi.id);
+    },
+    [currentUser, showToast]
+  );
+
+  const handleUpdatePoiSharing = useCallback(
+    async (poi: PoiRecord, nextRecipients: PoiShareRecipient[]) => {
+      if (!currentUser) {
+        return {
+          synced: false,
+          poi,
+          error: 'יש להתחבר לחשבון Google כדי לשתף נקודה',
+        };
+      }
+      const res = await PrivatePoiCloudService.updatePrivatePoiSharing(
+        poi,
+        nextRecipients,
+        currentUser
+      );
+      handlePoiUpdated(res.poi);
+      return res;
+    },
+    [currentUser, handlePoiUpdated]
+  );
+
+  const handlePromotePoiToGlobal = useCallback(
+    async (poi: PoiRecord) => {
+      if (!currentUser) {
+        showToast('יש להתחבר לחשבון Google כדי להפוך נקודה לגלובלית');
+        return;
+      }
+      try {
+        const res = await PrivatePoiCloudService.promotePrivatePoiToGlobal(poi, currentUser);
+        handlePoiUpdated(res.poi);
+        setShareModalPoiId((prev) => (prev === poi.id ? null : prev));
+        showToast(
+          res.queuedOffline
+            ? `הנקודה "${res.poi.nameHe}" הועברה מקומית למפה הגלובלית ותסונכרן בענן כשיתאפשר`
+            : `הנקודה "${res.poi.nameHe}" הפכה לגלובלית וגלויה לכולם!`
+        );
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'הפיכת הנקודה לגלובלית נכשלה');
+      }
+    },
+    [currentUser, handlePoiUpdated, showToast]
+  );
+
+  const handleDismissSharedPoi = useCallback(
+    async (poi: PoiRecord) => {
+      if (!currentUser) return;
+      try {
+        await PrivatePoiCloudService.dismissSharedPoi(poi, currentUser);
+        setPois((prev) => prev.filter((p) => p.id !== poi.id));
+        setSelectedPoi((prev) => (prev?.id === poi.id ? null : prev));
+        setDesktopDrawer((prev) => (prev === 'poi' ? null : prev));
+        setMobilePlanningOverlay((prev) => (prev === 'poi' ? null : prev));
+        setMobileNavOverlay((prev) => (prev === 'poi-mini' ? null : prev));
+        showToast(`הנקודה "${poi.nameHe || poi.name}" הוסרה מהמפה שלך`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'הסרת הנקודה המשותפת נכשלה');
+      }
+    },
+    [currentUser, showToast]
+  );
 
   const handleSelectRoute = useCallback(
     async (route: SavedRouteRecord | null, options?: { flyTo?: boolean }) => {
@@ -5329,7 +5376,7 @@ export const App: React.FC = () => {
                       theme={theme}
                       referenceCoord={referenceCoord}
                       currentUser={currentUser}
-                      canDeletePoi={canDeletePoi}
+                      canDeletePoi={canUserDeletePoi(currentUser, selectedPoi)}
                       isAuthBusy={isAuthBusy}
                       onSignInGoogle={handleSignInGoogle}
                       embedded
@@ -5340,7 +5387,10 @@ export const App: React.FC = () => {
                       onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                       onNavigateToPoi={handleNavigateToPoi}
                       onPoiUpdated={handlePoiUpdated}
-                      onDeletePoi={canDeletePoi ? handleDeletePoi : undefined}
+                      onDeletePoi={canUserDeletePoi(currentUser, selectedPoi) ? handleDeletePoi : undefined}
+                      onSharePoi={handleOpenSharePoiModal}
+                      onPromoteToGlobal={handlePromotePoiToGlobal}
+                      onDismissSharedPoi={handleDismissSharedPoi}
                       onNotify={showToast}
                     />
                   )}
@@ -5455,6 +5505,8 @@ export const App: React.FC = () => {
                       theme={theme}
                       centerCoords={cursorCoords}
                       currentUser={currentUser}
+                      isOnline={isOnline}
+                      firebaseAvailable={AuthService.isAvailable()}
                       isAuthBusy={isAuthBusy}
                       onSignInGoogle={handleSignInGoogle}
                       onClose={() => setDesktopDrawer(null)}
@@ -5462,10 +5514,15 @@ export const App: React.FC = () => {
                         setPois((prev) => [...prev, created]);
                         setSelectedPoi(created);
                         setDesktopDrawer('poi');
+                        const sharedCount = created.sharedWith?.length || 0;
                         showToast(
                           meta?.queuedOffline
                             ? `הנקודה "${created.nameHe}" נשמרה מקומית ותסונכרן בענן כשיתאפשר`
-                            : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
+                            : created.visibility === 'private'
+                              ? sharedCount > 0
+                                ? `הנקודה "${created.nameHe}" נשמרה כפרטית ושותפה עם ${sharedCount} משתמשים`
+                                : `הנקודה "${created.nameHe}" נשמרה כפרטית (גלויה רק לך)`
+                              : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
                         );
                       }}
                     />
@@ -5615,7 +5672,7 @@ export const App: React.FC = () => {
                   }`}
                 >
                   <Plus className="w-4 h-4 text-sky-500" />
-                  <span>דווח נקודה</span>
+                  <span>הוסף נקודה</span>
                 </button>
                 {currentUser && (
                   <button
@@ -6144,7 +6201,7 @@ export const App: React.FC = () => {
                   theme={theme}
                   referenceCoord={referenceCoord}
                   currentUser={currentUser}
-                  canDeletePoi={canDeletePoi}
+                  canDeletePoi={canUserDeletePoi(currentUser, selectedPoi)}
                   isAuthBusy={isAuthBusy}
                   onSignInGoogle={handleSignInGoogle}
                   embedded
@@ -6157,7 +6214,10 @@ export const App: React.FC = () => {
                   onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
                   onNavigateToPoi={handleNavigateToPoi}
                   onPoiUpdated={handlePoiUpdated}
-                  onDeletePoi={canDeletePoi ? handleDeletePoi : undefined}
+                  onDeletePoi={canUserDeletePoi(currentUser, selectedPoi) ? handleDeletePoi : undefined}
+                  onSharePoi={handleOpenSharePoiModal}
+                  onPromoteToGlobal={handlePromotePoiToGlobal}
+                  onDismissSharedPoi={handleDismissSharedPoi}
                   onNotify={showToast}
                 />
               </div>
@@ -6190,6 +6250,8 @@ export const App: React.FC = () => {
                   theme={theme}
                   centerCoords={cursorCoords}
                   currentUser={currentUser}
+                  isOnline={isOnline}
+                  firebaseAvailable={AuthService.isAvailable()}
                   isAuthBusy={isAuthBusy}
                   onSignInGoogle={handleSignInGoogle}
                   onClose={() => setMobilePlanningOverlay(null)}
@@ -6197,10 +6259,15 @@ export const App: React.FC = () => {
                     setPois((prev) => [...prev, created]);
                     setSelectedPoi(created);
                     setMobilePlanningOverlay('poi');
+                    const sharedCount = created.sharedWith?.length || 0;
                     showToast(
                       meta?.queuedOffline
                         ? `הנקודה "${created.nameHe}" נשמרה מקומית ותסונכרן בענן כשיתאפשר`
-                        : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
+                        : created.visibility === 'private'
+                          ? sharedCount > 0
+                            ? `הנקודה "${created.nameHe}" נשמרה כפרטית ושותפה עם ${sharedCount} משתמשים`
+                            : `הנקודה "${created.nameHe}" נשמרה כפרטית (גלויה רק לך)`
+                          : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
                     );
                   }}
                 />
@@ -6548,6 +6615,8 @@ export const App: React.FC = () => {
                 theme={theme}
                 centerCoords={cursorCoords}
                 currentUser={currentUser}
+                isOnline={isOnline}
+                firebaseAvailable={AuthService.isAvailable()}
                 isAuthBusy={isAuthBusy}
                 onSignInGoogle={handleSignInGoogle}
                 onClose={() => setMobileNavOverlay(null)}
@@ -6555,10 +6624,15 @@ export const App: React.FC = () => {
                   setPois((prev) => [...prev, created]);
                   setSelectedPoi(created);
                   setMobileNavOverlay('poi-mini');
+                  const sharedCount = created.sharedWith?.length || 0;
                   showToast(
                     meta?.queuedOffline
                       ? `הנקודה "${created.nameHe}" נשמרה מקומית ותסונכרן בענן כשיתאפשר`
-                      : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
+                      : created.visibility === 'private'
+                        ? sharedCount > 0
+                          ? `הנקודה "${created.nameHe}" נשמרה כפרטית ושותפה עם ${sharedCount} משתמשים`
+                          : `הנקודה "${created.nameHe}" נשמרה כפרטית (גלויה רק לך)`
+                        : `הנקודה "${created.nameHe}" נשמרה במפה הגלובלית!`
                   );
                 }}
               />
@@ -6569,7 +6643,7 @@ export const App: React.FC = () => {
               theme={theme}
               referenceCoord={referenceCoord}
               currentUser={currentUser}
-              canDeletePoi={canDeletePoi}
+              canDeletePoi={canUserDeletePoi(currentUser, selectedPoi)}
               isAuthBusy={isAuthBusy}
               onSignInGoogle={handleSignInGoogle}
               compactNavigating
@@ -6583,7 +6657,10 @@ export const App: React.FC = () => {
               }}
               onFlyTo={(lon, lat) => handleFlyTo(lon, lat, 15.2)}
               onPoiUpdated={handlePoiUpdated}
-              onDeletePoi={canDeletePoi ? handleDeletePoi : undefined}
+              onDeletePoi={canUserDeletePoi(currentUser, selectedPoi) ? handleDeletePoi : undefined}
+              onSharePoi={handleOpenSharePoiModal}
+              onPromoteToGlobal={handlePromotePoiToGlobal}
+              onDismissSharedPoi={handleDismissSharedPoi}
               onNotify={showToast}
             />
           ) : (
@@ -6699,6 +6776,21 @@ export const App: React.FC = () => {
           onSignInGoogle={handleSignInGoogle}
           onUpdateRecipients={handleUpdateRouteSharing}
           onClose={() => setShareModalRouteId(null)}
+        />
+      )}
+
+      {/* Private POI Sharing Modal (Gmail / Registered Users) */}
+      {shareModalPoi && (
+        <SharePoiModal
+          poi={shareModalPoi}
+          theme={theme}
+          currentUser={currentUser}
+          isOnline={isOnline}
+          firebaseAvailable={AuthService.isAvailable()}
+          isAuthBusy={isAuthBusy}
+          onSignInGoogle={handleSignInGoogle}
+          onUpdateRecipients={handleUpdatePoiSharing}
+          onClose={() => setShareModalPoiId(null)}
         />
       )}
     </div>

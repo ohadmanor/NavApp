@@ -14,11 +14,22 @@ import {
   RotateCcw,
   Lock,
   LogIn,
+  Globe,
+  Share2,
+  Users,
+  EyeOff,
 } from 'lucide-react';
 import { db, type PoiCategory, type PoiRecord } from '../../core/db/NavDatabase';
 import type { NavUser } from '../../core/firebase/AuthService';
 import { GlobalPoiCloudService } from '../../core/firebase/GlobalPoiCloudService';
-import { canUserAddOrEditPoi, canUserDeletePoi } from '../../core/pois/poiPermissions';
+import { PrivatePoiCloudService } from '../../core/firebase/PrivatePoiCloudService';
+import {
+  canUserDeletePoi,
+  canUserEditPoiCategory,
+  isOwnedPrivatePoi,
+  isPrivatePoi,
+  isSharedWithMePoi,
+} from '../../core/pois/poiPermissions';
 import { PoiManager } from '../../core/pois/PoiManager';
 import {
   POI_CATEGORIES,
@@ -45,6 +56,9 @@ interface PoiInspectorSheetProps {
   onNavigateToPoi?: (poi: PoiRecord) => void;
   onPoiUpdated: (updated: PoiRecord) => void;
   onDeletePoi?: (poi: PoiRecord) => void | Promise<void>;
+  onSharePoi?: (poi: PoiRecord) => void;
+  onPromoteToGlobal?: (poi: PoiRecord) => void | Promise<void>;
+  onDismissSharedPoi?: (poi: PoiRecord) => void | Promise<void>;
   onNotify?: (msg: string) => void;
   embedded?: boolean;
   isExpanded?: boolean;
@@ -90,6 +104,9 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   onNavigateToPoi,
   onPoiUpdated,
   onDeletePoi,
+  onSharePoi,
+  onPromoteToGlobal,
+  onDismissSharedPoi,
   onNotify,
   embedded = false,
   isExpanded = true,
@@ -107,6 +124,9 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   const [isSavingCategory, setIsSavingCategory] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmPromote, setConfirmPromote] = useState(false);
+  const [isPromoting, setIsPromoting] = useState(false);
+  const [isDismissingShared, setIsDismissingShared] = useState(false);
 
   useEffect(() => {
     if (!poi) return;
@@ -115,6 +135,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
     setSampledDemEle(poi.ele);
     setIsEditingCategory(false);
     setConfirmDelete(false);
+    setConfirmPromote(false);
     setDraftCategory(poi.category);
     setDraftSubcategory(normalizeSubcategoryForCategory(poi.category, poi.subcategory));
 
@@ -122,15 +143,19 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
     ElevationService.getElevationAt(poi.lon, poi.lat, 12).then((ele) => {
       if (active && ele !== null) setSampledDemEle(ele);
     });
-    PoiManager.getOverride(poi.id)
-      .then((ov) => {
-        if (active) {
-          setHasCategoryOverride(Boolean(ov && !ov.deleted && ov.category));
-        }
-      })
-      .catch(() => {
-        if (active) setHasCategoryOverride(false);
-      });
+    if (isPrivatePoi(poi)) {
+      setHasCategoryOverride(false);
+    } else {
+      PoiManager.getOverride(poi.id)
+        .then((ov) => {
+          if (active) {
+            setHasCategoryOverride(Boolean(ov && !ov.deleted && ov.category));
+          }
+        })
+        .catch(() => {
+          if (active) setHasCategoryOverride(false);
+        });
+    }
     return () => {
       active = false;
     };
@@ -156,8 +181,12 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   );
   const milCoords = MilitaryGridService.toMilitaryCoords(poi.lon, poi.lat);
 
-  const canEditCategory = canUserAddOrEditPoi(currentUser);
-  const allowDelete = Boolean((canDeletePoi ?? canUserDeletePoi(currentUser)) && onDeletePoi);
+  const isPrivate = isPrivatePoi(poi);
+  const isOwnedPrivate = isOwnedPrivatePoi(poi, currentUser);
+  const isSharedWithMe = isSharedWithMePoi(poi, currentUser);
+  const sharedRecipientCount = poi.sharedWith?.length || 0;
+  const canEditCategory = canUserEditPoiCategory(currentUser, poi);
+  const allowDelete = Boolean((canDeletePoi ?? canUserDeletePoi(currentUser, poi)) && onDeletePoi);
 
   const handleCopyCoords = (text: string) => {
     navigator.clipboard?.writeText(text).catch(() => {});
@@ -182,7 +211,9 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   const handleSaveCategoryChange = async () => {
     if (isSavingCategory || !canEditCategory || !currentUser) return;
     setIsSavingCategory(true);
-    const prevOverride = await PoiManager.getOverride(poi.id).catch(() => undefined);
+    const prevOverride = isPrivate
+      ? undefined
+      : await PoiManager.getOverride(poi.id).catch(() => undefined);
     try {
       const updated = await PoiManager.updatePoiCategory(
         poi,
@@ -191,12 +222,10 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
         currentUser.uid
       );
       try {
-        const syncRes = await GlobalPoiCloudService.publishCategoryOverride(
-          poi,
-          updated,
-          currentUser
-        );
-        setHasCategoryOverride(!poi.id.startsWith('user-poi-'));
+        const syncRes = isPrivate
+          ? await PrivatePoiCloudService.publishPrivatePoi(updated, currentUser)
+          : await GlobalPoiCloudService.publishCategoryOverride(poi, updated, currentUser);
+        setHasCategoryOverride(!isPrivate && !poi.id.startsWith('user-poi-'));
         setIsEditingCategory(false);
         onPoiUpdated(updated);
         onNotify?.(
@@ -205,12 +234,14 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             : `הנקודה הועברה לקטגוריית ${POI_CATEGORY_SPECS[draftCategory].labelHe}`
         );
       } catch (err: any) {
-        if (prevOverride) {
-          await db.poiOverrides.put(prevOverride).catch(() => undefined);
-        } else {
-          await db.poiOverrides.delete(poi.id).catch(() => undefined);
+        if (!isPrivate) {
+          if (prevOverride) {
+            await db.poiOverrides.put(prevOverride).catch(() => undefined);
+          } else {
+            await db.poiOverrides.delete(poi.id).catch(() => undefined);
+          }
         }
-        if (poi.id.startsWith('user-poi-')) {
+        if (isPrivate || poi.id.startsWith('user-poi-')) {
           await db.pois.put(poi).catch(() => undefined);
         }
         onNotify?.(err?.message || 'עדכון הקטגוריה בשרת נכשל');
@@ -257,6 +288,27 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
     } finally {
       setIsDeleting(false);
       setConfirmDelete(false);
+    }
+  };
+
+  const handleConfirmPromote = async () => {
+    if (isPromoting || !isOwnedPrivate || !onPromoteToGlobal) return;
+    setIsPromoting(true);
+    try {
+      await onPromoteToGlobal(poi);
+      setConfirmPromote(false);
+    } finally {
+      setIsPromoting(false);
+    }
+  };
+
+  const handleDismissShared = async () => {
+    if (isDismissingShared || !isSharedWithMe || !onDismissSharedPoi) return;
+    setIsDismissingShared(true);
+    try {
+      await onDismissSharedPoi(poi);
+    } finally {
+      setIsDismissingShared(false);
     }
   };
 
@@ -309,6 +361,33 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
               <span className="opacity-60">•</span>
               <span>{symbolSpec.labelHe}</span>
             </div>
+            {isOwnedPrivate && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/15 border border-indigo-500/35 text-indigo-400">
+                {sharedRecipientCount > 0 ? (
+                  <>
+                    <Users className="w-3 h-3" />
+                    <span>פרטי משותף ({sharedRecipientCount})</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3 h-3" />
+                    <span>פרטי (רק אני)</span>
+                  </>
+                )}
+              </span>
+            )}
+            {isSharedWithMe && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 border border-sky-500/35 text-sky-400">
+                <Users className="w-3 h-3" />
+                <span>שותף ע״י {poi.sharedByName || poi.sharedByEmail || 'משתמש NavApp'}</span>
+              </span>
+            )}
+            {!isPrivate && poi.id.startsWith('user-poi-') && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 border border-emerald-500/35 text-emerald-500">
+                <Globe className="w-3 h-3" />
+                <span>גלובלי</span>
+              </span>
+            )}
             {hasCategoryOverride && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 border border-amber-500/35 text-amber-500">
                 עודכן ע״י המשתמש
@@ -496,7 +575,100 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             )}
           </div>
 
+          {/* Private POI Sharing & Global Promotion / Shared Attribution */}
+          {isOwnedPrivate && (
+            <div className={`pt-2.5 border-t space-y-2 ${t.divider}`}>
+              <div className="grid grid-cols-2 gap-2">
+                {onSharePoi && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmPromote(false);
+                      setConfirmDelete(false);
+                      onSharePoi(poi);
+                    }}
+                    className="py-2 px-2.5 rounded-xl border border-indigo-500/35 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>
+                      שתף נקודה{sharedRecipientCount > 0 ? ` (${sharedRecipientCount})` : ''}
+                    </span>
+                  </button>
+                )}
+                {onPromoteToGlobal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmPromote((prev) => !prev);
+                      setConfirmDelete(false);
+                      setIsEditingCategory(false);
+                    }}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                      confirmPromote
+                        ? 'border-emerald-500 bg-emerald-500/20 text-emerald-500'
+                        : 'border-emerald-500/35 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>הפוך לגלובלי</span>
+                  </button>
+                )}
+              </div>
+
+              {confirmPromote && onPromoteToGlobal && (
+                <div className="p-2.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 space-y-2">
+                  <p className="text-xs font-semibold leading-relaxed">
+                    להפוך נקודה זו לגלובלית? כל משתמשי NavApp יוכלו לראות אותה במפה.
+                  </p>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmPromote(false)}
+                      className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.pillBtn}`}
+                    >
+                      ביטול
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isPromoting}
+                      onClick={handleConfirmPromote}
+                      className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold"
+                    >
+                      {isPromoting ? 'מעדכן...' : 'אשר הפיכה לגלובלי'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {isSharedWithMe && (
+            <div className={`pt-2.5 border-t space-y-2 ${t.divider}`}>
+              <div className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${t.subCard}`}>
+                <span className={t.muted}>
+                  נקודה זו שותפה איתך לקריאה בלבד ע״י{' '}
+                  <strong className="text-sky-400">
+                    {poi.sharedByName || poi.sharedByEmail || 'משתמש NavApp'}
+                  </strong>
+                  .
+                </span>
+                {onDismissSharedPoi && (
+                  <button
+                    type="button"
+                    disabled={isDismissingShared}
+                    onClick={handleDismissShared}
+                    className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold inline-flex items-center gap-1 shrink-0 text-amber-500 hover:bg-amber-500/10 disabled:opacity-50 ${t.pillBtn}`}
+                  >
+                    <EyeOff className="w-3.5 h-3.5" />
+                    <span>{isDismissingShared ? 'מסיר...' : 'הסר מהמפה שלי'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Manage POI: Change Category/Symbol & Delete */}
+          {!isSharedWithMe && (
           <div className={`pt-2.5 border-t space-y-2.5 ${t.divider}`}>
             <div className="flex items-center gap-2">
               <button
@@ -504,6 +676,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
                 onClick={() => {
                   setIsEditingCategory((prev) => !prev);
                   setConfirmDelete(false);
+                  setConfirmPromote(false);
                 }}
                 className={`flex-1 py-2 px-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
                   isEditingCategory
@@ -525,6 +698,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
                   onClick={() => {
                     setConfirmDelete(true);
                     setIsEditingCategory(false);
+                    setConfirmPromote(false);
                   }}
                   className="py-2 px-3 rounded-xl border border-rose-500/35 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shrink-0"
                 >
@@ -638,7 +812,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             {confirmDelete && allowDelete && (
               <div className="p-2.5 rounded-xl border border-rose-500/40 bg-rose-500/10 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-rose-500">
-                  להסיר את הנקודה מהמפה?
+                  {isOwnedPrivate ? 'למחוק את הנקודה הפרטית?' : 'להסיר את הנקודה מהמפה?'}
                 </span>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
@@ -660,6 +834,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
               </div>
             )}
           </div>
+          )}
         </>
       )}
     </div>

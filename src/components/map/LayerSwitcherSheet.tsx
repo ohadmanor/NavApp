@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X } from 'lucide-react';
+import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X, Lock } from 'lucide-react';
 import {
   countActivePoiCategories,
   enableAllPoiVisibility,
@@ -296,6 +296,24 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeVisibility({
+                      ...visibility,
+                      poiPrivate: visibility.poiPrivate === false ? true : false,
+                    })
+                  }
+                  aria-pressed={visibility.pois && visibility.poiPrivate !== false}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                    visibility.pois && visibility.poiPrivate !== false
+                      ? 'border-indigo-500 bg-indigo-500/15 text-indigo-400'
+                      : `${t.subCard} opacity-55`
+                  }`}
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>פרטיות ומשותפות</span>
+                </button>
               </div>
             </div>
           )}
