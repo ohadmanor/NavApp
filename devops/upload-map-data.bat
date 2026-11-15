@@ -8,7 +8,7 @@ echo ===========================================================================
 echo   NavApp - Map Data Storage Uploader (Dedicated Data Site)
 echo   Target: https://navapp-israel-topo-data.web.app
 echo   Files:  Israel.dem.pmtiles, Israel.osm.pmtiles,
-echo           Israel.pois.geojson, Israel.offroad.pois.geojson, Israel.search.idx
+echo           Israel.pois.geojson, Israel.search.idx
 echo   Working Directory: %CD%
 echo ============================================================================
 

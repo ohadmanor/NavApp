@@ -4,6 +4,10 @@ import { REMOTE_DATA_ORIGIN } from '../dataUrls';
 import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
 import type { PoiCategory } from '../db/NavDatabase';
 import { POI_CATEGORY_ZOOM_RULES } from '../pois/poiTaxonomy';
+import { applyNmsStyleEnhancements, type MapStyleId } from './nmsStyleEnhancer';
+
+export type { MapStyleId };
+export const DEFAULT_MAP_STYLE: MapStyleId = 'nms';
 
 export interface OutdoorLayerVisibility {
   googleSatellite: boolean;
@@ -175,6 +179,7 @@ export interface BuildIsraelStyleParams {
   tacticalGridProtocolUrl?: string | null;
   visibility: OutdoorLayerVisibility;
   theme?: 'topo-day' | 'topo-dark';
+  mapStyle?: MapStyleId;
 }
 
 const DEFAULT_TRAIL_BROWN = '#AA8166';
@@ -795,7 +800,8 @@ function getProportionalLinePaintUpdates(
 
 function getDynamicPaintUpdates(
   layerId: string,
-  visibility: OutdoorLayerVisibility
+  visibility: OutdoorLayerVisibility,
+  options?: { isNms?: boolean; isDark?: boolean }
 ): Record<string, any> | null {
   if (PATH_REGULAR_LAYER_IDS.has(layerId)) {
     return {
@@ -866,33 +872,69 @@ function getDynamicPaintUpdates(
     };
   }
   if (ROAD_CASING_GRAY_IDS.has(layerId)) {
+    const defaultCasing = options?.isNms
+      ? options.isDark
+        ? layerId.includes('secondary')
+          ? '#403828'
+          : '#1E293B'
+        : layerId.includes('minor')
+          ? '#8E8A82'
+          : '#78716C'
+      : '#808080';
     return {
-      'line-color': visibility.hikingTrails ? buildSpniColorMatchExpr('primary', '#808080') : '#808080',
+      'line-color': visibility.hikingTrails
+        ? buildSpniColorMatchExpr('primary', defaultCasing)
+        : defaultCasing,
     };
   }
   if (ROAD_CASING_TUNNEL_IDS.has(layerId)) {
+    const defaultTunnelCasing = options?.isNms
+      ? options.isDark
+        ? '#1E293B'
+        : '#78716C'
+      : '#E0E0E0';
     return {
-      'line-color': visibility.hikingTrails ? buildSpniColorMatchExpr('primary', '#E0E0E0') : '#E0E0E0',
+      'line-color': visibility.hikingTrails
+        ? buildSpniColorMatchExpr('primary', defaultTunnelCasing)
+        : defaultTunnelCasing,
     };
   }
   if (ROAD_CASING_ZOOM_GUARDED_IDS.has(layerId)) {
+    const defaultHighwayCasing = options?.isNms
+      ? options.isDark
+        ? layerId === 'casing-trunk'
+          ? '#5C340E'
+          : '#54400E'
+        : layerId === 'casing-trunk'
+          ? '#9A5512'
+          : '#8F6A10'
+      : '#808080';
     return {
       'line-color': visibility.hikingTrails
-        ? ['step', ['zoom'], '#808080', 11, buildSpniColorMatchExpr('primary', '#808080')]
-        : '#808080',
+        ? ['step', ['zoom'], defaultHighwayCasing, 11, buildSpniColorMatchExpr('primary', defaultHighwayCasing)]
+        : defaultHighwayCasing,
     };
   }
   if (layerId === 'name-trail-local') {
     const rawPaint = rawLayerById.get('name-trail-local')?.paint || {};
+    const halo = options?.isNms ? (options.isDark ? '#0B1015' : '#FFFFFF') : 'white';
     return {
-      'text-color': visibility.hikingTrails ? structuredClone(rawPaint['text-color']) : '#404040',
-      'text-halo-color': visibility.hikingTrails
-        ? structuredClone(rawPaint['text-halo-color'])
-        : 'white',
+      'text-color': visibility.hikingTrails
+        ? structuredClone(rawPaint['text-color'])
+        : options?.isNms && options.isDark
+          ? '#CBD5E1'
+          : '#404040',
+      'text-halo-color': options?.isNms
+        ? halo
+        : visibility.hikingTrails
+          ? structuredClone(rawPaint['text-halo-color'])
+          : 'white',
     };
   }
   if (layerId === 'name-trail-regional') {
     const rawPaint = rawLayerById.get('name-trail-regional')?.paint || {};
+    const halo = options?.isNms ? (options.isDark ? '#0B1015' : '#FFFFFF') : 'white';
+    const neutralColor = options?.isNms && options.isDark ? '#CBD5E1' : '#404040';
     return {
       'text-color': visibility.hikingTrails
         ? structuredClone(rawPaint['text-color'])
@@ -906,12 +948,14 @@ function getDynamicPaintUpdates(
               'green:green:white_right:blue_stripe',
               'yellow:blue:yellow_stripe',
             ],
-            '#404040',
-            ['match', ['coalesce', ['get', 'name'], ''], 'שביל ואדיות חיפה', '#404040', 'transparent'],
+            neutralColor,
+            ['match', ['coalesce', ['get', 'name'], ''], 'שביל ואדיות חיפה', neutralColor, 'transparent'],
           ],
-      'text-halo-color': visibility.hikingTrails
-        ? structuredClone(rawPaint['text-halo-color'])
-        : 'white',
+      'text-halo-color': options?.isNms
+        ? halo
+        : visibility.hikingTrails
+          ? structuredClone(rawPaint['text-halo-color'])
+          : 'white',
     };
   }
   return null;
@@ -1293,6 +1337,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     tacticalGridProtocolUrl = 'tactical-grid://{z}/{x}/{y}',
     visibility,
     theme = 'topo-day',
+    mapStyle = DEFAULT_MAP_STYLE,
   } = params;
 
   const isDark = theme === 'topo-dark';
@@ -1583,9 +1628,16 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     }
   }
 
+  if (mapStyle === 'nms') {
+    applyNmsStyleEnhancements(layers, theme, visibility);
+  }
+
   const style: StyleSpecification = {
     version: 8,
-    name: 'Israel Hiking Map (Official IHM Vector Style + 10m Contours + Offline Sprites)',
+    name:
+      mapStyle === 'nms'
+        ? 'NavApp Map Style (NMS) — Enhanced Topographic Vector Style'
+        : 'Israel Hiking Map (Official IHM Vector Style + 10m Contours + Offline Sprites)',
     sprite: `${origin}/assets/sprites/sprite`,
     sky: buildOutdoorSkySpec(theme),
     sources,
@@ -1685,6 +1737,11 @@ export function applyLayerVisibilityToMap(
   const style = map.getStyle?.();
   if (!style || !Array.isArray(style.layers)) return;
 
+  const isNmsStyle = typeof style.name === 'string' && style.name.includes('NMS');
+  const bgLayerForTheme = style.layers.find((l: any) => l.id === 'background') as any;
+  const bgHex = String(bgLayerForTheme?.paint?.['background-color'] || '').toLowerCase();
+  const isDarkStyle = bgHex === '#0b1015';
+
   for (const layer of style.layers) {
     if (!map.getLayer(layer.id)) continue;
     const visToggle = getVisibilityForIhmLayer(layer.id, visibility);
@@ -1692,7 +1749,10 @@ export function applyLayerVisibilityToMap(
       map.setLayoutProperty(layer.id, 'visibility', visToggle ? 'visible' : 'none');
     }
     if (typeof map.setPaintProperty === 'function') {
-      const paintUpdates = getDynamicPaintUpdates(layer.id, visibility);
+      const paintUpdates = getDynamicPaintUpdates(layer.id, visibility, {
+        isNms: isNmsStyle,
+        isDark: isDarkStyle,
+      });
       if (paintUpdates) {
         for (const [prop, val] of Object.entries(paintUpdates)) {
           map.setPaintProperty(layer.id, prop, val);

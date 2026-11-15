@@ -88,7 +88,6 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     dem?: CloudEntryStatus;
     osm?: CloudEntryStatus;
     pois?: CloudEntryStatus;
-    offroadPois?: CloudEntryStatus;
     searchIdx?: CloudEntryStatus;
   }>({});
   const [isCheckingCloud, setIsCheckingCloud] = useState(false);
@@ -97,18 +96,16 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   const osmFileInputRef = useRef<HTMLInputElement>(null);
   const demFileInputRef = useRef<HTMLInputElement>(null);
   const poisFileInputRef = useRef<HTMLInputElement>(null);
-  const offroadFileInputRef = useRef<HTMLInputElement>(null);
   const searchIdxFileInputRef = useRef<HTMLInputElement>(null);
   const communityFileInputRef = useRef<HTMLInputElement>(null);
 
   const checkCloudStatus = async () => {
     setIsCheckingCloud(true);
     try {
-      const [demRemote, osmRemote, poisRemote, offroadRemote, searchRemote] = await Promise.all([
+      const [demRemote, osmRemote, poisRemote, searchRemote] = await Promise.all([
         pmtilesRegistry.probeRemote('Israel.dem.pmtiles'),
         pmtilesRegistry.probeRemote('Israel.osm.pmtiles'),
         probeRemoteDataFile('Israel.pois.geojson', { preferHead: true }),
-        probeRemoteDataFile('Israel.offroad.pois.geojson', { preferHead: true }),
         probeRemoteDataFile('Israel.search.idx', { preferHead: true }),
       ]);
       const toStatus = (
@@ -118,7 +115,6 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
         dem: toStatus(demRemote),
         osm: toStatus(osmRemote),
         pois: toStatus(poisRemote),
-        offroadPois: toStatus(offroadRemote),
         searchIdx: toStatus(searchRemote),
       });
     } catch {
@@ -847,7 +843,6 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 { label: 'Israel.dem.pmtiles', st: cloudStatus.dem },
                 { label: 'Israel.osm.pmtiles', st: cloudStatus.osm },
                 { label: 'Israel.pois.geojson', st: cloudStatus.pois },
-                { label: 'Israel.offroad.pois.geojson', st: cloudStatus.offroadPois },
                 { label: 'Israel.search.idx', st: cloudStatus.searchIdx },
               ] as const).map((row) => (
                 <div key={row.label} className="flex items-center justify-between gap-2">
@@ -924,24 +919,6 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               >
                 <Upload className="w-4 h-4 text-amber-500" />
                 <span>החלף Israel.pois.geojson</span>
-              </button>
-
-              <input
-                id="replace-offroad-pois-geojson-file"
-                name="replaceOffroadPoisGeojsonFile"
-                ref={offroadFileInputRef}
-                type="file"
-                accept=".geojson,.json"
-                onChange={(e) => void handleReplaceLocalDataFile('Israel.offroad.pois.geojson', e)}
-                className="hidden"
-              />
-              <button
-                disabled={isBusy}
-                onClick={() => offroadFileInputRef.current?.click()}
-                className={`py-2 px-3 rounded-xl border font-semibold flex items-center justify-center gap-1.5 ${t.pillBtn}`}
-              >
-                <Upload className="w-4 h-4 text-amber-500" />
-                <span>החלף Israel.offroad.pois.geojson</span>
               </button>
 
               <input

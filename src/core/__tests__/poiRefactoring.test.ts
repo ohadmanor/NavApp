@@ -511,14 +511,10 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
     }
   });
 
-  it('audits data/ Israel.pois.geojson and Israel.offroad.pois.geojson for zero legacy subcategories and valid exclusive symbolIds (and ensures public/data/ is not bundled)', () => {
+  it('audits data/ Israel.pois.geojson (OSM + Off-Road, single file) for zero legacy subcategories and valid exclusive symbol resolution (and ensures public/data/ is not bundled)', () => {
     expect(fs.existsSync('public/data/Israel.pois.geojson')).toBe(false);
-    expect(fs.existsSync('public/data/Israel.offroad.pois.geojson')).toBe(false);
 
-    for (const dataRel of [
-      'data/Israel.pois.geojson',
-      'data/Israel.offroad.pois.geojson',
-    ]) {
+    for (const dataRel of ['data/Israel.pois.geojson']) {
       if (!fs.existsSync(dataRel)) continue;
       const rawData = fs.readFileSync(dataRel, 'utf-8');
 
@@ -530,11 +526,11 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
         expect(POI_CATEGORIES).toContain(p.category);
         expect(p.subcategory).not.toBe('offroad_poi');
         expect(p.subcategory).not.toBe('offroad_photo');
-        expect(p.symbolId).toBeDefined();
-        const spec = POI_SYMBOL_BY_ID[p.symbolId as keyof typeof POI_SYMBOL_BY_ID];
+        const symbolId = resolvePoiSymbolId(p.category, p.subcategory);
+        const spec = POI_SYMBOL_BY_ID[symbolId as keyof typeof POI_SYMBOL_BY_ID];
         expect(spec).toBeDefined();
         expect(spec.category).toBe(p.category);
-        expect(resolvePoiSymbolId(p.category, p.subcategory)).toBe(p.symbolId);
+        if (p.symbolId) expect(symbolId).toBe(p.symbolId);
       }
     }
   }, 20000);
@@ -548,13 +544,23 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
       (globalThis as any).window = { location: { origin: 'http://localhost:5173', hostname: 'localhost' } };
       globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes('Israel.offroad.pois.geojson')) {
-          return {
-            ok: true,
-            json: async () => ({
-              type: 'FeatureCollection',
-              metadata: { source: 'Off-Road.io' },
-              features: [
+        return {
+          ok: true,
+          json: async () => ({
+            type: 'FeatureCollection',
+            features: [
+              {
+                type: 'Feature',
+                id: 'il-poi-ein-aqev',
+                geometry: { type: 'Point', coordinates: [34.8134, 30.8281] },
+                properties: {
+                  id: 'il-poi-ein-aqev',
+                  nameHe: 'עין עקב',
+                  category: 'water',
+                  subcategory: 'spring',
+                  priority: 100,
+                },
+              },
                 {
                   type: 'Feature',
                   id: 'or-dup-ein-aqev',
@@ -579,27 +585,6 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
                     priority: 230,
                   },
                 },
-              ],
-            }),
-          } as any;
-        }
-        return {
-          ok: true,
-          json: async () => ({
-            type: 'FeatureCollection',
-            features: [
-              {
-                type: 'Feature',
-                id: 'il-poi-ein-aqev',
-                geometry: { type: 'Point', coordinates: [34.8134, 30.8281] },
-                properties: {
-                  id: 'il-poi-ein-aqev',
-                  nameHe: 'עין עקב',
-                  category: 'water',
-                  subcategory: 'spring',
-                  priority: 100,
-                },
-              },
             ],
           }),
         } as any;
@@ -727,9 +712,9 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
       cameraUpdatedAt: 0,
       config: {
         theme: 'topo-day',
+        mapStyle: 'ihm',
         visibility: { ...DEFAULT_LAYER_VISIBILITY },
         navOrientation: 'heading-up',
-        showCenterCrosshair: false,
         planningMode: '4x4',
         userIcon: { icon: BUILT_IN_USER_ICONS[0], accentColor: '#0ea5e9' },
       },

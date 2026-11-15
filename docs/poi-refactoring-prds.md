@@ -88,7 +88,7 @@ Inspection of the bundled datasets reveals significant misclassification caused 
 ### 2.2 Goals & Scope
 1. Build a unified, deterministic, **text-integrated classifier** (`src/core/pois/poiClassifier.ts`) shared identically by offline data scripts and runtime GPX/KML/GeoJSON/TWL imports.
 2. Eliminate the legacy generic `offroad_poi` and `offroad_photo` catch-all subcategories by reclassifying every POI into its true category and exclusive subcategory using integrated signal analysis across **all text & metadata fields**.
-3. Re-process both [Israel.offroad.pois.geojson](../data/Israel.offroad.pois.geojson) and [Israel.pois.geojson](../data/Israel.pois.geojson) (syncing `data/` and `public/data/`), produce a verifiable migration audit report, and embed the classifier in [fetch-israel-pois.mjs](../devops/fetch-israel-pois.mjs) and [convert-offroad-pois.mjs](../devops/convert-offroad-pois.mjs).
+3. Re-process both [Israel.offroad.pois.geojson](../data/Israel.offroad.pois.geojson) and [Israel.pois.geojson](../data/Israel.pois.geojson) (in `data/`), produce a verifiable migration audit report, and embed the classifier in [fetch-israel-pois.mjs](../devops/fetch-israel-pois.mjs) and [convert-offroad-pois.mjs](../devops/convert-offroad-pois.mjs).
 
 ### 2.3 Text-Integrated Classification Design
 

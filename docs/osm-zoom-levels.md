@@ -1,8 +1,8 @@
 # GIS OSM Objects: PMTiles vs. Style Zoom Levels
 
 This document provides a comprehensive mapping of GIS OpenStreetMap (OSM) objects within the application, comparing:
-1. **PMTiles Zoom Level**: The zoom level at which the feature exists inside [`Israel.osm.pmtiles`](file:///c:/Develop/github/NavApp/data/Israel.osm.pmtiles).
-2. **Style Zoom Level**: The `minzoom` defined in the MapLibre style sheet ([`navappLayer.json`](file:///c:/Develop/github/NavApp/src/core/style/navappLayer.json) / [`israelOutdoorStyle.ts`](file:///c:/Develop/github/NavApp/src/core/style/israelOutdoorStyle.ts)).
+1. **PMTiles Zoom Level**: The zoom level at which the feature exists inside [`Israel.osm.pmtiles`](../data/Israel.osm.pmtiles).
+2. **Style Zoom Level**: The `minzoom` defined in the MapLibre style sheet ([`navappLayer.json`](../src/core/style/navappLayer.json) / [`israelOutdoorStyle.ts`](../src/core/style/israelOutdoorStyle.ts)).
 3. **Effective Rendering Zoom Level**: The actual zoom level at which MapLibre GL JS renders the object on the map (computed as $\max(\text{PMTiles Zoom}, \text{Style Zoom})$).
 
 ---

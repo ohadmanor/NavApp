@@ -1,19 +1,29 @@
 import React, { useState } from 'react';
-import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X, Lock } from 'lucide-react';
+import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X, Lock, Palette, MapPin } from 'lucide-react';
 import {
   countActivePoiCategories,
   enableAllPoiVisibility,
   isMasterPoiActive,
   toggleMasterPoiVisibility,
   togglePoiCategoryVisibility,
+  type MapStyleId,
   type OutdoorLayerVisibility,
   type PoiLayerKey,
 } from '../../core/style/israelOutdoorStyle';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 import { getAppVersion } from '../../core/appVersion';
 import { PoiCategoryIcon } from '../pois/PoiCategoryIcon';
+import { MinimizeToggle } from '../ui/MinimizeToggle';
 import type { PoiCategory } from '../../core/db/NavDatabase';
 import { POI_CATEGORY_SPECS } from '../../core/pois/poiTaxonomy';
+
+export type LayerSheetSection = 'style' | 'layers' | 'pois';
+
+const SECTION_HEADERS: Record<LayerSheetSection, { title: string; Icon: React.ComponentType<{ className?: string }> }> = {
+  style: { title: 'סגנון מפה (3D / יום / לילה)', Icon: Palette },
+  layers: { title: 'שכבות מפה', Icon: Layers },
+  pois: { title: 'נקודות עניין (POI)', Icon: MapPin },
+};
 
 interface LayerSwitcherSheetProps {
   isOpen: boolean;
@@ -22,8 +32,12 @@ interface LayerSwitcherSheetProps {
   onChangeVisibility: (next: OutdoorLayerVisibility) => void;
   theme: MapTheme;
   onSelectTheme: (theme: MapTheme) => void;
+  mapStyle: MapStyleId;
+  onSelectMapStyle: (style: MapStyleId) => void;
   onToggle3D: () => void;
   embedded?: boolean;
+  /** Which part of the controls to show. Omit to show everything. */
+  section?: LayerSheetSection;
 }
 
 export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
@@ -33,14 +47,20 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
   onChangeVisibility,
   theme,
   onSelectTheme,
+  mapStyle,
+  onSelectMapStyle,
   onToggle3D,
   embedded = false,
+  section,
 }) => {
   const [showPoiSubCategories, setShowPoiSubCategories] = useState(true);
+  const [minimized, setMinimized] = useState(false);
 
   if (!isOpen && !embedded) return null;
 
   const t = getSurfaceTheme(theme);
+  const show = (name: LayerSheetSection) => !section || section === name;
+  const header = section ? SECTION_HEADERS[section] : { title: 'סוג מפה ושכבות טופוגרפיות', Icon: Layers };
 
   const toggle = (key: keyof OutdoorLayerVisibility) => {
     onChangeVisibility({
@@ -82,18 +102,27 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     <div dir="rtl" className="p-4 space-y-3.5 overflow-y-auto max-h-[65vh] md:max-h-[72vh]">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Layers className="w-4 h-4 text-emerald-500" />
-          <h3 className="text-sm font-bold">סוג מפה ושכבות טופוגרפיות</h3>
+          <header.Icon className="w-4 h-4 text-emerald-500" />
+          <h3 className="text-sm font-bold">{header.title}</h3>
         </div>
-        <button
-          onClick={onClose}
-          className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
-          title="סגור"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {!embedded && (
+            <MinimizeToggle minimized={minimized} onToggle={() => setMinimized((v) => !v)} theme={theme} />
+          )}
+          <button
+            onClick={onClose}
+            className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
+            title="סגור"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
+      <div className={!embedded && minimized ? 'hidden' : 'space-y-3.5'}>
+
+      {show('style') && (
+        <>
       {/* Visual Map Type Selector Cards */}
       <div className="grid grid-cols-3 gap-2">
         <button
@@ -140,6 +169,56 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
         </button>
       </div>
 
+      {/* Cartographic Style Selector: IHM (Classic) vs NMS (Enhanced) */}
+      <div className="space-y-1.5">
+        <div className={`text-xs font-bold ${t.muted}`}>סגנון מפה (Style)</div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onSelectMapStyle('ihm')}
+            aria-pressed={mapStyle === 'ihm'}
+            className={`px-3 py-2 rounded-xl border-2 text-right transition-all ${
+              mapStyle === 'ihm'
+                ? 'border-emerald-500 bg-emerald-500/10'
+                : t.subCard
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold tracking-wide">IHM</span>
+              <span className={`text-[10px] font-semibold ${t.muted}`}>קלאסי</span>
+            </div>
+            <span className={`text-[11px] block mt-0.5 ${t.muted}`}>
+              סגנון מקורי (Israel Hiking)
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectMapStyle('nms')}
+            aria-pressed={mapStyle === 'nms'}
+            className={`px-3 py-2 rounded-xl border-2 text-right transition-all ${
+              mapStyle === 'nms'
+                ? 'border-emerald-500 bg-emerald-500/10'
+                : t.subCard
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold tracking-wide">NMS</span>
+              <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                משופר
+              </span>
+            </div>
+            <span className={`text-[11px] block mt-0.5 ${t.muted}`}>
+              צבעים והיררכיית סמלים
+            </span>
+          </button>
+        </div>
+      </div>
+        </>
+      )}
+
+      {show('layers') && (
+        <>
       {/* Navigation & Terrain Toggle Switches */}
       <div className="space-y-1.5">
         <div className={`text-xs font-bold ${t.muted}`}>שכבות ניווט ושטח</div>
@@ -217,9 +296,13 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
           );
         })}
       </div>
+        </>
+      )}
 
+      {show('pois') && (
+        <>
       {/* Master POI Layer Switch + Category Sub-Toggles */}
-      <div className={`space-y-2 pt-2 border-t ${t.divider}`}>
+      <div className={`space-y-2 ${section ? '' : `pt-2 border-t ${t.divider}`}`}>
         <div className="flex items-center justify-between">
           <div className={`text-xs font-bold ${t.muted}`}>נקודות עניין במפה (POI)</div>
         </div>
@@ -319,8 +402,11 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
           )}
         </div>
       </div>
+        </>
+      )}
 
       {/* App Version Footer */}
+      {show('style') && (
       <div
         className={`pt-2.5 border-t flex items-center justify-between text-[11px] ${t.divider} ${t.muted}`}
       >
@@ -328,6 +414,8 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
         <span dir="ltr" className="font-mono font-semibold select-all" data-testid="app-version">
           {getAppVersion()}
         </span>
+      </div>
+      )}
       </div>
     </div>
   );
@@ -337,7 +425,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
   }
 
   return (
-    <div className={`fixed bottom-20 left-4 z-40 w-84 rounded-2xl border overflow-hidden ${t.panel}`}>
+    <div className={`fixed bottom-4 left-16 z-40 w-84 rounded-2xl border overflow-hidden ${t.panel}`}>
       {content}
     </div>
   );

@@ -643,7 +643,7 @@ export function buildPoiIconExpression(): any[] {
   ];
 }
 
-export function buildPoiIconSizeExpression(): any[] {
+export function buildPoiIconSizeExpression(variant: 'ihm' | 'nms' = 'ihm'): any[] {
   const stopForZoom = (zoomMult: number): any[] => {
     const expr: any[] = ['match', ['get', 'category']];
     for (const cat of POI_CATEGORIES) {
@@ -654,6 +654,24 @@ export function buildPoiIconSizeExpression(): any[] {
     expr.push(Number((zoomMult * 0.96).toFixed(3)));
     return expr;
   };
+
+  if (variant === 'nms') {
+    return [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      11.5,
+      stopForZoom(0.36),
+      13,
+      stopForZoom(0.46),
+      14,
+      stopForZoom(0.56),
+      15.5,
+      stopForZoom(0.68),
+      17.5,
+      stopForZoom(0.78),
+    ];
+  }
 
   return [
     'interpolate',

@@ -7,15 +7,14 @@
  *   - Israel.dem.pmtiles
  *   - Israel.osm.pmtiles
  *   - Israel.pois.geojson
- *   - Israel.offroad.pois.geojson
  *   - Israel.search.idx
  *
  * Features:
- *  - Accepts dragged-and-dropped / CLI file paths for ANY of the 5 data files.
+ *  - Accepts dragged-and-dropped / CLI file paths for ANY of the 4 data files.
  *  - Copies files from data/ into deploy_data/data/ (and rebuilds Israel.search.idx
  *    when Israel.osm.pmtiles is present and the index is missing or stale).
  *  - Safely preserves remote files: Firebase Hosting replaces the entire site on
- *    deploy, so any of the 5 files missing locally from deploy_data/data/ that still
+ *    deploy, so any of the 4 files missing locally from deploy_data/data/ that still
  *    exists on Firebase Hosting is downloaded into data/ + deploy_data/data/ first
  *    (unless --allow-delete is explicitly passed).
  */
@@ -40,23 +39,26 @@ import {
 function parseArgs(argv) {
   let allowDelete = false;
   let dryRun = false;
+  let allowReplaceDem = false;
   const inputPaths = [];
 
   for (const arg of argv) {
     if (arg === '--allow-delete') {
       allowDelete = true;
+    } else if (arg === '--replace-dem') {
+      allowReplaceDem = true;
     } else if (arg === '--dry-run') {
       dryRun = true;
     } else if (arg === '-h' || arg === '--help') {
       console.log(
-        'Usage: node devops/upload-map-data.mjs [file1 file2 ...] [--allow-delete] [--dry-run]'
+        'Usage: node devops/upload-map-data.mjs [file1 file2 ...] [--allow-delete] [--dry-run] [--replace-dem]'
       );
       process.exit(0);
     } else {
       inputPaths.push(arg);
     }
   }
-  return { allowDelete, dryRun, inputPaths };
+  return { allowDelete, dryRun, allowReplaceDem, inputPaths };
 }
 
 function copyIfNewerOrMissing(src, dst) {
@@ -74,7 +76,7 @@ function copyIfNewerOrMissing(src, dst) {
 }
 
 async function main() {
-  const { allowDelete, dryRun, inputPaths } = parseArgs(process.argv.slice(2));
+  const { allowDelete, dryRun, allowReplaceDem, inputPaths } = parseArgs(process.argv.slice(2));
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(DEPLOY_DATA_DIR, { recursive: true });
 
@@ -96,6 +98,15 @@ async function main() {
     if (!isValidLocalDataFile(resolved, spec.fileName)) {
       console.error(`[Upload] File failed integrity check: ${resolved}`);
       process.exit(1);
+    }
+    if (spec.constant && !allowReplaceDem) {
+      const remoteDem = await probeRemoteDataFile(spec.fileName);
+      if (remoteDem) {
+        console.error(
+          `[Upload] ${spec.fileName} already exists on Firebase and is static/immutable. Refusing to replace it (pass --replace-dem to override).`
+        );
+        process.exit(1);
+      }
     }
     const dataTarget = path.join(DATA_DIR, spec.fileName);
     const deployTarget = path.join(DEPLOY_DATA_DIR, spec.fileName);
@@ -160,7 +171,9 @@ async function main() {
     const remote = await probeRemoteDataFile(spec.fileName);
     if (!remote) continue;
 
-    if (allowDelete) {
+    if (allowDelete && spec.constant) {
+      console.warn(`  [PROTECT] ${spec.fileName} is the static DEM and is never deleted; downloading it to preserve it.`);
+    } else if (allowDelete) {
       console.warn(`  [WARN] ${spec.fileName} exists on Firebase (${formatBytes(remote.size)}) and will be DELETED (--allow-delete).`);
       continue;
     }

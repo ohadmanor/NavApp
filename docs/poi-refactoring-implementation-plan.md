@@ -80,7 +80,7 @@ flowchart TD
 ### 2.2 Dataset Migration & Harvester Alignment
 - **[NEW] [devops/recategorize-pois.mjs](../devops/recategorize-pois.mjs)** (executed via `tsx` so it calls `poiClassifier.ts` directly)
   - Reads both [data/Israel.offroad.pois.geojson](../data/Israel.offroad.pois.geojson) (62,233 POIs) and [data/Israel.pois.geojson](../data/Israel.pois.geojson) (6,732 POIs).
-  - Recomputes `category` and exclusive `subcategory` using all text/metadata fields, verifies 100% conformance to `poiTaxonomy.ts`, writes updated GeoJSON files cleanly to both `data/` and `public/data/`.
+  - Recomputes `category` and exclusive `subcategory` using all text/metadata fields, verifies 100% conformance to `poiTaxonomy.ts`, writes updated GeoJSON files cleanly to `data/`.
   - Emits a detailed **Migration Audit Report** (`transitionMatrix`, before/after counts by category & subcategory, zero remaining `offroad_poi`/`offroad_photo` assertion, and sample diffs for inspection).
 - **[MODIFY] [devops/fetch-israel-pois.mjs](../devops/fetch-israel-pois.mjs)** & **[MODIFY] [devops/convert-offroad-pois.mjs](../devops/convert-offroad-pois.mjs)**
   - Replace legacy ad-hoc regexes with calls to `poiClassifier.ts` so future harvests follow the exact same rules.

@@ -80,7 +80,7 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
 
     UserStateSyncService.recordLocalConfig({
       theme: 'topo-dark',
-      showCenterCrosshair: true,
+      mapStyle: 'ihm',
       planningMode: 'foot',
       navOrientation: 'north-up',
       visibility: {
@@ -106,7 +106,6 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
       pitch: 45,
     });
     expect(restored.config.theme).toBe('topo-dark');
-    expect(restored.config.showCenterCrosshair).toBe(true);
     expect(restored.config.planningMode).toBe('foot');
     expect(restored.config.navOrientation).toBe('north-up');
     expect(restored.config.visibility.googleSatellite).toBe(true);
@@ -137,9 +136,9 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
       cameraUpdatedAt: 0,
       config: {
         theme: 'topo-day',
+        mapStyle: 'ihm',
         visibility: { ...DEFAULT_LAYER_VISIBILITY },
         navOrientation: 'heading-up',
-        showCenterCrosshair: false,
         planningMode: '4x4',
         userIcon: { icon: BUILT_IN_USER_ICONS[0], accentColor: '#0ea5e9' },
       },
@@ -153,9 +152,9 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
       cameraUpdatedAt: 2000,
       config: {
         theme: 'topo-dark',
+        mapStyle: 'ihm',
         visibility: { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true },
         navOrientation: 'north-up',
-        showCenterCrosshair: true,
         planningMode: 'bicycle',
         userIcon: { icon: BUILT_IN_USER_ICONS[2], accentColor: '#f59e0b' },
       },

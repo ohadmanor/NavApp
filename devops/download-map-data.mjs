@@ -7,11 +7,10 @@
  *   - Israel.dem.pmtiles
  *   - Israel.osm.pmtiles
  *   - Israel.pois.geojson
- *   - Israel.offroad.pois.geojson
  *   - Israel.search.idx
  *
  * Flags:
- *   --only <list>   Comma-separated keys or filenames (dem,osm,pois,offroad,search)
+ *   --only <list>   Comma-separated keys or filenames (dem,osm,pois,search)
  *   --skip-dem      Skip the 1.40 GB Israel.dem.pmtiles archive
  *   --force         Re-download even when size and ETag already match
  *   --dest <dir>    Target directory (default: data/)
@@ -51,7 +50,7 @@ function parseArgs(argv) {
     } else if (arg === '--dest' && argv[i + 1]) {
       destDir = path.resolve(argv[++i]);
     } else if (arg === '-h' || arg === '--help') {
-      console.log(`Usage: node devops/download-map-data.mjs [--only dem,osm,pois,offroad,search] [--skip-dem] [--force]`);
+      console.log(`Usage: node devops/download-map-data.mjs [--only dem,osm,pois,search] [--skip-dem] [--force]`);
       process.exit(0);
     }
   }

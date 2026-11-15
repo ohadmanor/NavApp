@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Crosshair, Check, Lock, LogIn, Globe, Users, ChevronDown } from 'lucide-react';
+import { X, MapPin, Check, Lock, LogIn, Globe, Users, ChevronDown } from 'lucide-react';
 import {
   db,
   type PoiCategory,
@@ -201,8 +201,8 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
       <div className="flex items-start justify-between gap-2">
         <div>
           <span className="text-xs font-bold text-sky-500 flex items-center gap-1">
-            <Crosshair className="w-3.5 h-3.5" />
-            <span>הזז את המפה למיקום הרצוי מתחת לצלב</span>
+            <MapPin className="w-3.5 h-3.5" />
+            <span>המיקום נבחר על המפה</span>
           </span>
           <h3 className="text-base font-bold mt-0.5">דווח נקודת עניין בשטח</h3>
         </div>

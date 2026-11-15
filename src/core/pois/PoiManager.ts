@@ -136,6 +136,8 @@ function hydrateGeojsonFeature(
   };
 }
 
+const OFFROAD_ID_PREFIX = 'or-';
+
 const MERGE_DIR_MODIFIER_RE = /(עליון|תחתון|מערבי|מזרחי|צפוני|דרומי|גדול|קטן|\d+)$/;
 
 function normalizePoiNameForMerge(name: string): string {
@@ -253,7 +255,7 @@ function normalizeLegacyPoiRecord(p: PoiRecord): PoiRecord {
  * Manages the unified Israeli Outdoor Points of Interest (Springs, Caves, Ruins, Campsites, 4x4 Passes, Peaks)
  * merging OpenStreetMap / IsraelHiking with Off-Road.io community POIs into one categorized list:
  *   - data/Israel.pois.geojson (persisted in local IndexedDB)
- *   - data/Israel.offroad.pois.geojson (high-volume community POIs cached in memory; userNotes persisted to IndexedDB)
+ *   - Off-Road.io community POIs (ids prefixed "or-") live in the same file, cached in memory; userNotes persisted to IndexedDB
  */
 export class PoiManager {
   private static offroadPoisCache: PoiRecord[] = [];
@@ -516,11 +518,18 @@ export class PoiManager {
 
   static async initializePois(): Promise<PoiRecord[]> {
     try {
-      const [existingPois, osmGeo, offroadGeo] = await Promise.all([
+      const [existingPois, allGeo] = await Promise.all([
         db.pois.toArray(),
         offlineDataFiles.loadJson('Israel.pois.geojson'),
-        offlineDataFiles.loadJson('Israel.offroad.pois.geojson').catch(() => null),
       ]);
+
+      // Israel.pois.geojson is a single file. Off-Road.io community POIs (ids prefixed "or-")
+      // are high-volume: they stay in an in-memory cache instead of IndexedDB.
+      const isOffroadFeature = (f: any) =>
+        String(f?.properties?.id || f?.id || '').startsWith(OFFROAD_ID_PREFIX);
+      const allFeatures: any[] = Array.isArray(allGeo?.features) ? allGeo.features : [];
+      const osmGeo = { features: allFeatures.filter((f) => !isOffroadFeature(f)) };
+      const offroadGeo = { features: allFeatures.filter(isOffroadFeature) };
 
       const existingById = new Map<string, PoiRecord>();
       const existingNotes = new Map<string, string>();
@@ -587,11 +596,7 @@ export class PoiManager {
       if (offroadGeo) {
         try {
           const feats = Array.isArray(offroadGeo?.features) ? offroadGeo.features : [];
-          const isOffroadCollection =
-            String(offroadGeo?.metadata?.source || '').includes('Off-Road') ||
-            feats.some((f: any) => String(f?.properties?.id || f?.id || '').startsWith('or-'));
-
-          if (isOffroadCollection && feats.length > 0) {
+          if (feats.length > 0) {
             const parsedOffroad: PoiRecord[] = [];
             for (let i = 0; i < feats.length; i++) {
               const rec = hydrateGeojsonFeature(feats[i], i, existingNotes, {

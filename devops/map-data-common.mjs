@@ -38,13 +38,6 @@ export const MAP_DATA_FILES = [
     constant: false,
   },
   {
-    key: 'offroad',
-    fileName: 'Israel.offroad.pois.geojson',
-    label: 'Off-Road.io Community POIs',
-    kind: 'geojson',
-    constant: false,
-  },
-  {
     key: 'search',
     fileName: 'Israel.search.idx',
     label: 'Full-Map PMTiles Search Index',

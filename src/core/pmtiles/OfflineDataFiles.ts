@@ -11,7 +11,6 @@ import {
 
 export const OFFLINE_DATA_FILE_NAMES = [
   'Israel.pois.geojson',
-  'Israel.offroad.pois.geojson',
   'Israel.search.idx',
 ] as const;
 
@@ -26,13 +25,8 @@ export interface OfflineDataFileSpec {
 export const OFFLINE_DATA_FILE_SPECS: readonly OfflineDataFileSpec[] = [
   {
     fileName: 'Israel.pois.geojson',
-    labelHe: 'נקודות עניין רשמיות (OSM)',
-    defaultSizeBytes: 4_336_165,
-  },
-  {
-    fileName: 'Israel.offroad.pois.geojson',
-    labelHe: 'נקודות עניין קהילת שטח (Off-Road)',
-    defaultSizeBytes: 20_481_927,
+    labelHe: 'נקודות עניין (OSM + קהילת שטח)',
+    defaultSizeBytes: 24_781_243,
   },
   {
     fileName: 'Israel.search.idx',
@@ -264,7 +258,7 @@ export class OfflineDataFilesManager {
     return res && 'bytes' in res ? res.bytes : null;
   }
 
-  async loadJson<T = any>(fileName: 'Israel.pois.geojson' | 'Israel.offroad.pois.geojson'): Promise<T | null> {
+  async loadJson<T = any>(fileName: 'Israel.pois.geojson'): Promise<T | null> {
     const res = await this.loadRawPayload<T>(fileName);
     if (!res) return null;
     if ('json' in res) return res.json;
@@ -311,7 +305,9 @@ export class OfflineDataFilesManager {
         this.checkedThisSession.add(fileName);
 
         const meta = readDataFileMeta(fileName);
-        const sameSize = remote.size === localSize;
+        // HEAD Content-Length may be the compressed size while localSize is the decoded size, so
+        // prefer the remote size recorded at download time; fall back to the local size.
+        const sameSize = meta?.size ? remote.size === meta.size : remote.size === localSize;
         const sameEtag = !meta?.etag || !remote.etag || meta.etag === remote.etag;
         if (sameSize && sameEtag) {
           if (!meta) writeDataFileMeta(fileName, { size: remote.size, etag: remote.etag });

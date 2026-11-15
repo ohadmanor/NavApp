@@ -1,3 +1,5 @@
+> **SUPERSEDED.** Map data is no longer stored in Firebase Storage. It is served from a dedicated Firebase Hosting site (`navapp-israel-topo-data`, target `data`, folder `deploy_data/`). See [README.md](./README.md#data-pipeline). Do NOT apply the `storage.rules` / CORS changes described below (they would make the bucket world-writable).
+
 # Implementation Plan: Decoupling Code Deployment & Firebase Map Data Storage
 
 ## Executive Summary

@@ -13,6 +13,8 @@ import {
 import type { PlanningMode } from '../routing/RoutingProfiles';
 import {
   DEFAULT_LAYER_VISIBILITY,
+  DEFAULT_MAP_STYLE,
+  type MapStyleId,
   type OutdoorLayerVisibility,
 } from '../style/israelOutdoorStyle';
 import type { MapTheme } from '../../components/ui/themeTokens';
@@ -29,9 +31,9 @@ export interface SavedMapCamera {
 
 export interface SavedUserConfiguration {
   theme: MapTheme;
+  mapStyle: MapStyleId;
   visibility: OutdoorLayerVisibility;
   navOrientation: MapNavigationOrientation;
-  showCenterCrosshair: boolean;
   planningMode: PlanningMode;
   userIcon: UserLocationIconPreference;
 }
@@ -110,9 +112,9 @@ export function getOrCreateDeviceId(): string {
 export function getDefaultUserConfiguration(): SavedUserConfiguration {
   return {
     theme: 'topo-day',
+    mapStyle: DEFAULT_MAP_STYLE,
     visibility: { ...DEFAULT_LAYER_VISIBILITY },
     navOrientation: NavigationHeadingService.getOrientationPreference() || DEFAULT_NAV_ORIENTATION,
-    showCenterCrosshair: false,
     planningMode: '4x4',
     userIcon: UserLocationIconService.getPreference(),
   };
@@ -201,6 +203,8 @@ export function sanitizeUserConfiguration(
   const rec = raw as Partial<SavedUserConfiguration>;
   const theme: MapTheme =
     rec.theme === 'topo-dark' || rec.theme === 'topo-day' ? rec.theme : fallback.theme;
+  const mapStyle: MapStyleId =
+    rec.mapStyle === 'ihm' || rec.mapStyle === 'nms' ? rec.mapStyle : fallback.mapStyle;
   const navOrientation: MapNavigationOrientation =
     rec.navOrientation === 'north-up' || rec.navOrientation === 'heading-up'
       ? rec.navOrientation
@@ -212,12 +216,9 @@ export function sanitizeUserConfiguration(
 
   return {
     theme,
+    mapStyle,
     visibility: sanitizeVisibility(rec.visibility ?? fallback.visibility),
     navOrientation,
-    showCenterCrosshair:
-      typeof rec.showCenterCrosshair === 'boolean'
-        ? rec.showCenterCrosshair
-        : fallback.showCenterCrosshair,
     planningMode,
     userIcon: sanitizeUserIconPreference(rec.userIcon, fallback.userIcon),
   };

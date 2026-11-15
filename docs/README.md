@@ -4,7 +4,7 @@
 
 ---
 
-## 1. Folder Structure (`C:\dev\NavApp`)
+## 1. Folder Structure
 
 - **[`docs/`](./)** — All project documentation, implementation plans, and architecture diagrams:
   - [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) — Full architectural & implementation blueprint.
@@ -22,7 +22,7 @@
   - [`README.md`](./README.md) — User, DevOps & Deployment guide.
 - **[`data/`](../data/)** — Offline PMTiles & GeoJSON map data archives:
   - [`Israel.dem.pmtiles`](../data/Israel.dem.pmtiles) (**1.40 GB — Constant / Static DEM**): Terrarium 256px PNG elevation pyramid (`z0–z14`). Installed once; never changes. Powers Hillshade, 3D Terrain, Dynamic Contour Lines (`10m`/`50m`), and Offline Route Elevation Profiles.
-  - [`Israel.osm.pmtiles`](../data/Israel.osm.pmtiles) (**112.4 MB — Updatable Vector Map**): OpenMapTiles 19-layer vector archive (`z0–z14`). Periodically updated and hot-swapped in the app without re-downloading the 1.40 GB DEM.
+  - [`Israel.osm.pmtiles`](../data/Israel.osm.pmtiles) (**114 MB — Updatable Vector Map**): OpenMapTiles 19-layer vector archive (`z0–z14`). Periodically updated and hot-swapped in the app without re-downloading the 1.40 GB DEM.
   - [`Israel.pois.geojson`](../data/Israel.pois.geojson) (**Harvested Community & OSM POIs**): Springs (`מעיינות`), water holes (`גבים`), cisterns (`בורות מים`), 4x4 ascents (`מעלות 4x4`), caves, ruins, viewpoints, night campsites (`חניוני לילה`), and mountain peaks with Hebrew & English descriptions.
 - **[`devops/`](../devops/)** — All build, local run, POI harvesting, Firebase deploy, and Android security scripts:
   - [`run-local.bat`](../devops/run-local.bat) — Launches the local development server (`http://localhost:5173`) with HTTP `206 Partial Content` byte-range streaming from `data\*.pmtiles`.
@@ -30,7 +30,6 @@
   - [`build-android-apk.bat`](../devops/build-android-apk.bat) — Syncs Capacitor Android, applies Android security & RSA-2048 release keystore signing, and builds an installable `.apk`.
   - [`build-ios.bat`](../devops/build-ios.bat) — Generates & syncs the Capacitor iOS Xcode project (`ios/App/App.xcworkspace`) on Windows and applies iOS permissions/security/icon config.
   - [`build-ios-ipa.sh`](../devops/build-ios-ipa.sh) — Full macOS iOS builder (`pod install` + `xcodebuild`) producing an unsigned/signed `.ipa` or Simulator `.app.zip`.
-  - [`fetch-israel-pois.mjs`](../devops/fetch-israel-pois.mjs) — Harvests & updates `data/Israel.pois.geojson`.
   - [`configure-android-security.mjs`](../devops/configure-android-security.mjs) — Automates Android Keystore generation, `network_security_config.xml`, GPS permissions, and Gradle v1/v2/v3 APK signing.
   - [`configure-ios.mjs`](../devops/configure-ios.mjs) — Automates `Info.plist` GPS/background permissions, Files app sharing, ATS HTTPS security, Xcode version sync, and 1024x1024 AppIcon generation.
 - **[`.agents/skills/outdoor-map-navigation/`](../.agents/skills/outdoor-map-navigation/)** — Custom Antigravity Expert Skill in MapLibre + PMTiles outdoor navigation.
@@ -59,7 +58,7 @@ to **Authentication** → **Settings** → **Authorized domains**.
 
 Double-click or run from terminal:
 ```bat
-C:\dev\NavApp\devops\run-local.bat
+devops\run-local.bat
 ```
 This script:
 1. Verifies `node_modules` and `data\Israel.pois.geojson`.
@@ -77,7 +76,7 @@ This script:
    ```
 2. Run the deployment script:
    ```bat
-   C:\dev\NavApp\devops\deploy-firebase.bat
+   devops\deploy-firebase.bat
    ```
 
 ---
@@ -86,7 +85,7 @@ This script:
 
 Run:
 ```bat
-C:\dev\NavApp\devops\build-android-apk.bat
+devops\build-android-apk.bat
 ```
 ### Android Security Configured Automatically:
 - **RSA-2048 Release Keystore**: Generated at `devops/keystore/navapp-release.jks` (`V1 + V2 + V3` APK signatures enabled so Android 11–15+ phones allow direct installation).
@@ -98,7 +97,7 @@ C:\dev\NavApp\devops\build-android-apk.bat
 Android Auto hides sideloaded `CarAppService` navigation apps installed from a file manager/browser. To make Android Auto recognize the sideloaded APK on your phone:
 1. Connect your phone via USB (with USB Debugging enabled) and run:
    ```bat
-   C:\Develop\github\NavApp\devops\install-android-auto-apk.bat
+   devops\install-android-auto-apk.bat
    ```
    *(Runs `adb install -i "com.android.vending" -r dist\NavApp-Israel-Signed-Release.apk` so Android registers Google Play installer provenance, and refreshes Android Auto.)*
 2. On your phone, enable **Android Auto Developer Mode** (one-time):
@@ -113,7 +112,7 @@ Android Auto hides sideloaded `CarAppService` navigation apps installed from a f
 ### Generate & Sync the Xcode Project on Windows
 Run:
 ```bat
-C:\Develop\github\NavApp\devops\build-ios.bat
+devops\build-ios.bat
 ```
 This builds the offline assets and web bundle (`dist/`), syncs Capacitor iOS (`ios/App`), and runs [`configure-ios.mjs`](../devops/configure-ios.mjs) to configure:
 - **GPS & Background Location (`Info.plist`)**: `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`, and `UIBackgroundModes` (`location`).
@@ -131,3 +130,27 @@ Compiling an `.ipa` requires macOS + Xcode:
   ```
 - **From Windows via GitHub Actions**: Trigger the **Build iOS App (.ipa)** workflow ([`.github/workflows/build-ios.yml`](../.github/workflows/build-ios.yml)) on `macos-latest` from the repository's **Actions** tab and download the generated `.ipa` artifact.
 
+---
+
+## Data pipeline
+
+Map data (4 files: DEM, OSM tiles, the single merged `Israel.pois.geojson` (OSM + Off-Road, Off-Road ids prefixed `or-`), `Israel.search.idx`) lives in `data/` (git-ignored) and is published to a **separate Firebase Hosting site** (`navapp-israel-topo-data`, target `data`, staging folder `deploy_data/data/`). The app is a second site (target `app`, folder `dist/`).
+
+| Step | Command |
+|---|---|
+| Build search index | `npm run build-search-index` |
+| Verify data files | `npm run verify-data` |
+| Stage + publish data | `devops\upload-map-data.bat` (separate from `deploy-firebase.bat`) |
+| Pull data from hosting | `node devops/download-map-data.mjs` |
+
+`Israel.osm.pmtiles` and `Israel.dem.pmtiles` are produced outside this repo (Tilemaker, OpenMapTiles schema; see [tilemaker-nature-reserves-fix.md](./tilemaker-nature-reserves-fix.md)). File names are case-sensitive on Linux/macOS: always use `Israel.*`.
+
+### Three data lifecycles
+
+| File | Lifecycle | How it is updated |
+|---|---|---|
+| `Israel.pois.geojson` | **Source of truth = Firebase.** Pulled before every edit, auto-uploaded after. | `npm run poi:pull` / `poi:push`; edit scripts should use `withPoiFile()` from `devops/poi-sync.mjs`. Push refuses if the remote changed since your last pull. |
+| `Israel.osm.pmtiles` (+ `Israel.search.idx`) | Updated from time to time; clients holding a copy re-download when the ETag changes. | Build externally, then `devops/upload-map-data.bat` (rebuilds the search index if stale). |
+| `Israel.dem.pmtiles` | **Static, never changes, never deleted.** Clients never re-download it. | Uploaded once. `upload-map-data` refuses to replace it unless `--replace-dem`, and `--allow-delete` never removes it. |
+
+Backups are manual: `devops/download-map-data.bat` pulls every file, including the POI file, into `data/`. On a fresh machine the app streams the PMTiles from Firebase into the browser range cache. The full archive is saved on the device only when the user downloads it manually, or when an already-saved copy has an update.

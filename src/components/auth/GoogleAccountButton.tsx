@@ -125,7 +125,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
               : 'התחבר עם Google לשמירה וסנכרון מיקום והגדרות'
         }
         className={`relative border flex items-center justify-center transition-all ${
-          mobile ? 'w-11 h-11 rounded-full shadow-xl' : 'w-10 h-10 rounded-xl shadow-lg'
+          mobile ? 'w-10 h-10 rounded-full shadow-lg' : 'w-10 h-10 rounded-xl shadow-lg'
         } ${
           currentUser
             ? isMenuOpen
@@ -143,12 +143,12 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
               alt={currentUser.displayName || 'Google'}
               referrerPolicy="no-referrer"
               onError={() => setAvatarLoadError(true)}
-              className={`${mobile ? 'w-8 h-8' : 'w-7 h-7'} rounded-full object-cover`}
+              className={`w-7 h-7 rounded-full object-cover`}
             />
           ) : (
             <span
               className={`${
-                mobile ? 'w-8 h-8 text-xs' : 'w-7 h-7 text-[11px]'
+                'w-7 h-7 text-[11px]'
               } rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center`}
             >
               {getUserInitial(currentUser)}
@@ -170,9 +170,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
       {currentUser && isMenuOpen && (
         <div
           dir="rtl"
-          className={`absolute bottom-0 ${
-            mobile ? 'left-14' : 'left-12'
-          } z-50 w-64 max-w-[calc(100vw-80px)] rounded-2xl border p-3.5 space-y-3 ${t.panel}`}
+          className={`absolute bottom-0 left-12 z-50 w-64 max-w-[calc(100vw-80px)] rounded-2xl border p-3.5 space-y-3 ${t.panel}`}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2.5 min-w-0">

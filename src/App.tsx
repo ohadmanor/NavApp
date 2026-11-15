@@ -4,12 +4,12 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import * as turf from '@turf/turf';
 import {
   Layers,
+  Palette,
   HardDrive,
   Compass,
   LocateFixed,
   Route as RouteIcon,
   AlertTriangle,
-  Crosshair,
   Download,
   CheckCircle2,
   Plus,
@@ -36,6 +36,7 @@ import {
   POI_STYLE_LAYER_IDS,
   HIGHWAY_LAYER_IDS,
   DEFAULT_LAYER_VISIBILITY,
+  type MapStyleId,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
 import { PoiManager, getPoiSortPriority, type DeletedPoiUndoSnapshot } from './core/pois/PoiManager';
@@ -120,7 +121,8 @@ import {
   RoutePlannerPanel,
   type PlannedLeg,
 } from './components/navigation/RoutePlannerPanel';
-import { LayerSwitcherSheet } from './components/map/LayerSwitcherSheet';
+import { LayerSwitcherSheet, type LayerSheetSection } from './components/map/LayerSwitcherSheet';
+import { MinimizeToggle } from './components/ui/MinimizeToggle';
 import {
   UserIconPickerSheet,
   UserLocationIconBadge,
@@ -152,6 +154,24 @@ type DesktopDrawerMode =
   | 'add-poi'
   | 'plan-route'
   | null;
+const DESKTOP_DRAWER_TITLES: Record<string, string> = {
+  poi: 'נקודת עניין',
+  routes: 'מסלולים',
+  'plan-route': 'תכנון מסלול',
+  record: 'הקלטה',
+  'add-poi': 'נקודה חדשה',
+};
+
+const LAYER_SECTION_BUTTONS: Array<{
+  id: LayerSheetSection;
+  title: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { id: 'style', title: 'סגנון מפה (3D / יום / לילה)', Icon: Palette },
+  { id: 'layers', title: 'שכבות מפה', Icon: Layers },
+  { id: 'pois', title: 'נקודות עניין (POI)', Icon: MapPin },
+];
+
 type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
 type MobileOverlayMode =
@@ -273,17 +293,24 @@ function createUserMarkerElement(
 }
 
 function useIsMobile(breakpoint = 768): boolean {
+  // Portrait phones are narrow; landscape phones are wide but short with a coarse (touch) pointer.
+  // Both must get the mobile layout (not the website layout).
+  const query = `(max-width: ${breakpoint - 1}px), (max-height: 500px) and (pointer: coarse)`;
   const [isMobile, setIsMobile] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth < breakpoint : false
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : typeof window !== 'undefined'
+        ? window.innerWidth < breakpoint
+        : false
   );
 
   useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const mq = window.matchMedia(query);
     const update = () => setIsMobile(mq.matches);
     update();
     mq.addEventListener('change', update);
     return () => mq.removeEventListener('change', update);
-  }, [breakpoint]);
+  }, [query]);
 
   return isMobile;
 }
@@ -326,6 +353,7 @@ export const App: React.FC = () => {
     () => initialConfig.visibility
   );
   const [theme, setTheme] = useState<MapTheme>(() => initialConfig.theme);
+  const [mapStyle, setMapStyle] = useState<MapStyleId>(() => initialConfig.mapStyle);
   const [mapBearing, setMapBearing] = useState(() => initialCamera.bearing);
 
   // POIs & Search
@@ -355,18 +383,19 @@ export const App: React.FC = () => {
   // UI Shell States (Desktop vs Mobile Planning/Navigating)
   const [desktopDrawer, setDesktopDrawer] = useState<DesktopDrawerMode>(null);
   const [isStorageOpen, setIsStorageOpen] = useState(false);
-  const [isLayerSheetOpen, setIsLayerSheetOpen] = useState(false);
+  const [layerSheetSection, setLayerSheetSection] = useState<LayerSheetSection | null>(null);
+  const [mobileLayerSection, setMobileLayerSection] = useState<LayerSheetSection>('layers');
   const [mobileDisplayMode, setMobileDisplayMode] = useState<MobileDisplayMode>('planning');
   const [mobileTab, setMobileTab] = useState<MobileTab>('explore');
   const [mobilePlanningOverlay, setMobilePlanningOverlay] = useState<MobileOverlayMode>(null);
   const [mobileNavOverlay, setMobileNavOverlay] = useState<MobileNavOverlay>(null);
   const [mobileSheetExpanded, setMobileSheetExpanded] = useState(true);
+  // Minimize state for floating windows (content stays mounted, only hidden).
+  const [isDesktopDrawerMinimized, setIsDesktopDrawerMinimized] = useState(false);
+  const [isMobileSheetMinimized, setIsMobileSheetMinimized] = useState(false);
 
-  // Connectivity, Crosshair & Continuous Live GPS Coordinates
+  // Connectivity & Continuous Live GPS Coordinates
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [showCenterCrosshair, setShowCenterCrosshair] = useState<boolean>(
-    () => initialConfig.showCenterCrosshair
-  );
   const [userLocation, setUserLocation] = useState<LiveGpsFix | null>(null);
   const [isFollowingUser, setIsFollowingUser] = useState<boolean>(false);
   const [gpsWatchRestartSeq, setGpsWatchRestartSeq] = useState<number>(0);
@@ -549,6 +578,8 @@ export const App: React.FC = () => {
   visibilityRef.current = visibility;
   const themeRef = useRef<MapTheme>(theme);
   themeRef.current = theme;
+  const mapStyleRef = useRef<MapStyleId>(mapStyle);
+  mapStyleRef.current = mapStyle;
   const activeRouteRef = useRef<SavedRouteRecord | null>(activeRoute);
   activeRouteRef.current = activeRoute;
   const routesRef = useRef<SavedRouteRecord[]>(routes);
@@ -711,9 +742,9 @@ export const App: React.FC = () => {
           }
         });
         setTheme(cfg.theme);
+        setMapStyle(cfg.mapStyle);
         setVisibility(cfg.visibility);
         setNavOrientation(cfg.navOrientation);
-        setShowCenterCrosshair(cfg.showCenterCrosshair);
         setPlanningMode(cfg.planningMode);
       }
 
@@ -881,6 +912,62 @@ export const App: React.FC = () => {
     setTrailWayCandidates([]);
   }, []);
 
+  // A newly opened window always starts expanded.
+  useEffect(() => {
+    setIsDesktopDrawerMinimized(false);
+  }, [desktopDrawer]);
+  useEffect(() => {
+    setIsMobileSheetMinimized(false);
+  }, [mobilePlanningOverlay, mobileNavOverlay, mobileTab, mobileDisplayMode]);
+
+  // ---- Add point: press the icon, click the map, the new-point window opens ----
+  const [isPickingPoiLocation, setIsPickingPoiLocation] = useState(false);
+  const [addPoiCoords, setAddPoiCoords] = useState<{ lon: number; lat: number; ele: number | null } | null>(
+    null
+  );
+  const isPickingPoiRef = useRef(false);
+  isPickingPoiRef.current = isPickingPoiLocation;
+
+  const openAddPoiPanelAt = useCallback(
+    (coords: { lon: number; lat: number; ele: number | null }) => {
+      setAddPoiCoords(coords);
+      setIsPickingPoiLocation(false);
+      if (!isMobile) {
+        setDesktopDrawer('add-poi');
+      } else if (mobileDisplayMode === 'navigating') {
+        setMobileNavOverlay('add-poi');
+      } else {
+        setMobilePlanningOverlay('add-poi');
+      }
+    },
+    [isMobile, mobileDisplayMode]
+  );
+  const openAddPoiPanelAtRef = useRef(openAddPoiPanelAt);
+  openAddPoiPanelAtRef.current = openAddPoiPanelAt;
+
+  const startAddPoiPick = useCallback(() => {
+    if (isPickingPoiRef.current) {
+      setIsPickingPoiLocation(false);
+      return;
+    }
+    if (isPlanningRouteRef.current) return;
+    exitTrailMarkingMode();
+    // Close an already-open new-point window so the next map click starts a fresh point.
+    setDesktopDrawer((prev) => (prev === 'add-poi' ? null : prev));
+    setMobilePlanningOverlay((prev) => (prev === 'add-poi' ? null : prev));
+    setMobileNavOverlay((prev) => (prev === 'add-poi' ? null : prev));
+    setIsPickingPoiLocation(true);
+  }, [exitTrailMarkingMode]);
+
+  useEffect(() => {
+    if (!isPickingPoiLocation) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setIsPickingPoiLocation(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isPickingPoiLocation]);
+
   const toggleTrailMarkingMode = useCallback(() => {
     if (isTrailMarkingModeRef.current) {
       exitTrailMarkingMode();
@@ -906,9 +993,9 @@ export const App: React.FC = () => {
   useEffect(() => {
     const snapshot: SavedUserConfiguration = {
       theme,
+      mapStyle,
       visibility,
       navOrientation,
-      showCenterCrosshair,
       planningMode,
       userIcon: userIconPref,
     };
@@ -918,7 +1005,7 @@ export const App: React.FC = () => {
     }
     lastSyncedConfigJsonRef.current = serialized;
     UserStateSyncService.recordLocalConfig(snapshot, currentUserRef.current);
-  }, [theme, visibility, navOrientation, showCenterCrosshair, planningMode, userIconPref]);
+  }, [theme, mapStyle, visibility, navOrientation, planningMode, userIconPref]);
 
   // Flush last map position & cloud user state cleanly when backgrounded or leaving page
   useEffect(() => {
@@ -1284,13 +1371,13 @@ export const App: React.FC = () => {
       map.getCanvas().style.cursor = 'crosshair';
     } else {
       map.doubleClickZoom.enable();
-      map.getCanvas().style.cursor = isTrailMarkingMode ? 'crosshair' : '';
+      map.getCanvas().style.cursor = isTrailMarkingMode || isPickingPoiLocation ? 'crosshair' : '';
       if (clickTimerRef.current) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
       }
     }
-  }, [isPlanningRouteMode, isTrailMarkingMode, isMapReady]);
+  }, [isPlanningRouteMode, isTrailMarkingMode, isPickingPoiLocation, isMapReady]);
 
   useEffect(() => {
     if (isTrailMarkingMode && (!currentUser || isPlanningRouteMode || isAddingPoiMode)) {
@@ -2052,8 +2139,10 @@ export const App: React.FC = () => {
           });
         }
 
+        const activeMapStyle = mapStyleRef.current;
+        const isNmsStyle = activeMapStyle === 'nms';
         const poiIconExpression: any = buildPoiIconExpression();
-        const poiIconSizeExpression: any = buildPoiIconSizeExpression();
+        const poiIconSizeExpression: any = buildPoiIconSizeExpression(activeMapStyle);
         const poiTextColorExpression: any = buildPoiTextColorExpression(
           currentTheme === 'topo-dark'
         );
@@ -2109,22 +2198,39 @@ export const App: React.FC = () => {
 
         const iconAllowOverlapExpr: any = ['step', ['zoom'], false, 15.5, true];
         const iconPaddingExpr: any = ['interpolate', ['linear'], ['zoom'], 11.5, 1.5, 14, 1.2, 16, 0.8];
-        const textSizeExpr: any = ['interpolate', ['linear'], ['zoom'], 12.5, 10.8, 14, 12.4, 16, 14];
-        const textOffsetExpr: any = [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          12.5,
-          ['literal', [0, 0.72]],
-          14,
-          ['literal', [0, 0.92]],
-          16,
-          ['literal', [0, 1.12]],
-          17.5,
-          ['literal', [0, 1.28]],
-        ];
+        const textSizeExpr: any = isNmsStyle
+          ? ['interpolate', ['linear'], ['zoom'], 12.5, 9.8, 14, 11.0, 16, 12.2, 18, 12.8]
+          : ['interpolate', ['linear'], ['zoom'], 12.5, 10.8, 14, 12.4, 16, 14];
+        const textOffsetExpr: any = isNmsStyle
+          ? [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              12.5,
+              ['literal', [0, 0.62]],
+              14,
+              ['literal', [0, 0.74]],
+              16,
+              ['literal', [0, 0.86]],
+              17.5,
+              ['literal', [0, 0.94]],
+            ]
+          : [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              12.5,
+              ['literal', [0, 0.72]],
+              14,
+              ['literal', [0, 0.92]],
+              16,
+              ['literal', [0, 1.12]],
+              17.5,
+              ['literal', [0, 1.28]],
+            ];
         const poiVisibilityValue = isMasterPoiActive(currentVis) ? 'visible' : 'none';
-        const poiHaloColor = currentTheme === 'topo-dark' ? '#0b1015' : 'white';
+        const poiHaloColor =
+          currentTheme === 'topo-dark' ? '#0b1015' : isNmsStyle ? '#FFFFFF' : 'white';
 
         for (const tier of poiTierSpecs) {
           const tierFilter = buildPoiTieredLayerFilter(currentVis, tier.categories);
@@ -2503,7 +2609,7 @@ export const App: React.FC = () => {
     const initialContourUrl =
       existingDem?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl();
 
-    mountedStyleKeyRef.current = `${initialOsmUrl}|${initialDemUrl}|${themeRef.current}`;
+    mountedStyleKeyRef.current = `${initialOsmUrl}|${initialDemUrl}|${themeRef.current}|${mapStyleRef.current}`;
     isStyleLoadedRef.current = false;
 
     const initialStyle = buildIsraelOutdoorStyle({
@@ -2512,6 +2618,7 @@ export const App: React.FC = () => {
       contourProtocolUrl: initialContourUrl,
       visibility: visibilityRef.current,
       theme: themeRef.current,
+      mapStyle: mapStyleRef.current,
     });
 
     const startupCamera = UserStateSyncService.getStartupState().camera;
@@ -2803,6 +2910,15 @@ export const App: React.FC = () => {
 
     const handleMapClick = (e: maplibregl.MapMouseEvent) => {
       if (isCancelled) return;
+      if (isPickingPoiRef.current) {
+        e.preventDefault();
+        openAddPoiPanelAtRef.current({
+          lon: Number(e.lngLat.lng.toFixed(6)),
+          lat: Number(e.lngLat.lat.toFixed(6)),
+          ele: null,
+        });
+        return;
+      }
       if (isPlanningRouteRef.current) {
         const origDetail = (e.originalEvent as MouseEvent | undefined)?.detail ?? 1;
         if (origDetail > 1) {
@@ -2883,7 +2999,8 @@ export const App: React.FC = () => {
         map.getCanvas().style.cursor = anySelectable ? 'pointer' : '';
       });
       map.on('mouseleave', poiHoverLayerId, () => {
-        map.getCanvas().style.cursor = isPlanningRouteRef.current ? 'crosshair' : '';
+        map.getCanvas().style.cursor =
+          isPlanningRouteRef.current || isPickingPoiRef.current ? 'crosshair' : '';
       });
     }
 
@@ -2974,7 +3091,7 @@ export const App: React.FC = () => {
     const effectiveDemUrl = demInfo?.protocolUrl || pmtilesRegistry.getDefaultDemProtocolUrl();
     const effectiveContourUrl =
       demInfo?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl() || null;
-    const nextStyleKey = `${effectiveOsmUrl}|${effectiveDemUrl}|${theme}`;
+    const nextStyleKey = `${effectiveOsmUrl}|${effectiveDemUrl}|${theme}|${mapStyle}`;
     if (mountedStyleKeyRef.current === nextStyleKey) {
       return;
     }
@@ -2988,6 +3105,7 @@ export const App: React.FC = () => {
       contourProtocolUrl: effectiveContourUrl,
       visibility: visibilityRef.current,
       theme,
+      mapStyle,
     });
 
     let completed = false;
@@ -3024,7 +3142,7 @@ export const App: React.FC = () => {
         mountedStyleKeyRef.current = '';
       }
     };
-  }, [isMapReady, demInfo, osmInfo, theme, syncOverlaySourcesToMap]);
+  }, [isMapReady, demInfo, osmInfo, theme, mapStyle, syncOverlaySourcesToMap]);
 
   // Effect B: Instant in-place refresh for layer visibility, POIs, selected highlight, active route, GPS track, and Route Planner overlays
   useEffect(() => {
@@ -5237,7 +5355,7 @@ export const App: React.FC = () => {
         aria-pressed={headingActive}
         title={label}
         className={`${
-          mobile ? 'w-11 h-11 rounded-full mb-0.5' : 'w-10 h-10 rounded-xl'
+          mobile ? 'w-10 h-10 rounded-full' : 'w-10 h-10 rounded-xl'
         } border shadow-xl flex items-center justify-center transition-all shrink-0 ${
           headingActive
             ? `${t.pillBtn} border-sky-500/80 ring-2 ring-sky-500/25 ${
@@ -5289,17 +5407,6 @@ export const App: React.FC = () => {
           onClick={() => setIsSearchFocused(false)}
           className="w-full h-full"
         />
-
-        {/* Center Tactical Reticle Crosshair */}
-        {(showCenterCrosshair || isAddingPoiMode) && (
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
-            <div className="relative flex items-center justify-center">
-              <div className="w-9 h-[2px] bg-red-600/85" />
-              <div className="h-9 w-[2px] bg-red-600/85 absolute" />
-              <div className="w-5 h-5 rounded-full border-2 border-red-600/85 absolute" />
-            </div>
-          </div>
-        )}
 
         {/* Background Download from Firebase to OPFS Banner */}
         {downloadStatus && !isNaN(downloadStatus.percent) && downloadStatus.total > 0 && (
@@ -5381,6 +5488,26 @@ export const App: React.FC = () => {
                 <div
                   className={`pointer-events-auto rounded-2xl border overflow-hidden flex flex-col max-h-[calc(100vh-155px)] ${t.panel}`}
                 >
+                  <div
+                    dir="rtl"
+                    className="flex items-center justify-between gap-2 px-3 py-1.5 shrink-0"
+                  >
+                    <span className={`text-[11px] font-bold ${t.muted}`}>
+                      {DESKTOP_DRAWER_TITLES[desktopDrawer] ?? ''}
+                    </span>
+                    <MinimizeToggle
+                      minimized={isDesktopDrawerMinimized}
+                      onToggle={() => setIsDesktopDrawerMinimized((v) => !v)}
+                      theme={theme}
+                    />
+                  </div>
+                  <div
+                    className={
+                      isDesktopDrawerMinimized
+                        ? 'hidden'
+                        : 'contents'
+                    }
+                  >
                   {desktopDrawer === 'poi' && (
                     <PoiInspectorSheet
                       poi={selectedPoi}
@@ -5506,7 +5633,7 @@ export const App: React.FC = () => {
                       onPause={() => setIsRecordingPaused(true)}
                       onSaveRoute={handleSaveRecordedTrack}
                       onDiscard={handleDiscardRecordedTrack}
-                      onDropWaypoint={() => setDesktopDrawer('add-poi')}
+                      onDropWaypoint={() => openAddPoiPanelAt({ lon: cursorCoords.lon, lat: cursorCoords.lat, ele: cursorCoords.ele })}
                       onClose={() => setDesktopDrawer(null)}
                     />
                   )}
@@ -5514,7 +5641,7 @@ export const App: React.FC = () => {
                   {desktopDrawer === 'add-poi' && (
                     <AddPoiPanel
                       theme={theme}
-                      centerCoords={cursorCoords}
+                      centerCoords={addPoiCoords ?? cursorCoords}
                       currentUser={currentUser}
                       isOnline={isOnline}
                       firebaseAvailable={AuthService.isAvailable()}
@@ -5539,6 +5666,7 @@ export const App: React.FC = () => {
                     />
                   )}
 
+                  </div>
                 </div>
               )}
             </div>
@@ -5676,15 +5804,6 @@ export const App: React.FC = () => {
                   </span>
                 </button>
 
-                <button
-                  onClick={() => setDesktopDrawer(desktopDrawer === 'add-poi' ? null : 'add-poi')}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                    desktopDrawer === 'add-poi' ? 'bg-sky-600 text-white' : t.hoverRow
-                  }`}
-                >
-                  <Plus className="w-4 h-4 text-sky-500" />
-                  <span>הוסף נקודה</span>
-                </button>
                 {currentUser && (
                   <button
                     onClick={toggleTrailMarkingMode}
@@ -5722,50 +5841,27 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Bottom-Left (RTL End): Layers Preview Card + Map Controls Stack */}
+            {/* Bottom-Left (RTL End): Layers Button + Map Controls Stack */}
             <div className="absolute bottom-4 left-4 z-20 flex items-end gap-2.5 pointer-events-auto">
-              {/* Visual Layers Preview Card */}
-              <button
-                onClick={() => setIsLayerSheetOpen(!isLayerSheetOpen)}
-                className={`w-16 h-16 rounded-2xl border-2 shadow-xl overflow-hidden relative transition-transform hover:scale-105 ${
-                  isLayerSheetOpen ? 'border-emerald-500' : 'border-white'
-                }`}
-                title="שכבות וסוג מפה"
-              >
-                <div
-                  className={`absolute inset-0 flex items-center justify-center ${
-                    visibility.googleSatellite
-                      ? 'bg-gradient-to-br from-slate-900 via-emerald-950 to-sky-900 text-sky-300'
-                      : theme === 'topo-day'
-                        ? 'bg-gradient-to-br from-[#f4efe2] via-amber-200/70 to-emerald-200 text-amber-950'
-                        : 'bg-gradient-to-br from-slate-900 via-slate-800 to-sky-950 text-sky-300'
-                  }`}
-                >
-                  {visibility.googleSatellite ? (
-                    <Satellite className="w-5 h-5" />
-                  ) : theme === 'topo-day' ? (
-                    <Sun className="w-5 h-5" />
-                  ) : (
-                    <Moon className="w-5 h-5" />
-                  )}
-                </div>
-                <div className="absolute inset-x-0 bottom-0 bg-slate-950/80 text-white text-xs font-bold py-0.5 text-center flex items-center justify-center gap-1">
-                  <Layers className="w-3 h-3" />
-                  <span>שכבות</span>
-                </div>
-              </button>
-
               {/* Vertical Control Stack */}
               <div className="flex flex-col gap-1.5">
-                <button
-                  onClick={handleToggle3D}
-                  className={`w-10 h-10 rounded-xl border shadow-lg text-xs font-bold flex items-center justify-center transition-all ${
-                    visibility.terrain3d ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn
-                  }`}
-                  title="תבליט 3D"
-                >
-                  3D
-                </button>
+                {LAYER_SECTION_BUTTONS.map(({ id, title, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setLayerSheetSection(layerSheetSection === id ? null : id)}
+                    className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${
+                      layerSheetSection === id
+                        ? 'bg-emerald-600 border-emerald-400 text-white'
+                        : t.pillBtn
+                    }`}
+                    title={title}
+                    aria-label={title}
+                    aria-expanded={layerSheetSection === id}
+                  >
+                    <Icon className="w-5 h-5" />
+                  </button>
+                ))}
 
                 {!isNavigationActive && (
                   <button
@@ -5781,13 +5877,22 @@ export const App: React.FC = () => {
                 )}
 
                 <button
-                  onClick={() => setShowCenterCrosshair(!showCenterCrosshair)}
+                  type="button"
+                  onClick={startAddPoiPick}
+                  aria-pressed={isPickingPoiLocation || isAddingPoiMode}
                   className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${
-                    showCenterCrosshair ? 'bg-amber-600 border-amber-400 text-white' : t.pillBtn
+                    isPickingPoiLocation || isAddingPoiMode
+                      ? 'bg-sky-600 border-sky-400 text-white'
+                      : t.pillBtn
                   }`}
-                  title="צלב נ.צ. מרכז מפה"
+                  title="הוסף נקודה (לחץ ואז בחר מיקום במפה)"
+                  aria-label="הוסף נקודה"
                 >
-                  <Crosshair className="w-4 h-4" />
+                  <Plus
+                    className={`w-5 h-5 ${
+                      isPickingPoiLocation || isAddingPoiMode ? 'text-white' : 'text-sky-500'
+                    }`}
+                  />
                 </button>
 
                 <div className={`flex flex-col rounded-xl border shadow-lg overflow-hidden ${t.pillBtn}`}>
@@ -5906,12 +6011,15 @@ export const App: React.FC = () => {
 
             {/* Layer Switcher Floating Popover */}
             <LayerSwitcherSheet
-              isOpen={isLayerSheetOpen}
-              onClose={() => setIsLayerSheetOpen(false)}
+              isOpen={layerSheetSection !== null}
+              section={layerSheetSection ?? undefined}
+              onClose={() => setLayerSheetSection(null)}
               visibility={visibility}
               onChangeVisibility={setVisibility}
               theme={theme}
               onSelectTheme={setTheme}
+              mapStyle={mapStyle}
+              onSelectMapStyle={setMapStyle}
               onToggle3D={handleToggle3D}
             />
           </>
@@ -6017,10 +6125,10 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Mobile Top-Left Horizontal Controls (Layers, 3D, Compass when rotated outside nav, Crosshair) */}
+            {/* Mobile map controls: ONE column on the left (portrait), TWO columns in landscape. All icons share one size. */}
             <div
               dir="ltr"
-              className={`absolute left-3 z-20 flex flex-row items-center gap-2 pointer-events-auto pt-safe ${
+              className={`absolute left-3 z-20 pointer-events-auto pt-safe flex flex-col items-center gap-2 landscape:grid landscape:grid-flow-col landscape:grid-rows-5 landscape:gap-x-2 ${
                 mobileDisplayMode === 'navigating'
                   ? isNavigatingRoute && activeRoute
                     ? 'top-[5.25rem]'
@@ -6028,34 +6136,35 @@ export const App: React.FC = () => {
                   : 'top-[4.5rem]'
               }`}
             >
-              <button
-                onClick={() => {
-                  if (mobileDisplayMode === 'navigating') {
-                    setMobileNavOverlay(mobileNavOverlay === 'layers' ? null : 'layers');
-                  } else {
-                    setMobilePlanningOverlay(mobilePlanningOverlay === 'layers' ? null : 'layers');
-                  }
-                }}
-                className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
+              {LAYER_SECTION_BUTTONS.map(({ id, title, Icon }) => {
+                const isActive =
+                  mobileLayerSection === id &&
                   (mobileDisplayMode === 'navigating'
                     ? mobileNavOverlay === 'layers'
-                    : mobilePlanningOverlay === 'layers')
-                    ? 'bg-emerald-600 border-emerald-400 text-white'
-                    : t.pillBtn
-                }`}
-                title="שכבות מפה"
-              >
-                <Layers className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={handleToggle3D}
-                className={`w-10 h-10 rounded-full border shadow-lg text-xs font-bold flex items-center justify-center transition-all ${
-                  visibility.terrain3d ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn
-                }`}
-              >
-                3D
-              </button>
+                    : mobilePlanningOverlay === 'layers');
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      const open = isActive;
+                      setMobileLayerSection(id);
+                      if (mobileDisplayMode === 'navigating') {
+                        setMobileNavOverlay(open ? null : 'layers');
+                      } else {
+                        setMobilePlanningOverlay(open ? null : 'layers');
+                      }
+                    }}
+                    className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
+                      isActive ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn
+                    }`}
+                    title={title}
+                    aria-label={title}
+                  >
+                    <Icon className="w-4 h-4" />
+                  </button>
+                );
+              })}
 
               {!isNavigationActive && Math.abs(mapBearing) > 2 && (
                 <button
@@ -6069,27 +6178,9 @@ export const App: React.FC = () => {
                   />
                 </button>
               )}
-
-              <button
-                onClick={() => setShowCenterCrosshair(!showCenterCrosshair)}
-                className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
-                  showCenterCrosshair ? 'bg-amber-600 border-amber-400 text-white' : t.pillBtn
-                }`}
-                title="כוונת נ.צ."
-              >
-                <Crosshair className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Mobile Bottom-Left Compact 2-Column Thumb FABs (Locate GPS + Google | User Icon + Add Pin | Nav Orientation) */}
-            <div
-              dir="ltr"
-              className="absolute bottom-3 left-3 z-20 flex items-end gap-2 pointer-events-auto"
-            >
-              <div className="flex flex-col items-center gap-2">
                 <button
                   onClick={handleLocateMe}
-                  className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all ${
+                  className={`w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all ${
                     isFollowingUser && userLocation
                       ? 'bg-sky-600 hover:bg-sky-500 ring-2 ring-sky-300/80 text-white'
                       : userLocation
@@ -6120,9 +6211,7 @@ export const App: React.FC = () => {
                   onSignOutGoogle={handleSignOutGoogle}
                   onSyncNow={handleSyncPendingNow}
                 />
-              </div>
 
-              <div className="flex flex-col items-center gap-2">
                 <button
                   onClick={() => {
                     if (mobileDisplayMode === 'navigating') {
@@ -6131,7 +6220,7 @@ export const App: React.FC = () => {
                       setMobilePlanningOverlay(mobilePlanningOverlay === 'user-icon' ? null : 'user-icon');
                     }
                   }}
-                  className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
+                  className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
                     (mobileDisplayMode === 'navigating'
                       ? mobileNavOverlay === 'user-icon'
                       : mobilePlanningOverlay === 'user-icon')
@@ -6148,21 +6237,19 @@ export const App: React.FC = () => {
                 </button>
 
                 <button
-                  onClick={() => {
-                    if (mobileDisplayMode === 'navigating') {
-                      setMobileNavOverlay(mobileNavOverlay === 'add-poi' ? null : 'add-poi');
-                    } else {
-                      setMobilePlanningOverlay(mobilePlanningOverlay === 'add-poi' ? null : 'add-poi');
-                    }
-                  }}
-                  className={`w-11 h-11 rounded-full border shadow-xl flex items-center justify-center transition-all ${
-                    isAddingPoiMode ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn
+                  onClick={startAddPoiPick}
+                  className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
+                    isPickingPoiLocation || isAddingPoiMode ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn
                   }`}
-                  title="דווח נקודת שטח"
+                  title="הוסף נקודה (לחץ ואז בחר מיקום במפה)"
+                  aria-label="הוסף נקודה"
                 >
-                  <Plus className={`w-5 h-5 ${isAddingPoiMode ? 'text-white' : 'text-sky-500'}`} />
+                  <Plus
+                    className={`w-5 h-5 ${
+                      isPickingPoiLocation || isAddingPoiMode ? 'text-white' : 'text-sky-500'
+                    }`}
+                  />
                 </button>
-              </div>
 
               {isNavigationActive && renderNavOrientationIconButton(true)}
             </div>
@@ -6198,12 +6285,21 @@ export const App: React.FC = () => {
         <>
           {/* Planning Expandable Bottom Sheet */}
           <div className={`relative z-30 rounded-t-3xl border-t shadow-2xl shrink-0 ${t.panel}`}>
-            <div
-              onClick={() => setMobileSheetExpanded(!mobileSheetExpanded)}
-              className="w-full pt-2 pb-1 flex justify-center cursor-pointer"
-            >
-              <div className="w-10 h-1 rounded-full bg-slate-400/50" />
+            <div className="relative w-full">
+              <div
+                onClick={() => setMobileSheetExpanded(!mobileSheetExpanded)}
+                className="w-full pt-2 pb-1 flex justify-center cursor-pointer"
+              >
+                <div className="w-10 h-1 rounded-full bg-slate-400/50" />
+              </div>
+              <MinimizeToggle
+                minimized={isMobileSheetMinimized}
+                onToggle={() => setIsMobileSheetMinimized((v) => !v)}
+                theme={theme}
+                className="absolute top-0.5 left-2 !p-1"
+              />
             </div>
+            <div className={isMobileSheetMinimized ? 'hidden' : 'contents'}>
 
             {mobilePlanningOverlay === 'poi' && selectedPoi ? (
               <div className="max-h-[60vh] overflow-y-auto">
@@ -6248,18 +6344,21 @@ export const App: React.FC = () => {
               <LayerSwitcherSheet
                 isOpen
                 embedded
+                section={mobileLayerSection}
                 onClose={() => setMobilePlanningOverlay(null)}
                 visibility={visibility}
                 onChangeVisibility={setVisibility}
                 theme={theme}
                 onSelectTheme={setTheme}
+                mapStyle={mapStyle}
+                onSelectMapStyle={setMapStyle}
                 onToggle3D={handleToggle3D}
               />
             ) : mobilePlanningOverlay === 'add-poi' ? (
               <div className="max-h-[60vh] overflow-y-auto">
                 <AddPoiPanel
                   theme={theme}
-                  centerCoords={cursorCoords}
+                  centerCoords={addPoiCoords ?? cursorCoords}
                   currentUser={currentUser}
                   isOnline={isOnline}
                   firebaseAvailable={AuthService.isAvailable()}
@@ -6429,7 +6528,7 @@ export const App: React.FC = () => {
                   onPause={() => setIsRecordingPaused(true)}
                   onSaveRoute={handleSaveRecordedTrack}
                   onDiscard={handleDiscardRecordedTrack}
-                  onDropWaypoint={() => setMobilePlanningOverlay('add-poi')}
+                  onDropWaypoint={() => openAddPoiPanelAt({ lon: cursorCoords.lon, lat: cursorCoords.lat, ele: cursorCoords.ele })}
                   onClose={() => setMobileTab('explore')}
                 />
               </div>
@@ -6533,6 +6632,7 @@ export const App: React.FC = () => {
                   ))}
               </div>
             )}
+            </div>
           </div>
 
           {/* Mobile Bottom 4-Tab Menu Bar (ONLY in Planning Mode!) */}
@@ -6597,6 +6697,17 @@ export const App: React.FC = () => {
       {/* MODE B: NAVIGATING BOTTOM BAR (No bottom 4-tab menu! Just slim telemetry or temporary overlay) */}
       {isMobile && mobileDisplayMode === 'navigating' && (
         <div className={`relative z-30 border-t shadow-2xl shrink-0 pb-safe ${t.panel}`}>
+          {mobileNavOverlay && (
+            <div className="flex justify-end px-2 pt-1">
+              <MinimizeToggle
+                minimized={isMobileSheetMinimized}
+                onToggle={() => setIsMobileSheetMinimized((v) => !v)}
+                theme={theme}
+                className="!p-1"
+              />
+            </div>
+          )}
+          <div className={mobileNavOverlay && isMobileSheetMinimized ? 'hidden' : 'contents'}>
           {mobileNavOverlay === 'user-icon' ? (
             <UserIconPickerSheet
               isOpen
@@ -6613,18 +6724,21 @@ export const App: React.FC = () => {
             <LayerSwitcherSheet
               isOpen
               embedded
+              section={mobileLayerSection}
               onClose={() => setMobileNavOverlay(null)}
               visibility={visibility}
               onChangeVisibility={setVisibility}
               theme={theme}
               onSelectTheme={setTheme}
+              mapStyle={mapStyle}
+              onSelectMapStyle={setMapStyle}
               onToggle3D={handleToggle3D}
             />
           ) : mobileNavOverlay === 'add-poi' ? (
             <div className="max-h-[58vh] overflow-y-auto">
               <AddPoiPanel
                 theme={theme}
-                centerCoords={cursorCoords}
+                centerCoords={addPoiCoords ?? cursorCoords}
                 currentUser={currentUser}
                 isOnline={isOnline}
                 firebaseAvailable={AuthService.isAvailable()}
@@ -6754,6 +6868,7 @@ export const App: React.FC = () => {
               </div>
             </div>
           )}
+          </div>
         </div>
       )}
 

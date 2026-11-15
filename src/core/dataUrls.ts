@@ -3,11 +3,10 @@
  *
  * - Local Web Dev/Preview (localhost / 127.0.0.1, non-native): data is served from local `data/` (`/data/...`).
  * - Deployed Web & Native Android/iOS (Capacitor): Firebase Hosting data site (`navapp-israel-topo-data.web.app`)
- *   is the single source of truth for all 5 data files:
+ *   is the single source of truth for all 4 data files:
  *     - Israel.dem.pmtiles
  *     - Israel.osm.pmtiles
  *     - Israel.pois.geojson
- *     - Israel.offroad.pois.geojson
  *     - Israel.search.idx
  */
 export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo-data.web.app';

@@ -33,11 +33,6 @@ if exist "data\Israel.pois.geojson" (
 ) else (
     echo   [WARN] data\Israel.pois.geojson not found in data\
 )
-if exist "data\Israel.offroad.pois.geojson" (
-    echo   [OK] data\Israel.offroad.pois.geojson
-) else (
-    echo   [WARN] data\Israel.offroad.pois.geojson not found in data\
-)
 if exist "data\Israel.search.idx" (
     echo   [OK] data\Israel.search.idx
 ) else (

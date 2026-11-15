@@ -373,7 +373,6 @@ self.addEventListener('fetch', (event) => {
     event.request.method === 'GET' &&
     url.origin === self.location.origin &&
     (url.pathname === '/data/Israel.pois.geojson' ||
-      url.pathname === '/data/Israel.offroad.pois.geojson' ||
       url.pathname === '/data/Israel.search.idx')
   ) {
     event.respondWith(
