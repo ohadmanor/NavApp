@@ -12,7 +12,7 @@ echo           Israel.pois.geojson, Israel.search.idx
 echo   Working Directory: %CD%
 echo ============================================================================
 
-call node devops\upload-map-data.mjs %*
+call node devops\script_helpers\upload-map-data.mjs %*
 if errorlevel 1 (
     echo.
     echo [ERROR] Map data upload failed! Check your internet connection or Firebase login.

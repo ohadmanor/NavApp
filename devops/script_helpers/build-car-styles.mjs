@@ -22,12 +22,12 @@ import * as esbuild from 'esbuild';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..');
-const ANDROID_ASSETS_DIR = path.join(ROOT_DIR, 'android', 'app', 'src', 'main', 'assets');
+const ROOT_DIR = path.resolve(__dirname, '..', '..');
+const ANDROID_ASSETS_DIR = path.join(ROOT_DIR, 'devops', 'mobile', 'android', 'app', 'src', 'main', 'assets');
 
 export async function generateCarStyleAssets() {
-  if (!fs.existsSync(path.join(ROOT_DIR, 'android', 'app', 'src', 'main'))) {
-    console.log('[Car Styles] android/ module not present yet; skipping native car style generation.');
+  if (!fs.existsSync(path.join(ROOT_DIR, 'devops', 'mobile', 'android', 'app', 'src', 'main'))) {
+    console.log('[Car Styles] devops/mobile/android/ module not present yet; skipping native car style generation.');
     return;
   }
 

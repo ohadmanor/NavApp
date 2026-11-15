@@ -9,9 +9,13 @@
     "allowNavigation": ["*"]
   },
   "android": {
+    "path": "devops/mobile/android",
     "allowMixedContent": false,
     "captureInput": false,
     "webContentsDebuggingEnabled": false
+  },
+  "ios": {
+    "path": "devops/mobile/ios"
   }
 }
 

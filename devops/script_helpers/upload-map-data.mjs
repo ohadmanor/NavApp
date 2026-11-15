@@ -148,7 +148,7 @@ async function main() {
       console.log('[2/4] Rebuilding Israel.search.idx from staged Israel.osm.pmtiles...');
       const buildRes = spawnSync(
         process.execPath,
-        [path.join(ROOT_DIR, 'devops', 'build-pmtiles-search-index.mjs'), '--if-present', '--input', stagedOsm],
+        [path.join(ROOT_DIR, 'devops', 'script_helpers', 'build-pmtiles-search-index.mjs'), '--if-present', '--input', stagedOsm],
         { cwd: ROOT_DIR, stdio: 'inherit' }
       );
       if (buildRes.status !== 0) {
@@ -215,7 +215,7 @@ async function main() {
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const deployRes = spawnSync(
     npxCmd,
-    ['firebase-tools', 'deploy', '--only', 'hosting:data'],
+    ['firebase-tools', 'deploy', '--config', 'devops/firebase/firebase.json', '--only', 'hosting:data'],
     { cwd: ROOT_DIR, stdio: 'inherit', shell: process.platform === 'win32' }
   );
   if (deployRes.status !== 0) {

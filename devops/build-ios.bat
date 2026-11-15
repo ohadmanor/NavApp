@@ -13,7 +13,7 @@ echo [1/4] Generating offline assets and building production web bundle...
 if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 if exist "dist\NavApp-Israel-Unsigned.ipa" del /F /Q "dist\NavApp-Israel-Unsigned.ipa" >nul 2>&1
 if exist "dist\NavApp-Israel-Release.ipa" del /F /Q "dist\NavApp-Israel-Release.ipa" >nul 2>&1
-call node devops\generate-offline-assets.mjs
+call node devops\script_helpers\generate-offline-assets.mjs
 call npm.cmd run build
 if errorlevel 1 (
     echo [ERROR] Web production build failed!
@@ -31,7 +31,7 @@ if not exist "node_modules\@capacitor\ios" (
     )
 )
 
-if not exist "ios" (
+if not exist "devops\mobile\ios" (
     call npx.cmd cap add ios
     if errorlevel 1 (
         echo [ERROR] Failed to initialize Capacitor iOS project!
@@ -48,7 +48,7 @@ if errorlevel 1 (
 )
 
 echo [3/4] Configuring iOS Info.plist (GPS, Background Location, ATS, AppIcon, Version)...
-call node devops\configure-ios.mjs
+call node devops\script_helpers\configure-ios.mjs
 if errorlevel 1 (
     echo [ERROR] iOS configuration failed!
     pause
@@ -59,12 +59,12 @@ echo [4/4] iOS Xcode Project Ready!
 echo.
 echo ============================================================================
 echo   [SUCCESS] Capacitor iOS Xcode project generated and synced at:
-echo   %CD%\ios\App\App.xcworkspace
+echo   %CD%\devops\mobile\ios\App\App.xcworkspace
 echo.
 echo   Note: Compiling and signing an .ipa requires macOS + Xcode.
 echo   Options to build the final .ipa:
-echo     1. On a Mac:      bash devops/build-ios-ipa.sh
-echo                       (or open ios/App/App.xcworkspace in Xcode)
+echo     1. On a Mac:      bash devops/script_helpers/build-ios-ipa.sh
+echo                       (or open devops/mobile/ios/App/App.xcworkspace in Xcode)
 echo     2. On GitHub CI:  Push to GitHub and run the "Build iOS App (.ipa)"
 echo                       workflow in Actions (.github/workflows/build-ios.yml)
 echo ============================================================================

@@ -592,7 +592,7 @@ describe('Private & User-Shared POIs (PRD-4)', () => {
   });
 
   it('keeps Firestore security rules wired for /private_pois/{poiId}', () => {
-    const rulesPath = path.resolve(process.cwd(), 'firestore.rules');
+    const rulesPath = path.resolve(process.cwd(), 'devops/firebase/firestore.rules');
     const rules = fs.readFileSync(rulesPath, 'utf8');
     expect(rules).toContain('match /private_pois/{poiId}');
     expect(rules).toContain('function validPrivatePoi(data, poiId)');

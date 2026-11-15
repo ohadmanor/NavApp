@@ -18,9 +18,9 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..');
-const ANDROID_DIR = path.join(ROOT_DIR, 'android');
-const KEYSTORE_DIR = path.join(__dirname, 'keystore');
+const ROOT_DIR = path.resolve(__dirname, '..', '..');
+const ANDROID_DIR = path.join(ROOT_DIR, 'devops', 'mobile', 'android');
+const KEYSTORE_DIR = path.join(ROOT_DIR, 'devops', 'keystore');
 const KEYSTORE_FILE = path.join(KEYSTORE_DIR, 'navapp-release.jks');
 
 const KEY_ALIAS = process.env.NAVAPP_KEY_ALIAS || 'navapp_israel_key';
@@ -186,7 +186,7 @@ function configureGradleSigning() {
     // navappReleaseSigning: Configured automatically by devops/configure-android-security.mjs
     signingConfigs {
         release {
-            storeFile file("../../devops/keystore/navapp-release.jks")
+            storeFile file("../../../keystore/navapp-release.jks")
             storePassword "${KEY_PASS}"
             keyAlias "${KEY_ALIAS}"
             keyPassword "${KEY_PASS}"

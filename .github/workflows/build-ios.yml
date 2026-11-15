@@ -41,8 +41,8 @@ jobs:
           IOS_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
-          chmod +x devops/build-ios-ipa.sh
-          bash devops/build-ios-ipa.sh --${{ inputs.build_mode }}
+          chmod +x devops/script_helpers/build-ios-ipa.sh
+          bash devops/script_helpers/build-ios-ipa.sh --${{ inputs.build_mode }}
 
       - name: Upload iOS build artifact
         uses: actions/upload-artifact@v4

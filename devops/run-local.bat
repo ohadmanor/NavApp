@@ -24,7 +24,7 @@ if exist "data\Israel.dem.pmtiles" (
 )
 if exist "data\Israel.osm.pmtiles" (
     echo   [OK] data\Israel.osm.pmtiles  ^(Updatable OpenMapTiles Vector Map^)
-    call node devops\build-pmtiles-search-index.mjs --if-present --if-stale
+    call node devops\script_helpers\build-pmtiles-search-index.mjs --if-present --if-stale
 ) else (
     echo   [WARN] data\Israel.osm.pmtiles not found in data\
 )

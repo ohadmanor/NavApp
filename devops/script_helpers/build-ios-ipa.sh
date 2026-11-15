@@ -22,7 +22,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${ROOT_DIR}"
 
 MODE="auto"
@@ -70,14 +70,14 @@ echo "==========================================================================
 
 echo "[1/5] Generating offline assets and building web bundle..."
 rm -f dist/*.apk dist/*.ipa dist/*.app.zip
-node devops/generate-offline-assets.mjs
+node devops/script_helpers/generate-offline-assets.mjs
 npm run build
 
 echo "[2/5] Syncing web bundle with Capacitor iOS native project..."
 if [[ ! -d node_modules/@capacitor/ios ]]; then
   npm install @capacitor/ios@^7.6.10
 fi
-if [[ ! -d ios ]]; then
+if [[ ! -d devops/mobile/ios ]]; then
   npx cap add ios
 fi
 npx cap sync ios
@@ -86,10 +86,10 @@ echo "[3/5] Applying iOS Info.plist, permissions, ATS security, version & AppIco
 if [[ "${MODE}" != "unsigned" && "${MODE}" != "simulator" ]]; then
   export IOS_EXPORT_METHOD="${MODE}"
 fi
-node devops/configure-ios.mjs
+node devops/script_helpers/configure-ios.mjs
 
 echo "[4/5] Installing CocoaPods dependencies..."
-cd "${ROOT_DIR}/ios/App"
+cd "${ROOT_DIR}/devops/mobile/ios/App"
 if [[ -f Podfile ]]; then
   if command -v pod >/dev/null 2>&1; then
     pod install
@@ -98,7 +98,7 @@ if [[ -f Podfile ]]; then
   fi
 fi
 
-BUILD_DIR="${ROOT_DIR}/ios/App/build"
+BUILD_DIR="${ROOT_DIR}/devops/mobile/ios/App/build"
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 
@@ -184,7 +184,7 @@ else
   xcodebuild -exportArchive \
     -archivePath "${ARCHIVE_PATH}" \
     -exportPath "${EXPORT_DIR}" \
-    -exportOptionsPlist "${ROOT_DIR}/ios/App/ExportOptions.plist" \
+    -exportOptionsPlist "${ROOT_DIR}/devops/mobile/ios/App/ExportOptions.plist" \
     -allowProvisioningUpdates
 
   BUILT_IPA="$(find "${EXPORT_DIR}" -maxdepth 1 -name '*.ipa' | head -n 1)"

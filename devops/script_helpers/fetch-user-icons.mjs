@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const OUT_DIR = path.resolve(__dirname, '..', 'public', 'assets', 'user-icons');
+const OUT_DIR = path.resolve(__dirname, '..', '..', 'src', 'public', 'assets', 'user-icons');
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 

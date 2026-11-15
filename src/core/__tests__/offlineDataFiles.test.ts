@@ -323,7 +323,7 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
 
   it('devops/map-data-common defines all 4 Firebase files and validates file formats', async () => {
     // @ts-expect-error ESM devops helper has no .d.ts declaration
-    const commonMod: any = await import('../../../devops/map-data-common.mjs');
+    const commonMod: any = await import('../../../devops/script_helpers/map-data-common.mjs');
     expect(commonMod.MAP_DATA_FILES.map((f: any) => f.fileName)).toEqual([
       'Israel.dem.pmtiles',
       'Israel.osm.pmtiles',

@@ -10,7 +10,7 @@ echo   Source: https://navapp-israel-topo-data.web.app/data/
 echo   Target: %CD%\data\
 echo ============================================================================
 
-call node devops\download-map-data.mjs %*
+call node devops\script_helpers\download-map-data.mjs %*
 if errorlevel 1 (
     echo.
     echo [ERROR] Download failed! Check your internet connection.

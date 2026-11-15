@@ -11,8 +11,8 @@ echo ===========================================================================
 
 echo [1/5] Generating offline assets and building production web bundle...
 if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
-if exist "android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" del /F /Q "android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" >nul 2>&1
-call node devops\generate-offline-assets.mjs
+if exist "devops\mobile\android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" del /F /Q "devops\mobile\android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" >nul 2>&1
+call node devops\script_helpers\generate-offline-assets.mjs
 call npm.cmd run build
 if errorlevel 1 (
     echo [ERROR] Web production build failed!
@@ -27,7 +27,7 @@ if "%ANDROID_HOME%"=="" (
 )
 
 echo [2/5] Syncing web bundle with Capacitor Android native project...
-if not exist "android" (
+if not exist "devops\mobile\android" (
     call npx.cmd cap add android
 )
 call npx.cmd cap sync android
@@ -38,7 +38,7 @@ if errorlevel 1 (
 )
 
 echo [3/5] Applying Android Security Hardening ^& RSA-2048 Release Signing Keystore...
-call node devops\configure-android-security.mjs
+call node devops\script_helpers\configure-android-security.mjs
 if errorlevel 1 (
     echo [ERROR] Android security configuration failed!
     pause
@@ -46,7 +46,7 @@ if errorlevel 1 (
 )
 
 echo [4/5] Building Signed Release APK via Gradle ^(assembleRelease^)...
-cd /d "%~dp0\..\android"
+cd /d "%~dp0\..\devops\mobile\android"
 call gradlew.bat assembleRelease
 if errorlevel 1 (
     echo.
@@ -59,7 +59,7 @@ if errorlevel 1 (
 )
 
 cd /d "%~dp0\.."
-set "SIGNED_APK=android\app\build\outputs\apk\release\app-release.apk"
+set "SIGNED_APK=devops\mobile\android\app\build\outputs\apk\release\app-release.apk"
 if exist "%SIGNED_APK%" (
     copy /Y "%SIGNED_APK%" "dist\NavApp-Israel-Signed-Release.apk" >nul
     echo.
@@ -72,7 +72,7 @@ if exist "%SIGNED_APK%" (
     echo     devops\install-android-auto-apk.bat
     echo ============================================================================
 ) else (
-    echo [INFO] Check android\app\build\outputs\apk\release\ for the generated APK.
+    echo [INFO] Check devops\mobile\android\app\build\outputs\apk\release\ for the generated APK.
 )
 
 pause

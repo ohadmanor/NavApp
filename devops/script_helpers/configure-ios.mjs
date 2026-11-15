@@ -26,8 +26,8 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..');
-const IOS_DIR = path.join(ROOT_DIR, 'ios');
+const ROOT_DIR = path.resolve(__dirname, '..', '..');
+const IOS_DIR = path.join(ROOT_DIR, 'devops', 'mobile', 'ios');
 const IOS_APP_DIR = path.join(IOS_DIR, 'App');
 const INFO_PLIST_PATH = path.join(IOS_APP_DIR, 'App', 'Info.plist');
 const PBXPROJ_PATH = path.join(IOS_APP_DIR, 'App.xcodeproj', 'project.pbxproj');
@@ -39,7 +39,7 @@ const APP_ICON_TARGET = path.join(
   'AppIcon.appiconset',
   'AppIcon-512@2x.png'
 );
-const SOURCE_ICON = path.join(ROOT_DIR, 'public', 'icon-512.png');
+const SOURCE_ICON = path.join(ROOT_DIR, 'src', 'public', 'icon-512.png');
 
 function readPackageVersion() {
   try {

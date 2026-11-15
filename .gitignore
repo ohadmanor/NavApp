@@ -8,16 +8,17 @@ node_modules/
 # Build and distribution
 dist/
 build/
-android/app/build/
-android/.gradle/
-android/local.properties
-android/capacitor-cordova-android-plugins/
+devops/mobile/android/app/build/
+devops/mobile/android/.gradle/
+devops/mobile/android/local.properties
+devops/mobile/android/capacitor-cordova-android-plugins/
+devops/mobile/ios/App/build/
 
 # Heavy Map Data & Archives (Firebase hosting:data is the source of truth)
 /data/
-public/data/*.pmtiles
-public/data/*.geojson
-public/data/*.idx
+src/public/data/*.pmtiles
+src/public/data/*.geojson
+src/public/data/*.idx
 deploy_data/
 backups/
 

@@ -65,7 +65,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     beforeAll(async () => {
       testEnv = await initializeTestEnvironment({
         projectId: PROJECT_ID,
-        firestore: { rules: fs.readFileSync('firestore.rules', 'utf8') },
+        firestore: { rules: fs.readFileSync('devops/firebase/firestore.rules', 'utf8') },
       });
     });
 

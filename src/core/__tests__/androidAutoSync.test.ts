@@ -400,8 +400,8 @@ describe('Android Auto Sync, Native Offline Storage & Car Style Templates', () =
   });
 
   it('emits MapLibre Native v8 car style templates with placeholders and no Web contour sources', async () => {
-    const dayPath = path.resolve('android/app/src/main/assets/car_style_day.json');
-    const darkPath = path.resolve('android/app/src/main/assets/car_style_dark.json');
+    const dayPath = path.resolve('devops/mobile/android/app/src/main/assets/car_style_day.json');
+    const darkPath = path.resolve('devops/mobile/android/app/src/main/assets/car_style_dark.json');
 
     expect(fs.existsSync(dayPath)).toBe(true);
     expect(fs.existsSync(darkPath)).toBe(true);

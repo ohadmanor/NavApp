@@ -21,7 +21,7 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..');
+const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const inputFlagIdx = process.argv.indexOf('--input');
 const INPUT_PMTILES =
   inputFlagIdx !== -1 && process.argv[inputFlagIdx + 1]

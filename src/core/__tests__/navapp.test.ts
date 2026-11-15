@@ -1698,7 +1698,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
   };
 
   it('indexes all searchable PMTiles layers inside Israel.search.idx with fingerprint matching Israel.osm.pmtiles', async () => {
-    expect(fs.existsSync('public/data/Israel.search.idx')).toBe(false);
+    expect(fs.existsSync('src/public/data/Israel.search.idx')).toBe(false);
     if (!fs.existsSync('data/Israel.search.idx')) return;
     const idxBytes = fs.readFileSync('data/Israel.search.idx');
     const payload = await parseSearchIndexBytes(idxBytes, {
@@ -2202,7 +2202,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
     const svgIcons = BUILT_IN_USER_ICONS.filter((i) => i.id !== 'gps-puck');
     expect(svgIcons.length).toBeGreaterThanOrEqual(15);
     for (const icon of svgIcons) {
-      const diskPath = `public${icon.svgUrl}`;
+      const diskPath = `src/public${icon.svgUrl}`;
       expect(fs.existsSync(diskPath), `Missing ${diskPath}`).toBe(true);
       const content = fs.readFileSync(diskPath, 'utf-8');
       expect(content).toContain('<svg');
@@ -2728,7 +2728,7 @@ describe('Full-Map PMTiles Search Index, Ranking, Coordinates & Runtime Extracti
   });
 
   it('validates the single merged Israel.pois.geojson in data/ without bundling public/data/', () => {
-    expect(fs.existsSync('public/data/Israel.pois.geojson')).toBe(false);
+    expect(fs.existsSync('src/public/data/Israel.pois.geojson')).toBe(false);
     expect(fs.existsSync('devops/fetch-israel-pois.mjs')).toBe(false);
     if (!fs.existsSync('data/Israel.pois.geojson')) return;
     const parsed = JSON.parse(fs.readFileSync('data/Israel.pois.geojson', 'utf-8'));

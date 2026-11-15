@@ -19,11 +19,13 @@ import * as esbuild from 'esbuild';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..');
-const SPRITES_DIR = path.join(ROOT_DIR, 'public', 'assets', 'sprites');
-const SVG_OUT_DIR = path.join(ROOT_DIR, 'public', 'assets', 'poi-symbols');
+const ROOT_DIR = path.resolve(__dirname, '..', '..');
+const SPRITES_DIR = path.join(ROOT_DIR, 'src', 'public', 'assets', 'sprites');
+const SVG_OUT_DIR = path.join(ROOT_DIR, 'src', 'public', 'assets', 'poi-symbols');
 const ANDROID_SPRITES_DIR = path.join(
   ROOT_DIR,
+  'devops',
+  'mobile',
   'android',
   'app',
   'src',
@@ -117,7 +119,7 @@ async function main() {
     fs.writeFileSync(path.join(SVG_OUT_DIR, `${entry.id}.svg`), entry.svg1x, 'utf-8');
   }
   console.log(
-    `[POI Symbols] Wrote ${poiEntries.length} standalone hiking SVGs to public/assets/poi-symbols/ (+${standardEntries.length} modern standard map glyphs for sprite atlas)`
+    `[POI Symbols] Wrote ${poiEntries.length} standalone hiking SVGs to src/public/assets/poi-symbols/ (+${standardEntries.length} modern standard map glyphs for sprite atlas)`
   );
 
   const spriteJson1Path = path.join(SPRITES_DIR, 'sprite.json');

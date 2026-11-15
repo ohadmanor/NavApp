@@ -15,7 +15,7 @@ import { generateCarStyleAssets } from './build-car-styles.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
+const PUBLIC_DIR = path.resolve(__dirname, '..', '..', 'src', 'public');
 const ASSETS_DIR = path.join(PUBLIC_DIR, 'assets');
 const SPRITES_DIR = path.join(ASSETS_DIR, 'sprites');
 
@@ -412,6 +412,6 @@ self.addEventListener('fetch', (event) => {
 `;
 fs.writeFileSync(path.join(PUBLIC_DIR, 'sw.js'), swCode, 'utf-8');
 
-console.log('[Offline Assets] Generated manifest.webmanifest, rtl-text-plugin.js, and sw.js in public/');
+console.log('[Offline Assets] Generated manifest.webmanifest, rtl-text-plugin.js, and sw.js in src/public/');
 
 await generateCarStyleAssets();

@@ -80,7 +80,7 @@ describe.skipIf(!EMULATOR_HOST)(
 
     beforeAll(async () => {
       const [host, portStr] = EMULATOR_HOST.split(':');
-      const rules = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
+      const rules = fs.readFileSync(path.resolve(process.cwd(), 'devops/firebase/firestore.rules'), 'utf8');
       testEnv = await initializeTestEnvironment({
         projectId: 'navapp-private-pois-rules-test',
         firestore: {

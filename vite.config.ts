@@ -137,6 +137,9 @@ function pmtilesDataRangePlugin(): Plugin {
 }
 
 export default defineConfig({
+  root: path.resolve(__dirname, 'src'),
+  publicDir: path.resolve(__dirname, 'src', 'public'),
+  envDir: __dirname,
   plugins: [react(), tailwindcss(), pmtilesDataRangePlugin()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
@@ -150,7 +153,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: path.resolve(__dirname, 'dist'),
     emptyOutDir: false, // Never wipe dist/ so large PMTiles files are preserved across builds
     sourcemap: false,
     chunkSizeWarningLimit: 2000,

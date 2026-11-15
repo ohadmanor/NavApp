@@ -49,7 +49,7 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
     expect(pkg.version).toBe('0.5.0');
 
-    const gradle = fs.readFileSync('android/app/build.gradle', 'utf-8');
+    const gradle = fs.readFileSync('devops/mobile/android/app/build.gradle', 'utf-8');
     expect(gradle).toContain('versionName "0.5.0"');
 
     const layerSheetSrc = fs.readFileSync('src/components/map/LayerSwitcherSheet.tsx', 'utf-8');
@@ -201,7 +201,7 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     expect(mobileLocateIdx).toBeGreaterThan(desktopGoogleIdx);
     expect(mobileGoogleIdx).toBeGreaterThan(mobileLocateIdx);
 
-    const rules = fs.readFileSync('firestore.rules', 'utf-8');
+    const rules = fs.readFileSync('devops/firebase/firestore.rules', 'utf-8');
     expect(rules).toContain('/planing_tracks/{userId}/settings/{settingId}');
   });
 
@@ -212,7 +212,7 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     expect(isCapacitorNativePlatform()).toBe(true);
 
     const mainActivitySrc = fs.readFileSync(
-      'android/app/src/main/java/com/navapp/outdoor/israel/MainActivity.java',
+      'devops/mobile/android/app/src/main/java/com/navapp/outdoor/israel/MainActivity.java',
       'utf-8'
     );
     expect(mainActivitySrc).toContain('setSupportMultipleWindows(true)');
@@ -220,7 +220,7 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     expect(mainActivitySrc).toContain('new NavAppWebChromeClient');
 
     const chromeClientSrc = fs.readFileSync(
-      'android/app/src/main/java/com/navapp/outdoor/israel/NavAppWebChromeClient.java',
+      'devops/mobile/android/app/src/main/java/com/navapp/outdoor/israel/NavAppWebChromeClient.java',
       'utf-8'
     );
     expect(chromeClientSrc).toContain('onCreateWindow');

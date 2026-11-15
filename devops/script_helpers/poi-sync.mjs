@@ -66,7 +66,7 @@ export async function pushPois({ force = false } = {}) {
     throw new Error('Remote POI file changed since your last pull. Run "pull" and redo the edit (or pass --force).');
   }
   console.log(`[POI] Uploading ${count} POIs to Firebase...`);
-  const res = spawnSync(process.execPath, [path.join(ROOT_DIR, 'devops', 'upload-map-data.mjs'), POI_PATH], {
+  const res = spawnSync(process.execPath, [path.join(ROOT_DIR, 'devops', 'script_helpers', 'upload-map-data.mjs'), POI_PATH], {
     cwd: ROOT_DIR,
     stdio: 'inherit',
   });

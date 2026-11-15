@@ -140,7 +140,7 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
       expect(spec.id.startsWith(`poi-${spec.category}-`)).toBe(true);
 
       // Standalone modern SVG symbol exists on disk
-      const svgPath = path.resolve(`public/assets/poi-symbols/${spec.id}.svg`);
+      const svgPath = path.resolve(`src/public/assets/poi-symbols/${spec.id}.svg`);
       expect(fs.existsSync(svgPath)).toBe(true);
       expect(fs.readFileSync(svgPath, 'utf-8')).toContain('<svg');
 
@@ -175,10 +175,10 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
 
     // Verify web & Android sprite sheets contain all 31 modern POI sprites
     for (const spriteJsonPath of [
-      'public/assets/sprites/sprite.json',
-      'public/assets/sprites/sprite@2x.json',
-      'android/app/src/main/assets/public/assets/sprites/sprite.json',
-      'android/app/src/main/assets/public/assets/sprites/sprite@2x.json',
+      'src/public/assets/sprites/sprite.json',
+      'src/public/assets/sprites/sprite@2x.json',
+      'devops/mobile/android/app/src/main/assets/public/assets/sprites/sprite.json',
+      'devops/mobile/android/app/src/main/assets/public/assets/sprites/sprite@2x.json',
     ]) {
       expect(fs.existsSync(spriteJsonPath)).toBe(true);
       const parsed = JSON.parse(fs.readFileSync(spriteJsonPath, 'utf-8'));
@@ -512,7 +512,7 @@ describe('POI Refactoring: Strict 1-to-1 Symbol Taxonomy, Text Recategorization 
   });
 
   it('audits data/ Israel.pois.geojson (OSM + Off-Road, single file) for zero legacy subcategories and valid exclusive symbol resolution (and ensures public/data/ is not bundled)', () => {
-    expect(fs.existsSync('public/data/Israel.pois.geojson')).toBe(false);
+    expect(fs.existsSync('src/public/data/Israel.pois.geojson')).toBe(false);
 
     for (const dataRel of ['data/Israel.pois.geojson']) {
       if (!fs.existsSync(dataRel)) continue;
