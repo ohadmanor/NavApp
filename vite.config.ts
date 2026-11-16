@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 function buildAppVersionString(): string {
-  let baseVersion = '0.5.0';
+  let baseVersion = '1.0.0';
   try {
     const pkgPath = path.resolve(__dirname, 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: string };

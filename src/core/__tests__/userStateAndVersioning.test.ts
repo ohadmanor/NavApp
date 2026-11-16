@@ -42,15 +42,15 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     vi.unstubAllGlobals();
   });
 
-  it('formats app version as x.y.z.<date&time> starting at 0.5.0 and displays it at the bottom of LayerSwitcherSheet', () => {
+  it('formats app version as x.y.z.<date&time> starting at 1.0.0 and displays it at the bottom of LayerSwitcherSheet', () => {
     const version = getAppVersion();
-    expect(version).toMatch(/^0\.5\.0\.\d{8}-\d{4}$/);
+    expect(version).toMatch(/^1\.0\.0\.\d{8}-\d{4}$/);
 
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-    expect(pkg.version).toBe('0.5.0');
+    expect(pkg.version).toBe('1.0.0');
 
     const gradle = fs.readFileSync('devops/mobile/android/app/build.gradle', 'utf-8');
-    expect(gradle).toContain('versionName "0.5.0"');
+    expect(gradle).toContain('versionName "1.0.0"');
 
     const layerSheetSrc = fs.readFileSync('src/components/map/LayerSwitcherSheet.tsx', 'utf-8');
     expect(layerSheetSrc).toContain('getAppVersion()');

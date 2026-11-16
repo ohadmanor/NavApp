@@ -103,7 +103,7 @@ rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 
 WORKSPACE_OR_PROJECT=()
-if [[ -d App.xcworkspace ]]; then
+if [[ -f App.xcworkspace/contents.xcworkspacedata ]]; then
   WORKSPACE_OR_PROJECT=(-workspace App.xcworkspace)
 else
   WORKSPACE_OR_PROJECT=(-project App.xcodeproj)

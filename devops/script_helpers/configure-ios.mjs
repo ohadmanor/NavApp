@@ -44,11 +44,11 @@ const SOURCE_ICON = path.join(ROOT_DIR, 'src', 'public', 'icon-512.png');
 function readPackageVersion() {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf-8'));
-    const raw = String(pkg.version || '0.5.0').trim();
+    const raw = String(pkg.version || '1.0.0').trim();
     const match = /^\d+\.\d+\.\d+/.exec(raw);
-    return match ? match[0] : '0.5.0';
+    return match ? match[0] : '1.0.0';
   } catch {
-    return '0.5.0';
+    return '1.0.0';
   }
 }
 
