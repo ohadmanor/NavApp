@@ -86,6 +86,7 @@ describe('Map Style Switcher (IHM vs NMS)', () => {
     const namePath = nmsDay.layers.find((l) => l.id === 'name-path') as any;
     const shieldMotorway = nmsDay.layers.find((l) => l.id === 'shield-motorway') as any;
     const iconFuel = nmsDay.layers.find((l) => l.id === 'icon-fuel') as any;
+    const nameWaterPoint = nmsDay.layers.find((l) => l.id === 'name-water-point') as any;
 
     expect(Array.isArray(placeCity.layout['text-size'])).toBe(true);
     expect(placeCity.layout['text-size'][0]).toBe('interpolate');
@@ -115,8 +116,8 @@ describe('Map Style Switcher (IHM vs NMS)', () => {
     expect(iconFuel.minzoom).toBe(14);
     expect(Array.isArray(iconFuel.layout['icon-size'])).toBe(true);
     expect(iconFuel.layout['icon-size'][iconFuel.layout['icon-size'].length - 1]).toBe(0.78);
-    expect(Array.isArray(iconFuel.layout['text-size'])).toBe(true);
-    expect(iconFuel.paint['text-halo-color']).toBe('#FFFFFF');
+    expect(Array.isArray(nameWaterPoint.layout['text-size'])).toBe(true);
+    expect(nameWaterPoint.paint['text-halo-color']).toBe('#FFFFFF');
 
     // GeoJSON POI icon size expression: NMS capped at 0.78 multiplier vs IHM 1.28 at z17.5
     const ihmPoiSize = buildPoiIconSizeExpression('ihm');

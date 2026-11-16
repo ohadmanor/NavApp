@@ -276,6 +276,7 @@ describe('Client-Side Route Planner (4x4, Foot, Bicycle) & Firebase planing_trac
   });
 
   it('snaps and routes on real Israel.osm.pmtiles vector tiles in Ein Aqev (4x4 & foot) and Jerusalem (foot/bicycle)', async () => {
+    if (!fs.existsSync('data/Israel.osm.pmtiles')) return;
     const real = createRealIsraelOsmFetcher();
     try {
       const builder = new TileRoadGraphBuilder({ fetchTileData: real.fetcher });
