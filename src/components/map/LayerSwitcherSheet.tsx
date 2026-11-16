@@ -13,6 +13,7 @@ import {
 } from '../../core/style/israelOutdoorStyle';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 import { getAppVersion } from '../../core/appVersion';
+import { isLocalDevServer } from '../../core/dataUrls';
 import { PoiCategoryIcon } from '../pois/PoiCategoryIcon';
 import { MinimizeToggle } from '../ui/MinimizeToggle';
 import type { PoiCategory } from '../../core/db/NavDatabase';
@@ -70,7 +71,10 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     });
   };
 
+  const isLocalhost = isLocalDevServer();
+
   const toggleAerial = (key: 'googleSatellite' | 'govmapOrtho') => {
+    if (key === 'govmapOrtho' && !isLocalhost) return;
     const nextValue = !visibility[key];
     onChangeVisibility({
       ...visibility,
@@ -93,13 +97,17 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
       idleDesc: 'מוסיף תצלום לוויין ומציג דרכים, שבילים ונקודות עניין (POI) בלבד',
       badge: 'SAT',
     },
-    {
-      key: 'govmapOrtho',
-      title: 'תצלום אוויר GovMap (מפ״י 2025)',
-      activeDesc: 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) מעל אורתופוטו GovMap',
-      idleDesc: 'מוסיף תצלום אוויר עדכני של מפ״י ומציג דרכים, שבילים ונקודות עניין בלבד',
-      badge: 'ORTHO',
-    },
+    ...(isLocalhost
+      ? [
+          {
+            key: 'govmapOrtho' as const,
+            title: 'תצלום אוויר GovMap (מפ״י 2025)',
+            activeDesc: 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) מעל אורתופוטו GovMap',
+            idleDesc: 'מוסיף תצלום אוויר עדכני של מפ״י ומציג דרכים, שבילים ונקודות עניין בלבד',
+            badge: 'ORTHO',
+          },
+        ]
+      : []),
   ];
 
   const terrainToggles: Array<{
