@@ -215,7 +215,7 @@ async function main() {
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const deployRes = spawnSync(
     npxCmd,
-    ['firebase-tools', 'deploy', '--config', 'devops/firebase/firebase.json', '--only', 'hosting:data'],
+    ['firebase-tools', 'deploy', '--only', 'hosting:data'],
     { cwd: ROOT_DIR, stdio: 'inherit', shell: process.platform === 'win32' }
   );
   if (deployRes.status !== 0) {

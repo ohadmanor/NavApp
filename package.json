@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --port 4173 --host",
     "test": "vitest run",
-    "test:firestore-rules": "firebase emulators:exec --config devops/firebase/firebase.json --only firestore --project demo-navapp \"vitest run src/core/__tests__/trailAnnotations.rules.test.ts\"",
+    "test:firestore-rules": "firebase emulators:exec --only firestore --project demo-navapp \"vitest run src/core/__tests__/trailAnnotations.rules.test.ts\"",
     "build-search-index": "node devops/script_helpers/build-pmtiles-search-index.mjs",
     "poi:pull": "node devops/script_helpers/poi-sync.mjs pull",
     "poi:push": "node devops/script_helpers/poi-sync.mjs push",

@@ -21,7 +21,7 @@ if errorlevel 1 (
 )
 
 echo [3/3] Deploying Firestore Rules/Indexes + Web App to Firebase Hosting...
-call npx.cmd firebase-tools deploy --config devops/firebase/firebase.json --only firestore,hosting:app
+call npx.cmd firebase-tools deploy --only firestore,hosting:app
 if errorlevel 1 (
     echo.
     echo [INFO] If you are not logged into Firebase CLI yet, run:

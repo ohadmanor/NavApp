@@ -1,10 +1,10 @@
 {
   "firestore": {
-    "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
+    "rules": "devops/firebase/firestore.rules",
+    "indexes": "devops/firebase/firestore.indexes.json"
   },
   "storage": {
-    "rules": "storage.rules"
+    "rules": "devops/firebase/storage.rules"
   },
   "emulators": {
     "firestore": {
@@ -17,7 +17,7 @@
   "hosting": [
     {
       "target": "app",
-      "public": "../../dist",
+      "public": "dist",
       "ignore": [
         "firebase.json",
         "**/.*",
@@ -36,7 +36,7 @@
     },
     {
       "target": "data",
-      "public": "../../deploy_data",
+      "public": "deploy_data",
       "ignore": [
         "firebase.json",
         "**/.*"
