@@ -25,6 +25,7 @@ import {
   Copy,
   Users,
   Share2,
+  FolderTree,
 } from 'lucide-react';
 import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
 import {
@@ -135,6 +136,7 @@ interface ElevationProfileDrawerProps {
   onClearBackgroundRoutes?: () => void;
   onReverseRoute?: (routeId: string) => void | Promise<void>;
   onEditRouteInPlanner?: (route: SavedRouteRecord) => void;
+  onSendToPlanningDb?: (route: SavedRouteRecord) => void;
   onClose: () => void;
   onHoverPoint: (pt: { lon: number; lat: number; ele: number; distKm: number } | null) => void;
   onSelectPoint?: (pt: { lon: number; lat: number; ele: number; distKm: number }) => void;
@@ -169,6 +171,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   onClearBackgroundRoutes,
   onReverseRoute,
   onEditRouteInPlanner,
+  onSendToPlanningDb,
   onClose,
   onHoverPoint,
   onSelectPoint,
@@ -1663,6 +1666,17 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               <Download className="w-3.5 h-3.5 text-sky-500" />
               <span>GPX</span>
             </button>
+
+            {onSendToPlanningDb && (
+              <button
+                onClick={() => onSendToPlanningDb(route)}
+                className={`px-3 py-2.5 rounded-xl border text-xs font-bold flex items-center gap-1 ${t.pillBtn}`}
+                title="שלח למאגר תכנון מסלולים (תיקיות, קטגוריה וקושי)"
+              >
+                <FolderTree className="w-3.5 h-3.5 text-emerald-500" />
+                <span>למאגר תכנון</span>
+              </button>
+            )}
 
             {!isSharedRoute && onDeleteRoute && (
               <button

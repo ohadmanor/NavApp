@@ -38,6 +38,10 @@ export interface SearchBarProps {
   isOnline: boolean;
   onOpenMobileOffline: () => void;
   onToggleDesktopRoutes: () => void;
+  /** Focus the input as soon as the bar mounts (the bar was opened from an icon). */
+  autoFocus?: boolean;
+  /** Makes the bar a dismissible box: a close button replaces the offline / routes control. */
+  onClose?: () => void;
 }
 
 export const SearchBar: React.FC<SearchBarProps> = React.memo(
@@ -64,6 +68,8 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(
     isOnline,
     onOpenMobileOffline,
     onToggleDesktopRoutes,
+    autoFocus = false,
+    onClose,
   }) => {
     const t = getSurfaceTheme(theme);
     const inputRef = useRef<HTMLInputElement | null>(null);
@@ -127,6 +133,7 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(
             autoCorrect="off"
             autoCapitalize="none"
             spellCheck={false}
+            autoFocus={autoFocus}
             value={localQuery}
             onFocus={() => onChangeSearchFocused(true)}
             onCompositionStart={() => {
@@ -147,6 +154,7 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(
               if (e.key === 'Escape') {
                 onChangeSearchFocused(false);
                 e.currentTarget.blur();
+                onClose?.();
                 return;
               }
               if (e.key === 'ArrowDown' && searchResults.length > 0) {
@@ -196,7 +204,17 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(
             </button>
           )}
 
-          {compactMobile ? (
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="סגור חיפוש"
+              title="סגור חיפוש"
+              className={`px-2.5 py-0.5 rounded-full border text-xs font-bold shrink-0 ${t.pillBtn}`}
+            >
+              סגור
+            </button>
+          ) : compactMobile ? (
             <button
               type="button"
               onClick={onOpenMobileOffline}

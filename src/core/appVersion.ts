@@ -1,4 +1,4 @@
-export const BASE_APP_VERSION = '1.0.0';
+export const BASE_APP_VERSION = '1.0.1';
 
 export function formatVersionDateTimeTag(date = new Date()): string {
   const yyyy = date.getFullYear();

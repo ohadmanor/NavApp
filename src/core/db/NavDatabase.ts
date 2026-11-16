@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 import type { PlanningMode } from '../routing/RoutingProfiles';
+import type { TrailCategoryId, TrailDifficulty } from '../navigation/PlanningTrailTaxonomy';
 import type {
   TrailAnnotationDraftRecord,
   TrailAnnotationRecord,
@@ -147,6 +148,62 @@ export interface SavedRouteRecord {
   updatedAt?: string;
 }
 
+export interface PlanningFolderRecord {
+  id: string;
+  ownerUid: string;
+  name: string;
+  parentId: string | null;
+  pathIds: string[];
+  color?: string;
+  defaultCategoryId?: TrailCategoryId;
+  defaultDifficulty?: TrailDifficulty;
+  sortOrder: number;
+  cloudSyncStatus?: CloudSyncStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanningTrailPayloadRecord {
+  id: string;
+  geojson: GeoJSON.FeatureCollection;
+  elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
+  waypoints?: PlannedWaypoint[];
+  gpxXml?: string;
+  updatedAt: string;
+}
+
+export interface PlanningTrailRecord {
+  id: string;
+  ownerUid: string;
+  name: string;
+  folderId: string | null;
+  categoryId: TrailCategoryId;
+  customCategoryLabel?: string;
+  difficulty: TrailDifficulty;
+  planningMode?: PlanningMode;
+  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn' | 'planned';
+  distanceKm: number;
+  ascentMeters: number;
+  descentMeters: number;
+  minEle: number;
+  maxEle: number;
+  bounds?: [number, number, number, number];
+  color: string;
+  tags?: string[];
+  isStarred?: boolean;
+  notes?: string;
+  sourceRouteId?: string | null;
+  hasFullPayload?: boolean;
+  geojson: GeoJSON.FeatureCollection;
+  elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
+  waypoints?: PlannedWaypoint[];
+  gpxXml?: string;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudStoragePath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RecordedTrackRecord {
   id: string;
   name: string;
@@ -207,6 +264,9 @@ export class NavDatabase extends Dexie {
   poiOverrides!: Table<PoiOverrideRecord, string>;
   routes!: Table<SavedRouteRecord, string>;
   routePayloads!: Table<RoutePayloadRecord, string>;
+  planningFolders!: Table<PlanningFolderRecord, string>;
+  planningTrails!: Table<PlanningTrailRecord, string>;
+  planningTrailPayloads!: Table<PlanningTrailPayloadRecord, string>;
   tracks!: Table<RecordedTrackRecord, string>;
   searchIndexCache!: Table<SearchIndexCacheRecord, string>;
   trailAnnotations!: Table<TrailAnnotationRecord, string>;
@@ -319,6 +379,23 @@ export class NavDatabase extends Dexie {
       routes:
         'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
       routePayloads: 'id, updatedAt',
+      tracks: 'id, startedAt',
+      searchIndexCache: 'fingerprint, createdUtc',
+      trailAnnotations: 'id, status, updatedAt, selectionReleaseId, *wayIds',
+      trailGeometryCache: 'id, wayId, releaseId',
+      trailAnnotationDrafts: 'id, ownerUid, updatedAt',
+    });
+    this.version(8).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source, visibility, ownerUid, ownership',
+      poiOverrides: 'id, deleted, category, updatedAt',
+      routes:
+        'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
+      routePayloads: 'id, updatedAt',
+      planningFolders: 'id, ownerUid, parentId, sortOrder, cloudSyncStatus, updatedAt, *pathIds',
+      planningTrails:
+        'id, ownerUid, name, folderId, categoryId, difficulty, isStarred, cloudSyncStatus, updatedAt, *tags',
+      planningTrailPayloads: 'id, updatedAt',
       tracks: 'id, startedAt',
       searchIndexCache: 'fingerprint, createdUtc',
       trailAnnotations: 'id, status, updatedAt, selectionReleaseId, *wayIds',

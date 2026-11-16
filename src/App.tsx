@@ -24,6 +24,8 @@ import {
   Undo2,
   Check,
   MapPin,
+  Search,
+  FolderTree,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
 import { offlineDataFiles } from './core/pmtiles/OfflineDataFiles';
@@ -115,6 +117,17 @@ import { SharePoiModal } from './components/pois/SharePoiModal';
 import { PoiCategoryIcon } from './components/pois/PoiCategoryIcon';
 import { MapStorageModal } from './components/maps-manager/MapStorageModal';
 import { ElevationProfileDrawer } from './components/navigation/ElevationProfileDrawer';
+import { PlanningTrailDbDrawer } from './components/navigation/PlanningTrailDbDrawer';
+import { SendToPlanningDbModal } from './components/navigation/SendToPlanningDbModal';
+import { PlanningTrailManager } from './core/navigation/PlanningTrailManager';
+import type {
+  TrailCategoryId,
+  TrailDifficulty,
+} from './core/navigation/PlanningTrailTaxonomy';
+import type {
+  PlanningFolderRecord,
+  PlanningTrailRecord,
+} from './core/db/NavDatabase';
 import { ShareRouteModal } from './components/navigation/ShareRouteModal';
 import { TrackRecorderPanel, formatDuration } from './components/navigation/TrackRecorderPanel';
 import {
@@ -150,6 +163,7 @@ import {
 type DesktopDrawerMode =
   | 'poi'
   | 'routes'
+  | 'planning-db'
   | 'record'
   | 'add-poi'
   | 'plan-route'
@@ -157,6 +171,7 @@ type DesktopDrawerMode =
 const DESKTOP_DRAWER_TITLES: Record<string, string> = {
   poi: 'נקודת עניין',
   routes: 'מסלולים',
+  'planning-db': 'מאגר תכנון מסלולים',
   'plan-route': 'תכנון מסלול',
   record: 'הקלטה',
   'add-poi': 'נקודה חדשה',
@@ -172,7 +187,7 @@ const LAYER_SECTION_BUTTONS: Array<{
   { id: 'pois', title: 'נקודות עניין (POI)', Icon: MapPin },
 ];
 
-type MobileTab = 'explore' | 'routes' | 'record' | 'offline';
+type MobileTab = 'explore' | 'routes' | 'planning-db' | 'record' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
 type MobileOverlayMode =
   | 'poi'
@@ -368,6 +383,8 @@ export const App: React.FC = () => {
   );
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  // Mobile navigating mode has no permanent search pill: the search icon opens this box on demand.
+  const [isNavSearchOpen, setIsNavSearchOpen] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Routes & Active Navigation
@@ -379,6 +396,14 @@ export const App: React.FC = () => {
   const [isNavigatingRoute, setIsNavigatingRoute] = useState(false);
   const [offRouteWarning, setOffRouteWarning] = useState<number | null>(null);
   const [remainingDistKm, setRemainingDistKm] = useState<number | null>(null);
+
+  // Planning Trail DB (separate hierarchical folders + categories + difficulty library)
+  const [planningFolders, setPlanningFolders] = useState<PlanningFolderRecord[]>([]);
+  const [planningTrails, setPlanningTrails] = useState<PlanningTrailRecord[]>([]);
+  const [selectedPlanningTrailId, setSelectedPlanningTrailId] = useState<string | null>(null);
+  const [showPlanningFolderOnMap, setShowPlanningFolderOnMap] = useState(false);
+  const [sendToPlanningRouteTarget, setSendToPlanningRouteTarget] =
+    useState<SavedRouteRecord | null>(null);
 
   // UI Shell States (Desktop vs Mobile Planning/Navigating)
   const [desktopDrawer, setDesktopDrawer] = useState<DesktopDrawerMode>(null);
@@ -3332,6 +3357,41 @@ export const App: React.FC = () => {
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [isSearchFocused]);
 
+  // ---- Search during navigation: the search icon opens a search box, closing it discards the query ----
+  const openNavSearch = useCallback(() => {
+    setIsNavSearchOpen(true);
+    setIsSearchFocused(true);
+  }, []);
+
+  const closeNavSearch = useCallback(() => {
+    setIsNavSearchOpen(false);
+    setIsSearchFocused(false);
+    setSearchQuery('');
+    setExecutedSearchQuery('');
+    setSearchResults([]);
+  }, []);
+
+  // Tapping anywhere outside the box closes it (the search icon itself is excluded: it toggles).
+  useEffect(() => {
+    if (!isNavSearchOpen) return;
+    const handlePointerDown = (ev: PointerEvent) => {
+      const target = ev.target;
+      if (!(target instanceof Element)) return;
+      if (searchContainerRef.current?.contains(target)) return;
+      if (target.closest('[data-nav-search-toggle]')) return;
+      closeNavSearch();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isNavSearchOpen, closeNavSearch]);
+
+  // The box only exists in mobile navigating mode; never leave it flagged open elsewhere.
+  useEffect(() => {
+    if (isNavSearchOpen && !(isMobile && mobileDisplayMode === 'navigating')) {
+      closeNavSearch();
+    }
+  }, [isNavSearchOpen, isMobile, mobileDisplayMode, closeNavSearch]);
+
   const searchRefCoordRef = useRef<{ lon: number; lat: number }>({
     lon: 34.8134,
     lat: 30.8281,
@@ -3795,6 +3855,7 @@ export const App: React.FC = () => {
     setExecutedSearchQuery('');
     setSearchResults([]);
     setIsSearchFocused(false);
+    setIsNavSearchOpen(false);
 
     if (item.kind === 'route' && item.routeRecord) {
       setSelectedPoi(null);
@@ -3812,6 +3873,19 @@ export const App: React.FC = () => {
 
     const existingMatch = poisRef.current.find((p) => p.id === item.id);
     const poiRec = existingMatch || item.toPoiRecord();
+
+    // Picked from the navigation search box: stay in navigating mode and show the compact point card.
+    // GPS follow is paused (same as dragging the map), otherwise the camera snaps straight back to the user.
+    if (isMobile && mobileDisplayMode === 'navigating') {
+      pendingLocateFlyRef.current = false;
+      isFollowingUserRef.current = false;
+      setIsFollowingUser(false);
+      setSelectedPoi(poiRec);
+      handleFlyTo(poiRec.lon, poiRec.lat, item.recommendedZoom || 15.2);
+      setMobileNavOverlay('poi-mini');
+      return;
+    }
+
     handleSelectPoi(poiRec, item.recommendedZoom || 15.2);
   };
 
@@ -5304,6 +5378,145 @@ export const App: React.FC = () => {
     setDesktopDrawer((prev) => (prev === 'routes' ? null : 'routes'));
   }, []);
 
+  useEffect(() => {
+    PlanningTrailManager.clearCache();
+    const uid = currentUser?.uid;
+    if (!uid) {
+      setPlanningFolders([]);
+      setPlanningTrails([]);
+      setSelectedPlanningTrailId(null);
+      setSendToPlanningRouteTarget(null);
+      setShowPlanningFolderOnMap(false);
+      setDesktopDrawer((prev) => (prev === 'planning-db' ? null : prev));
+      setMobileTab((prev) => (prev === 'planning-db' ? 'explore' : prev));
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [loadedFolders, loadedTrails] = await Promise.all([
+          PlanningTrailManager.listFolders(uid),
+          PlanningTrailManager.listTrailSummaries(uid),
+        ]);
+        if (!cancelled) {
+          setPlanningFolders(loadedFolders);
+          setPlanningTrails(loadedTrails);
+        }
+      } catch {
+        // Ignore DB read errors in non-IndexedDB test environments
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
+
+  const handleCreatePlanningFolder = useCallback(
+    async (params: { name: string; parentId: string | null }) => {
+      if (!currentUser?.uid) return undefined;
+      const created = await PlanningTrailManager.createFolder({
+        ...params,
+        ownerUid: currentUser.uid,
+      });
+      setPlanningFolders((prev) => [...prev, created]);
+      return created;
+    },
+    [currentUser?.uid]
+  );
+
+  const handleRenamePlanningFolder = useCallback(async (folderId: string, newName: string) => {
+    const updated = await PlanningTrailManager.renameFolder(folderId, newName);
+    if (!updated) return;
+    setPlanningFolders((prev) => prev.map((f) => (f.id === folderId ? updated : f)));
+  }, []);
+
+  const handleDeletePlanningFolder = useCallback(
+    async (folderId: string) => {
+      if (!currentUser?.uid) return;
+      await PlanningTrailManager.deleteFolder(folderId, 'move-to-unfiled');
+      const [nextFolders, nextTrails] = await Promise.all([
+        PlanningTrailManager.listFolders(currentUser.uid),
+        PlanningTrailManager.listTrailSummaries(currentUser.uid),
+      ]);
+      setPlanningFolders(nextFolders);
+      setPlanningTrails(nextTrails);
+      showToast('התיקייה נמחקה והמסלולים הועברו ל"לא ממוין"');
+    },
+    [currentUser?.uid]
+  );
+
+  const handleUpdatePlanningTrailMetadata = useCallback(
+    async (
+      trailId: string,
+      patch: Partial<
+        Pick<
+          PlanningTrailRecord,
+          'folderId' | 'categoryId' | 'difficulty' | 'isStarred' | 'tags'
+        >
+      >
+    ) => {
+      const updated = await PlanningTrailManager.updateTrailMetadata(trailId, patch);
+      if (!updated) return;
+      setPlanningTrails((prev) => prev.map((t) => (t.id === trailId ? updated : t)));
+    },
+    []
+  );
+
+  const handleDeletePlanningTrail = useCallback(
+    async (trailId: string) => {
+      await PlanningTrailManager.deleteTrail(trailId);
+      setPlanningTrails((prev) => prev.filter((t) => t.id !== trailId));
+      if (selectedPlanningTrailId === trailId) setSelectedPlanningTrailId(null);
+      showToast('המסלול נמחק ממאגר התכנון');
+    },
+    [selectedPlanningTrailId]
+  );
+
+  const handleSendPlanningTrailToActiveRoutes = useCallback(
+    async (trailId: string) => {
+      if (!currentUser?.uid) return;
+      const createdRoute = await PlanningTrailManager.sendPlanningTrailToActiveRoutes(
+        trailId,
+        currentUser.uid
+      );
+      if (!createdRoute) return;
+      setRoutes((prev) => [RouteManager.splitRouteRecord(createdRoute).summary, ...prev]);
+      setActiveRoute(createdRoute);
+      if (isMobile) {
+        setMobileDisplayMode('planning');
+        setMobileTab('routes');
+      } else {
+        setDesktopDrawer('routes');
+      }
+      showToast(`"${createdRoute.name}" נשלח לתפריט המסלולים הפעילים`);
+    },
+    [currentUser?.uid, isMobile]
+  );
+
+  const handleConfirmSendRouteToPlanningDb = useCallback(
+    async (options: {
+      folderId: string | null;
+      categoryId: TrailCategoryId;
+      difficulty: TrailDifficulty;
+      tags: string[];
+    }) => {
+      if (!sendToPlanningRouteTarget || !currentUser?.uid) return;
+      const savedTrail = await PlanningTrailManager.sendActiveRouteToPlanningDb(
+        sendToPlanningRouteTarget.id,
+        {
+          ...options,
+          ownerUid: currentUser.uid,
+        }
+      );
+      if (!savedTrail) return;
+      setPlanningTrails((prev) => [savedTrail, ...prev]);
+      setSelectedPlanningTrailId(savedTrail.id);
+      showToast(`"${savedTrail.name}" נשמר במאגר התכנון`);
+    },
+    [currentUser?.uid, sendToPlanningRouteTarget]
+  );
+
   const handleSelectSearchResultRef = useRef<(item: SearchResultItem) => void>(() => {});
   handleSelectSearchResultRef.current = handleSelectSearchResult;
   const handleSelectSearchResultStable = useCallback((item: SearchResultItem) => {
@@ -5313,9 +5526,11 @@ export const App: React.FC = () => {
   const isSearchingPending =
     searchQuery.trim().length > 0 && searchQuery.trim() !== executedSearchQuery.trim();
 
-  const renderSearchBar = (compactMobile: boolean) => (
+  const renderSearchBar = (compactMobile: boolean, navigationBox = false) => (
     <SearchBar
       compactMobile={compactMobile}
+      autoFocus={navigationBox}
+      onClose={navigationBox ? closeNavSearch : undefined}
       theme={theme}
       containerRef={searchContainerRef}
       searchQuery={searchQuery}
@@ -5533,6 +5748,25 @@ export const App: React.FC = () => {
                     />
                   )}
 
+                  {desktopDrawer === 'planning-db' && currentUser && (
+                    <PlanningTrailDbDrawer
+                      theme={theme}
+                      folders={planningFolders}
+                      trails={planningTrails}
+                      selectedTrailId={selectedPlanningTrailId}
+                      showFolderOnMap={showPlanningFolderOnMap}
+                      onSelectTrail={(trailId) => setSelectedPlanningTrailId(trailId)}
+                      onToggleShowFolderOnMap={() => setShowPlanningFolderOnMap((v) => !v)}
+                      onCreateFolder={handleCreatePlanningFolder}
+                      onRenameFolder={handleRenamePlanningFolder}
+                      onDeleteFolder={handleDeletePlanningFolder}
+                      onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                      onDeleteTrail={handleDeletePlanningTrail}
+                      onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
+                      onClose={() => setDesktopDrawer(null)}
+                    />
+                  )}
+
                   {desktopDrawer === 'routes' && (
                     <ElevationProfileDrawer
                       route={activeRoute}
@@ -5561,6 +5795,9 @@ export const App: React.FC = () => {
                       onClearBackgroundRoutes={handleClearBackgroundRoutes}
                       onReverseRoute={handleReverseRoute}
                       onEditRouteInPlanner={handleEditRouteInPlanner}
+                      onSendToPlanningDb={
+                        currentUser ? (r) => setSendToPlanningRouteTarget(r) : undefined
+                      }
                       onClose={() => setDesktopDrawer(null)}
                       onHoverPoint={handleHoverElevationChart}
                       onSelectPoint={(pt) =>
@@ -5769,6 +6006,24 @@ export const App: React.FC = () => {
                     </span>
                   )}
                 </button>
+
+                {currentUser && (
+                  <button
+                    onClick={() =>
+                      setDesktopDrawer(desktopDrawer === 'planning-db' ? null : 'planning-db')
+                    }
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                      desktopDrawer === 'planning-db' ? 'bg-emerald-600 text-white' : t.hoverRow
+                    }`}
+                  >
+                    <FolderTree
+                      className={`w-3.5 h-3.5 ${
+                        desktopDrawer === 'planning-db' ? 'text-white' : 'text-emerald-500'
+                      }`}
+                    />
+                    <span>מאגר תכנון</span>
+                  </button>
+                )}
 
                 <button
                   onClick={() =>
@@ -6028,7 +6283,7 @@ export const App: React.FC = () => {
         {/* ================= MOBILE CHROME (PLANNING vs NAVIGATING) ================= */}
         {isMobile && (
           <>
-            {/* MODE B: NAVIGATING — No Search, No Chips! Compact Icon Navigation Status + Planning Icon */}
+            {/* MODE B: NAVIGATING — No search pill, no chips (search opens on demand from the icon column). Compact Icon Navigation Status + Planning Icon */}
             {mobileDisplayMode === 'navigating' && (
               <div className="absolute top-3 right-3 left-3 z-30 pt-safe pointer-events-none">
                 {isNavigatingRoute && activeRoute ? (
@@ -6136,6 +6391,23 @@ export const App: React.FC = () => {
                   : 'top-[4.5rem]'
               }`}
             >
+              {/* Navigating mode has no search pill: this icon opens the search box next to it. */}
+              {mobileDisplayMode === 'navigating' && (
+                <button
+                  type="button"
+                  data-nav-search-toggle
+                  onClick={isNavSearchOpen ? closeNavSearch : openNavSearch}
+                  className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
+                    isNavSearchOpen ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn
+                  }`}
+                  title="חיפוש"
+                  aria-label="חיפוש"
+                  aria-expanded={isNavSearchOpen}
+                >
+                  <Search className={`w-4 h-4 ${isNavSearchOpen ? '' : 'text-emerald-500'}`} />
+                </button>
+              )}
+
               {LAYER_SECTION_BUTTONS.map(({ id, title, Icon }) => {
                 const isActive =
                   mobileLayerSection === id &&
@@ -6277,6 +6549,19 @@ export const App: React.FC = () => {
       {isMobile && mobileDisplayMode === 'planning' && (
         <div className="absolute top-3 right-3 left-3 z-[45] pt-safe pointer-events-none">
           <div className="pointer-events-auto">{renderSearchBar(true)}</div>
+        </div>
+      )}
+
+      {/* MODE B: NAVIGATING — Search box opened from the search icon. It sits on the icon's row, right of the
+          icon column(s), so the route / off-route banner above stays visible. Rendered here for the same
+          keyboard-resize reason as the planning pill. */}
+      {isMobile && mobileDisplayMode === 'navigating' && isNavSearchOpen && (
+        <div
+          className={`absolute right-3 left-[3.75rem] landscape:left-[6.75rem] z-[45] pt-safe pointer-events-none ${
+            isNavigatingRoute && activeRoute ? 'top-[5.25rem]' : 'top-[4rem]'
+          }`}
+        >
+          <div className="pointer-events-auto pt-px">{renderSearchBar(true, true)}</div>
         </div>
       )}
 
@@ -6460,6 +6745,26 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               )
+            ) : mobileTab === 'planning-db' && currentUser ? (
+              <div className="max-h-[65vh] overflow-y-auto">
+                <PlanningTrailDbDrawer
+                  theme={theme}
+                  isMobile
+                  folders={planningFolders}
+                  trails={planningTrails}
+                  selectedTrailId={selectedPlanningTrailId}
+                  showFolderOnMap={showPlanningFolderOnMap}
+                  onSelectTrail={(trailId) => setSelectedPlanningTrailId(trailId)}
+                  onToggleShowFolderOnMap={() => setShowPlanningFolderOnMap((v) => !v)}
+                  onCreateFolder={handleCreatePlanningFolder}
+                  onRenameFolder={handleRenamePlanningFolder}
+                  onDeleteFolder={handleDeletePlanningFolder}
+                  onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                  onDeleteTrail={handleDeletePlanningTrail}
+                  onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
+                  onClose={() => setMobileTab('explore')}
+                />
+              </div>
             ) : mobileTab === 'routes' ? (
               <div className="max-h-[60vh] overflow-y-auto">
                 <ElevationProfileDrawer
@@ -6496,6 +6801,9 @@ export const App: React.FC = () => {
                   onClearBackgroundRoutes={handleClearBackgroundRoutes}
                   onReverseRoute={handleReverseRoute}
                   onEditRouteInPlanner={handleEditRouteInPlanner}
+                  onSendToPlanningDb={
+                    currentUser ? (r) => setSendToPlanningRouteTarget(r) : undefined
+                  }
                   onClose={() => setMobileTab('explore')}
                   onHoverPoint={handleHoverElevationChart}
                   onSelectPoint={(pt) =>
@@ -6655,6 +6963,15 @@ export const App: React.FC = () => {
                   </span>
                 ),
               },
+              ...(currentUser
+                ? [
+                    {
+                      id: 'planning-db' as const,
+                      label: 'מאגר תכנון',
+                      icon: <FolderTree className="w-5 h-5" />,
+                    },
+                  ]
+                : []),
               {
                 id: 'record' as const,
                 label: 'הקלטה',
@@ -6902,6 +7219,21 @@ export const App: React.FC = () => {
           onSignInGoogle={handleSignInGoogle}
           onUpdateRecipients={handleUpdateRouteSharing}
           onClose={() => setShareModalRouteId(null)}
+        />
+      )}
+
+      {/* Send Active Route to Planning Trail DB Modal (Logged-in users only) */}
+      {currentUser && (
+        <SendToPlanningDbModal
+          isOpen={Boolean(sendToPlanningRouteTarget)}
+          theme={theme}
+          route={sendToPlanningRouteTarget}
+          folders={planningFolders}
+          onClose={() => setSendToPlanningRouteTarget(null)}
+          onCreateFolder={(name, parentId) =>
+            handleCreatePlanningFolder({ name, parentId })
+          }
+          onConfirm={handleConfirmSendRouteToPlanningDb}
         />
       )}
 
