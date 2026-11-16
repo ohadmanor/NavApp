@@ -3,6 +3,7 @@ import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X, Lock, Palette, 
 import {
   countActivePoiCategories,
   enableAllPoiVisibility,
+  isAerialOverlayActive,
   isMasterPoiActive,
   toggleMasterPoiVisibility,
   togglePoiCategoryVisibility,
@@ -68,6 +69,38 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
       [key]: !visibility[key],
     });
   };
+
+  const toggleAerial = (key: 'googleSatellite' | 'govmapOrtho') => {
+    const nextValue = !visibility[key];
+    onChangeVisibility({
+      ...visibility,
+      googleSatellite: key === 'googleSatellite' ? nextValue : false,
+      govmapOrtho: key === 'govmapOrtho' ? nextValue : false,
+    });
+  };
+
+  const aerialToggles: Array<{
+    key: 'googleSatellite' | 'govmapOrtho';
+    title: string;
+    activeDesc: string;
+    idleDesc: string;
+    badge: string;
+  }> = [
+    {
+      key: 'googleSatellite',
+      title: 'תצלום לוויין (Google Satellite)',
+      activeDesc: 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) — שאר השכבות מוסתרות',
+      idleDesc: 'מוסיף תצלום לוויין ומציג דרכים, שבילים ונקודות עניין (POI) בלבד',
+      badge: 'SAT',
+    },
+    {
+      key: 'govmapOrtho',
+      title: 'תצלום אוויר GovMap (מפ״י 2025)',
+      activeDesc: 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) מעל אורתופוטו GovMap',
+      idleDesc: 'מוסיף תצלום אוויר עדכני של מפ״י ומציג דרכים, שבילים ונקודות עניין בלבד',
+      badge: 'ORTHO',
+    },
+  ];
 
   const terrainToggles: Array<{
     key: keyof OutdoorLayerVisibility;
@@ -169,26 +202,26 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
         </button>
       </div>
 
-      {/* Cartographic Style Selector: IHM (Classic) vs NMS (Enhanced) */}
+      {/* Cartographic Style Selector: IHM (Classic) vs NMS (Enhanced) vs GovMap (1:25k) */}
       <div className="space-y-1.5">
         <div className={`text-xs font-bold ${t.muted}`}>סגנון מפה (Style)</div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
             onClick={() => onSelectMapStyle('ihm')}
             aria-pressed={mapStyle === 'ihm'}
-            className={`px-3 py-2 rounded-xl border-2 text-right transition-all ${
+            className={`px-2.5 py-2 rounded-xl border-2 text-right transition-all ${
               mapStyle === 'ihm'
                 ? 'border-emerald-500 bg-emerald-500/10'
                 : t.subCard
             }`}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-1">
               <span className="text-xs font-extrabold tracking-wide">IHM</span>
               <span className={`text-[10px] font-semibold ${t.muted}`}>קלאסי</span>
             </div>
-            <span className={`text-[11px] block mt-0.5 ${t.muted}`}>
-              סגנון מקורי (Israel Hiking)
+            <span className={`text-[10.5px] block mt-0.5 leading-tight ${t.muted}`}>
+              Israel Hiking מקורי
             </span>
           </button>
 
@@ -196,20 +229,41 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
             type="button"
             onClick={() => onSelectMapStyle('nms')}
             aria-pressed={mapStyle === 'nms'}
-            className={`px-3 py-2 rounded-xl border-2 text-right transition-all ${
+            className={`px-2.5 py-2 rounded-xl border-2 text-right transition-all ${
               mapStyle === 'nms'
                 ? 'border-emerald-500 bg-emerald-500/10'
                 : t.subCard
             }`}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-1">
               <span className="text-xs font-extrabold tracking-wide">NMS</span>
               <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
                 משופר
               </span>
             </div>
-            <span className={`text-[11px] block mt-0.5 ${t.muted}`}>
+            <span className={`text-[10.5px] block mt-0.5 leading-tight ${t.muted}`}>
               צבעים והיררכיית סמלים
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectMapStyle('govmap')}
+            aria-pressed={mapStyle === 'govmap'}
+            className={`px-2.5 py-2 rounded-xl border-2 text-right transition-all ${
+              mapStyle === 'govmap'
+                ? 'border-emerald-500 bg-emerald-500/10'
+                : t.subCard
+            }`}
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-extrabold tracking-wide">GovMap</span>
+              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400">
+                1:25k
+              </span>
+            </div>
+            <span className={`text-[10.5px] block mt-0.5 leading-tight ${t.muted}`}>
+              מפה טופוגרפית (מפ״י)
             </span>
           </button>
         </div>
@@ -222,53 +276,57 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
       {/* Navigation & Terrain Toggle Switches */}
       <div className="space-y-1.5">
         <div className={`text-xs font-bold ${t.muted}`}>שכבות ניווט ושטח</div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={visibility.googleSatellite}
-          onClick={() => toggle('googleSatellite')}
-          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
-            visibility.googleSatellite
-              ? 'border-sky-500 bg-sky-500/15'
-              : t.subCard
-          }`}
-        >
-          <span className="flex items-center gap-2 min-w-0 text-right">
-            <Satellite
-              className={`w-4 h-4 shrink-0 ${
-                visibility.googleSatellite ? 'text-sky-500' : t.muted
+        {aerialToggles.map((aerial) => {
+          const isActive = Boolean(visibility[aerial.key]);
+          return (
+            <button
+              key={aerial.key}
+              type="button"
+              role="switch"
+              aria-checked={isActive}
+              onClick={() => toggleAerial(aerial.key)}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
+                isActive
+                  ? 'border-sky-500 bg-sky-500/15'
+                  : t.subCard
               }`}
-            />
-            <span className="min-w-0">
-              <span className="font-bold block truncate">תצלום לוויין (Google Satellite)</span>
-              <span className={`text-[11px] block leading-tight ${t.muted}`}>
-                {visibility.googleSatellite
-                  ? 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) — שאר השכבות מוסתרות'
-                  : 'מוסיף תצלום לוויין ומציג דרכים, שבילים ונקודות עניין (POI) בלבד'}
+            >
+              <span className="flex items-center gap-2 min-w-0 text-right">
+                <Satellite
+                  className={`w-4 h-4 shrink-0 ${
+                    isActive ? 'text-sky-500' : t.muted
+                  }`}
+                />
+                <span className="min-w-0">
+                  <span className="font-bold block truncate">{aerial.title}</span>
+                  <span className={`text-[11px] block leading-tight ${t.muted}`}>
+                    {isActive ? aerial.activeDesc : aerial.idleDesc}
+                  </span>
+                </span>
               </span>
-            </span>
-          </span>
-          <span className="flex items-center gap-2 shrink-0">
-            <span
-              className={`font-mono text-xs ${
-                visibility.googleSatellite ? 'text-sky-500 font-bold' : t.muted
-              }`}
-            >
-              SAT
-            </span>
-            <span
-              className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
-                visibility.googleSatellite ? 'bg-sky-600 justify-start' : 'bg-slate-400/40 justify-end'
-              }`}
-            >
-              <span className="w-4 h-4 rounded-full bg-white shadow" />
-            </span>
-          </span>
-        </button>
+              <span className="flex items-center gap-2 shrink-0">
+                <span
+                  className={`font-mono text-xs ${
+                    isActive ? 'text-sky-500 font-bold' : t.muted
+                  }`}
+                >
+                  {aerial.badge}
+                </span>
+                <span
+                  className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+                    isActive ? 'bg-sky-600 justify-start' : 'bg-slate-400/40 justify-end'
+                  }`}
+                >
+                  <span className="w-4 h-4 rounded-full bg-white shadow" />
+                </span>
+              </span>
+            </button>
+          );
+        })}
 
         {terrainToggles.map((item) => {
           const isOn = visibility[item.key];
-          const isHiddenBySatellite = visibility.googleSatellite && item.hiddenOnSatellite;
+          const isHiddenBySatellite = isAerialOverlayActive(visibility) && item.hiddenOnSatellite;
           return (
             <button
               key={item.key}

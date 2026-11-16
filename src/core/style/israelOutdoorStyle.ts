@@ -5,12 +5,14 @@ import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
 import type { PoiCategory } from '../db/NavDatabase';
 import { POI_CATEGORY_ZOOM_RULES } from '../pois/poiTaxonomy';
 import { applyNmsStyleEnhancements, type MapStyleId } from './nmsStyleEnhancer';
+import { applyGovmapStyleEnhancements } from './govmapStyleEnhancer';
 
 export type { MapStyleId };
 export const DEFAULT_MAP_STYLE: MapStyleId = 'nms';
 
 export interface OutdoorLayerVisibility {
   googleSatellite: boolean;
+  govmapOrtho?: boolean;
   hillshade: boolean;
   terrain3d: boolean;
   contours: boolean;
@@ -53,8 +55,18 @@ export const GOOGLE_SATELLITE_LAYER_ID = 'google-satellite-layer';
 export const GOOGLE_SATELLITE_TILE_URL =
   'https://mt0.google.com/vt/lyrs=s&hl=en&src=app&x={x}&y={y}&z={z}&s=Gal';
 
+export const GOVMAP_ORTHO_SOURCE_ID = 'govmap-ortho';
+export const GOVMAP_ORTHO_LAYER_ID = 'govmap-ortho-layer';
+export const GOVMAP_ORTHO_TILE_URL =
+  'https://basemaps.govmap.gov.il/tms/orto2025me_update/{z}/{x}/{y}.jpg';
+
+export function isAerialOverlayActive(visibility: OutdoorLayerVisibility): boolean {
+  return Boolean(visibility.googleSatellite || visibility.govmapOrtho);
+}
+
 export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   googleSatellite: false,
+  govmapOrtho: false,
   hillshade: true,
   terrain3d: false,
   contours: true,
@@ -374,9 +386,18 @@ function buildTrackRailColorExpr(params: {
   side: 'right' | 'left';
   allowSpniAndGrades: boolean;
   allowPurpleCycle: boolean;
+  defaultColor?: string;
+  useGrades?: boolean;
 }): any {
-  const { side, allowSpniAndGrades, allowPurpleCycle } = params;
-  const baseFallback = allowSpniAndGrades ? TRACK_GRADE_COLOR_EXPR : DEFAULT_TRAIL_BROWN;
+  const {
+    side,
+    allowSpniAndGrades,
+    allowPurpleCycle,
+    defaultColor = DEFAULT_TRAIL_BROWN,
+    useGrades = true,
+  } = params;
+  const baseFallback =
+    allowSpniAndGrades && useGrades ? TRACK_GRADE_COLOR_EXPR : defaultColor;
   const fallback = allowPurpleCycle
     ? ['case', IS_PURPLE_CYCLE_ATTR_EXPR, CYCLE_PURPLE, baseFallback]
     : baseFallback;
@@ -386,17 +407,24 @@ function buildTrackRailColorExpr(params: {
   return buildSpniColorMatchExpr(side === 'left' ? 'secondary' : 'primary', fallback);
 }
 
-function buildTrackLineColorExpr(allowGrades: boolean, allowPurpleCycle: boolean): any {
-  const base = allowGrades ? TRACK_LINE_GRADE_COLOR_EXPR : 'rgba(170, 129, 102, 0.5)';
+function buildTrackLineColorExpr(
+  allowGrades: boolean,
+  allowPurpleCycle: boolean,
+  defaultColor = 'rgba(170, 129, 102, 0.5)'
+): any {
+  const base = allowGrades ? TRACK_LINE_GRADE_COLOR_EXPR : defaultColor;
   if (!allowPurpleCycle) return base;
   return ['case', IS_PURPLE_CYCLE_ATTR_EXPR, 'rgba(147, 51, 234, 0.72)', base];
 }
 
-function buildTrackCasingColorExpr(allowSpniOnTracks: boolean): any {
+function buildTrackCasingColorExpr(
+  allowSpniOnTracks: boolean,
+  defaultCasing: any = DEFAULT_TRACK_CASING_COLOR_EXPR
+): any {
   if (!allowSpniOnTracks) {
-    return DEFAULT_TRACK_CASING_COLOR_EXPR;
+    return defaultCasing;
   }
-  return ['case', HAS_SPNI_TRAIL_EXPR, '#FFFFFF', DEFAULT_TRACK_CASING_COLOR_EXPR];
+  return ['case', HAS_SPNI_TRAIL_EXPR, '#FFFFFF', defaultCasing];
 }
 
 const rawLayerById = new Map<string, any>(
@@ -448,6 +476,7 @@ const IHM_STYLE_LAYER_IDS = new Set<string>([
   ...rawLayerById.keys(),
   'trail-israel-lowzoom',
   GOOGLE_SATELLITE_LAYER_ID,
+  GOVMAP_ORTHO_LAYER_ID,
 ]);
 
 export function isHighwayStyleLayerId(layerId: string): boolean {
@@ -801,15 +830,23 @@ function getProportionalLinePaintUpdates(
 function getDynamicPaintUpdates(
   layerId: string,
   visibility: OutdoorLayerVisibility,
-  options?: { isNms?: boolean; isDark?: boolean }
+  options?: { styleId?: MapStyleId; isDark?: boolean }
 ): Record<string, any> | null {
+  const styleId: MapStyleId = options?.styleId ?? 'ihm';
+  const isDark = Boolean(options?.isDark);
+  const isGovmap = styleId === 'govmap';
+  const isCompactPalette = styleId === 'nms' || isGovmap;
+  const govmapNeutralLine = isDark ? '#CBD5E1' : '#1E1E1E';
+  const defaultPathColor = isGovmap ? govmapNeutralLine : DEFAULT_TRAIL_BROWN;
+  const defaultStepsColor = isGovmap ? govmapNeutralLine : DEFAULT_STEPS_BROWN;
+
   if (PATH_REGULAR_LAYER_IDS.has(layerId)) {
     return {
       'line-color': buildPathLineColorExpr({
         allowSpni: visibility.hikingTrails,
         allowPurpleCycle: visibility.cycleways,
         isDedicatedCycleway: false,
-        defaultColor: DEFAULT_TRAIL_BROWN,
+        defaultColor: defaultPathColor,
       }),
     };
   }
@@ -819,7 +856,7 @@ function getDynamicPaintUpdates(
         allowSpni: visibility.hikingTrails,
         allowPurpleCycle: visibility.cycleways,
         isDedicatedCycleway: true,
-        defaultColor: DEFAULT_TRAIL_BROWN,
+        defaultColor: defaultPathColor,
       }),
     };
   }
@@ -829,7 +866,7 @@ function getDynamicPaintUpdates(
         allowSpni: visibility.hikingTrails,
         allowPurpleCycle: false,
         isDedicatedCycleway: false,
-        defaultColor: DEFAULT_TRAIL_BROWN,
+        defaultColor: defaultPathColor,
       }),
     };
   }
@@ -839,18 +876,28 @@ function getDynamicPaintUpdates(
         allowSpni: visibility.hikingTrails,
         allowPurpleCycle: false,
         isDedicatedCycleway: false,
-        defaultColor: DEFAULT_STEPS_BROWN,
+        defaultColor: defaultStepsColor,
       }),
     };
   }
   if (TRACK_CASING_IDS.has(layerId)) {
     return {
-      'line-color': buildTrackCasingColorExpr(visibility.offroad4x4),
+      'line-color': isGovmap
+        ? buildTrackCasingColorExpr(visibility.offroad4x4, isDark ? '#0b1015' : '#FFFFFF')
+        : buildTrackCasingColorExpr(visibility.offroad4x4),
     };
   }
   if (TRACK_LINE_IDS.has(layerId)) {
     return {
-      'line-color': buildTrackLineColorExpr(visibility.offroad4x4, visibility.cycleways),
+      'line-color': buildTrackLineColorExpr(
+        visibility.offroad4x4,
+        visibility.cycleways,
+        isGovmap
+          ? isDark
+            ? 'rgba(148, 163, 184, 0.45)'
+            : 'rgba(30, 30, 30, 0.42)'
+          : 'rgba(170, 129, 102, 0.5)'
+      ),
     };
   }
   if (TRACK_RIGHT_IDS.has(layerId)) {
@@ -859,6 +906,8 @@ function getDynamicPaintUpdates(
         side: 'right',
         allowSpniAndGrades: visibility.offroad4x4,
         allowPurpleCycle: visibility.cycleways,
+        defaultColor: isGovmap ? govmapNeutralLine : DEFAULT_TRAIL_BROWN,
+        useGrades: !isGovmap || visibility.offroad4x4,
       }),
     };
   }
@@ -868,12 +917,20 @@ function getDynamicPaintUpdates(
         side: 'left',
         allowSpniAndGrades: visibility.offroad4x4,
         allowPurpleCycle: visibility.cycleways,
+        defaultColor: isGovmap ? govmapNeutralLine : DEFAULT_TRAIL_BROWN,
+        useGrades: !isGovmap || visibility.offroad4x4,
       }),
     };
   }
   if (ROAD_CASING_GRAY_IDS.has(layerId)) {
-    const defaultCasing = options?.isNms
-      ? options.isDark
+    if (isGovmap) {
+      const isMinorOrTertiary = layerId.includes('minor') || layerId.includes('tertiary');
+      return {
+        'line-color': isDark ? (isMinorOrTertiary ? '#0F172A' : '#020617') : '#1A1A1A',
+      };
+    }
+    const defaultCasing = styleId === 'nms'
+      ? isDark
         ? layerId.includes('secondary')
           ? '#403828'
           : '#1E293B'
@@ -888,8 +945,11 @@ function getDynamicPaintUpdates(
     };
   }
   if (ROAD_CASING_TUNNEL_IDS.has(layerId)) {
-    const defaultTunnelCasing = options?.isNms
-      ? options.isDark
+    if (isGovmap) {
+      return { 'line-color': isDark ? '#0F172A' : '#1A1A1A' };
+    }
+    const defaultTunnelCasing = styleId === 'nms'
+      ? isDark
         ? '#1E293B'
         : '#78716C'
       : '#E0E0E0';
@@ -900,8 +960,11 @@ function getDynamicPaintUpdates(
     };
   }
   if (ROAD_CASING_ZOOM_GUARDED_IDS.has(layerId)) {
-    const defaultHighwayCasing = options?.isNms
-      ? options.isDark
+    if (isGovmap) {
+      return { 'line-color': isDark ? '#020617' : '#1A1A1A' };
+    }
+    const defaultHighwayCasing = styleId === 'nms'
+      ? isDark
         ? layerId === 'casing-trunk'
           ? '#5C340E'
           : '#54400E'
@@ -917,14 +980,16 @@ function getDynamicPaintUpdates(
   }
   if (layerId === 'name-trail-local') {
     const rawPaint = rawLayerById.get('name-trail-local')?.paint || {};
-    const halo = options?.isNms ? (options.isDark ? '#0B1015' : '#FFFFFF') : 'white';
+    const halo = isCompactPalette ? (isDark ? '#0B1015' : '#FFFFFF') : 'white';
     return {
       'text-color': visibility.hikingTrails
         ? structuredClone(rawPaint['text-color'])
-        : options?.isNms && options.isDark
+        : isCompactPalette && isDark
           ? '#CBD5E1'
-          : '#404040',
-      'text-halo-color': options?.isNms
+          : isGovmap
+            ? '#1F2937'
+            : '#404040',
+      'text-halo-color': isCompactPalette
         ? halo
         : visibility.hikingTrails
           ? structuredClone(rawPaint['text-halo-color'])
@@ -933,8 +998,8 @@ function getDynamicPaintUpdates(
   }
   if (layerId === 'name-trail-regional') {
     const rawPaint = rawLayerById.get('name-trail-regional')?.paint || {};
-    const halo = options?.isNms ? (options.isDark ? '#0B1015' : '#FFFFFF') : 'white';
-    const neutralColor = options?.isNms && options.isDark ? '#CBD5E1' : '#404040';
+    const halo = isCompactPalette ? (isDark ? '#0B1015' : '#FFFFFF') : 'white';
+    const neutralColor = isCompactPalette && isDark ? '#CBD5E1' : isGovmap ? '#1F2937' : '#404040';
     return {
       'text-color': visibility.hikingTrails
         ? structuredClone(rawPaint['text-color'])
@@ -951,7 +1016,7 @@ function getDynamicPaintUpdates(
             neutralColor,
             ['match', ['coalesce', ['get', 'name'], ''], 'שביל ואדיות חיפה', neutralColor, 'transparent'],
           ],
-      'text-halo-color': options?.isNms
+      'text-halo-color': isCompactPalette
         ? halo
         : visibility.hikingTrails
           ? structuredClone(rawPaint['text-halo-color'])
@@ -1179,13 +1244,18 @@ function getVisibilityForIhmLayer(
   if (layerId === GOOGLE_SATELLITE_LAYER_ID) {
     return visibility.googleSatellite;
   }
+  if (layerId === GOVMAP_ORTHO_LAYER_ID) {
+    return Boolean(visibility.govmapOrtho);
+  }
+
+  const aerialActive = isAerialOverlayActive(visibility);
 
   if (
     layerId === 'tactical-grid-minor' ||
     layerId === 'tactical-grid-major' ||
     layerId === 'tactical-grid-labels'
   ) {
-    return visibility.tacticalGrid && !visibility.googleSatellite;
+    return visibility.tacticalGrid && !aerialActive;
   }
 
   if (!IHM_STYLE_LAYER_IDS.has(layerId)) {
@@ -1193,7 +1263,7 @@ function getVisibilityForIhmLayer(
   }
 
   if (
-    visibility.googleSatellite &&
+    aerialActive &&
     !HIGHWAY_LAYER_IDS.has(layerId) &&
     !POI_STYLE_LAYER_IDS.has(layerId)
   ) {
@@ -1360,6 +1430,13 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       minzoom: 0,
       maxzoom: 20,
     },
+    [GOVMAP_ORTHO_SOURCE_ID]: {
+      type: 'raster',
+      tiles: [GOVMAP_ORTHO_TILE_URL],
+      tileSize: 256,
+      minzoom: 8,
+      maxzoom: 20,
+    },
     'israel-osm': {
       type: 'vector',
       url: effectiveOsmUrl,
@@ -1457,6 +1534,14 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
           visibility: visibility.googleSatellite ? 'visible' : 'none',
         },
       });
+      layers.push({
+        id: GOVMAP_ORTHO_LAYER_ID,
+        type: 'raster',
+        source: GOVMAP_ORTHO_SOURCE_ID,
+        layout: {
+          visibility: visibility.govmapOrtho ? 'visible' : 'none',
+        },
+      });
       continue;
     }
 
@@ -1489,7 +1574,10 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     }
 
     const proportionalUpdates = getProportionalLinePaintUpdates(layer);
-    const paintUpdates = getDynamicPaintUpdates(layer.id, visibility);
+    const paintUpdates = getDynamicPaintUpdates(layer.id, visibility, {
+      styleId: mapStyle,
+      isDark,
+    });
     if (proportionalUpdates || paintUpdates) {
       (layer as any).paint = {
         ...((layer as any).paint || {}),
@@ -1550,7 +1638,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
   // Insert dynamic ITM/UTM tactical grid vector layers above terrain/roads/buildings
   // and below contour/place/POI labels so map names retain collision priority.
   if (tacticalGridProtocolUrl) {
-    const showTacticalGrid = visibility.tacticalGrid && !visibility.googleSatellite;
+    const showTacticalGrid = visibility.tacticalGrid && !isAerialOverlayActive(visibility);
     const gridVis = showTacticalGrid ? 'visible' : 'none';
     const gridLayers: LayerSpecification[] = [
       {
@@ -1630,6 +1718,8 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
 
   if (mapStyle === 'nms') {
     applyNmsStyleEnhancements(layers, theme, visibility);
+  } else if (mapStyle === 'govmap') {
+    applyGovmapStyleEnhancements(layers, theme, visibility);
   }
 
   const style: StyleSpecification = {
@@ -1637,7 +1727,9 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     name:
       mapStyle === 'nms'
         ? 'NavApp Map Style (NMS) — Enhanced Topographic Vector Style'
-        : 'Israel Hiking Map (Official IHM Vector Style + 10m Contours + Offline Sprites)',
+        : mapStyle === 'govmap'
+          ? 'GovMap 1:25k (Topo25k) — Survey of Israel Topographic Style'
+          : 'Israel Hiking Map (Official IHM Vector Style + 10m Contours + Offline Sprites)',
     sprite: `${origin}/assets/sprites/sprite`,
     sky: buildOutdoorSkySpec(theme),
     sources,
@@ -1737,7 +1829,12 @@ export function applyLayerVisibilityToMap(
   const style = map.getStyle?.();
   if (!style || !Array.isArray(style.layers)) return;
 
-  const isNmsStyle = typeof style.name === 'string' && style.name.includes('NMS');
+  const styleId: MapStyleId =
+    typeof style.name === 'string' && style.name.includes('GovMap')
+      ? 'govmap'
+      : typeof style.name === 'string' && style.name.includes('NMS')
+        ? 'nms'
+        : 'ihm';
   const bgLayerForTheme = style.layers.find((l: any) => l.id === 'background') as any;
   const bgHex = String(bgLayerForTheme?.paint?.['background-color'] || '').toLowerCase();
   const isDarkStyle = bgHex === '#0b1015';
@@ -1750,7 +1847,7 @@ export function applyLayerVisibilityToMap(
     }
     if (typeof map.setPaintProperty === 'function') {
       const paintUpdates = getDynamicPaintUpdates(layer.id, visibility, {
-        isNms: isNmsStyle,
+        styleId,
         isDark: isDarkStyle,
       });
       if (paintUpdates) {
@@ -1761,7 +1858,7 @@ export function applyLayerVisibilityToMap(
     }
   }
 
-  const showTacticalGrid = visibility.tacticalGrid && !visibility.googleSatellite;
+  const showTacticalGrid = visibility.tacticalGrid && !isAerialOverlayActive(visibility);
   for (const gridLayerId of ['tactical-grid-minor', 'tactical-grid-major', 'tactical-grid-labels']) {
     if (map.getLayer(gridLayerId)) {
       map.setLayoutProperty(

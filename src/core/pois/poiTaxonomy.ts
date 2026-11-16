@@ -1,4 +1,5 @@
 import type { PoiCategory } from '../db/NavDatabase';
+import type { MapStyleId } from '../style/vectorStyleHelpers';
 
 export type PoiBadgeShape =
   | 'circle-drop'
@@ -643,7 +644,7 @@ export function buildPoiIconExpression(): any[] {
   ];
 }
 
-export function buildPoiIconSizeExpression(variant: 'ihm' | 'nms' = 'ihm'): any[] {
+export function buildPoiIconSizeExpression(variant: MapStyleId = 'ihm'): any[] {
   const stopForZoom = (zoomMult: number): any[] => {
     const expr: any[] = ['match', ['get', 'category']];
     for (const cat of POI_CATEGORIES) {
@@ -655,7 +656,7 @@ export function buildPoiIconSizeExpression(variant: 'ihm' | 'nms' = 'ihm'): any[
     return expr;
   };
 
-  if (variant === 'nms') {
+  if (variant === 'nms' || variant === 'govmap') {
     return [
       'interpolate',
       ['linear'],

@@ -204,7 +204,9 @@ export function sanitizeUserConfiguration(
   const theme: MapTheme =
     rec.theme === 'topo-dark' || rec.theme === 'topo-day' ? rec.theme : fallback.theme;
   const mapStyle: MapStyleId =
-    rec.mapStyle === 'ihm' || rec.mapStyle === 'nms' ? rec.mapStyle : fallback.mapStyle;
+    rec.mapStyle === 'ihm' || rec.mapStyle === 'nms' || rec.mapStyle === 'govmap'
+      ? rec.mapStyle
+      : fallback.mapStyle;
   const navOrientation: MapNavigationOrientation =
     rec.navOrientation === 'north-up' || rec.navOrientation === 'heading-up'
       ? rec.navOrientation

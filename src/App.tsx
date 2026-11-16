@@ -2140,7 +2140,7 @@ export const App: React.FC = () => {
         }
 
         const activeMapStyle = mapStyleRef.current;
-        const isNmsStyle = activeMapStyle === 'nms';
+        const isCompactPoiStyle = activeMapStyle === 'nms' || activeMapStyle === 'govmap';
         const poiIconExpression: any = buildPoiIconExpression();
         const poiIconSizeExpression: any = buildPoiIconSizeExpression(activeMapStyle);
         const poiTextColorExpression: any = buildPoiTextColorExpression(
@@ -2198,10 +2198,10 @@ export const App: React.FC = () => {
 
         const iconAllowOverlapExpr: any = ['step', ['zoom'], false, 15.5, true];
         const iconPaddingExpr: any = ['interpolate', ['linear'], ['zoom'], 11.5, 1.5, 14, 1.2, 16, 0.8];
-        const textSizeExpr: any = isNmsStyle
+        const textSizeExpr: any = isCompactPoiStyle
           ? ['interpolate', ['linear'], ['zoom'], 12.5, 9.8, 14, 11.0, 16, 12.2, 18, 12.8]
           : ['interpolate', ['linear'], ['zoom'], 12.5, 10.8, 14, 12.4, 16, 14];
-        const textOffsetExpr: any = isNmsStyle
+        const textOffsetExpr: any = isCompactPoiStyle
           ? [
               'interpolate',
               ['linear'],
@@ -2230,7 +2230,7 @@ export const App: React.FC = () => {
             ];
         const poiVisibilityValue = isMasterPoiActive(currentVis) ? 'visible' : 'none';
         const poiHaloColor =
-          currentTheme === 'topo-dark' ? '#0b1015' : isNmsStyle ? '#FFFFFF' : 'white';
+          currentTheme === 'topo-dark' ? '#0b1015' : isCompactPoiStyle ? '#FFFFFF' : 'white';
 
         for (const tier of poiTierSpecs) {
           const tierFilter = buildPoiTieredLayerFilter(currentVis, tier.categories);
