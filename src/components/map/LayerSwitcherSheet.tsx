@@ -65,9 +65,13 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
   const header = section ? SECTION_HEADERS[section] : { title: 'סוג מפה ושכבות טופוגרפיות', Icon: Layers };
 
   const toggle = (key: keyof OutdoorLayerVisibility) => {
+    const current =
+      key === 'peerLocations' || key === 'publicPeerLocations' || key === 'poiPrivate'
+        ? visibility[key] !== false
+        : Boolean(visibility[key]);
     onChangeVisibility({
       ...visibility,
-      [key]: !visibility[key],
+      [key]: !current,
     });
   };
 
@@ -125,6 +129,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     { key: 'cycleways', label: 'שבילי אופניים', badge: 'Cycle', hiddenOnSatellite: false },
     { key: 'natureParks', label: 'גבולות שמורות טבע וגנים', badge: 'Parks', hiddenOnSatellite: true },
     { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard', hiddenOnSatellite: true },
+    { key: 'peerLocations', label: 'מיקומי משתמשים משותפים (Live)', badge: 'Live', hiddenOnSatellite: false },
   ];
 
   const poiToggles: Array<{ key: PoiLayerKey; cat: PoiCategory; label: string; activeCls: string }> = [
@@ -333,7 +338,8 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
         })}
 
         {terrainToggles.map((item) => {
-          const isOn = visibility[item.key];
+          const isOn =
+            item.key === 'peerLocations' ? visibility.peerLocations !== false : Boolean(visibility[item.key]);
           const isHiddenBySatellite = isAerialOverlayActive(visibility) && item.hiddenOnSatellite;
           return (
             <button

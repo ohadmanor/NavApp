@@ -26,6 +26,7 @@ import {
   MapPin,
   Search,
   FolderTree,
+  Radio,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
 import { offlineDataFiles } from './core/pmtiles/OfflineDataFiles';
@@ -129,6 +130,15 @@ import type {
   PlanningTrailRecord,
 } from './core/db/NavDatabase';
 import { ShareRouteModal } from './components/navigation/ShareRouteModal';
+import { ShareLocationModal } from './components/sharing/ShareLocationModal';
+import { PeerLocationInspector } from './components/sharing/PeerLocationInspector';
+import {
+  LiveLocationCloudService,
+  loadPersistedShareConfig,
+  savePersistedShareConfig,
+  type LiveLocationRecord,
+  type LiveLocationShareConfig,
+} from './core/firebase/LiveLocationCloudService';
 import { TrackRecorderPanel, formatDuration } from './components/navigation/TrackRecorderPanel';
 import {
   RoutePlannerPanel,
@@ -300,10 +310,18 @@ function createUserMarkerElement(
   pref: UserLocationIconPreference,
   heading: number | null,
   mapBearing = 0,
-  isNavigationActive = false
+  isNavigationActive = false,
+  isSharingLive = false
 ): HTMLDivElement {
   const root = document.createElement('div');
-  UserLocationIconService.renderMarkerElement(root, pref, heading, mapBearing, isNavigationActive);
+  UserLocationIconService.renderMarkerElement(
+    root,
+    pref,
+    heading,
+    mapBearing,
+    isNavigationActive,
+    isSharingLive
+  );
   return root;
 }
 
@@ -434,6 +452,23 @@ export const App: React.FC = () => {
     () => initialConfig.userIcon
   );
   const [isUserIconPickerOpen, setIsUserIconPickerOpen] = useState<boolean>(false);
+  const [liveShareConfig, setLiveShareConfig] = useState<LiveLocationShareConfig>(() => ({
+    visibility: 'off',
+    sharedWith: [],
+    durationPreset: '4h',
+    startedAt: new Date().toISOString(),
+    expiresAt: null,
+    expiresAtMs: null,
+  }));
+  const [livePeers, setLivePeers] = useState<LiveLocationRecord[]>([]);
+  const [selectedLivePeer, setSelectedLivePeer] = useState<LiveLocationRecord | null>(null);
+  const [isShareLocationModalOpen, setIsShareLocationModalOpen] = useState<boolean>(false);
+  const peerMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const livePeersRef = useRef<LiveLocationRecord[]>([]);
+  livePeersRef.current = livePeers;
+  const isLiveSharingActive = liveShareConfig.visibility !== 'off';
+  const isLiveSharingActiveRef = useRef(isLiveSharingActive);
+  isLiveSharingActiveRef.current = isLiveSharingActive;
   const [cursorCoords, setCursorCoords] = useState<{
     lon: number;
     lat: number;
@@ -762,7 +797,8 @@ export const App: React.FC = () => {
               savedIcon,
               liveHeadingRef.current,
               mapRef.current?.getBearing() ?? 0,
-              isNavigationActiveRef.current
+              isNavigationActiveRef.current,
+              isLiveSharingActiveRef.current
             );
           }
         });
@@ -1863,7 +1899,8 @@ export const App: React.FC = () => {
           userIconPref,
           effectiveHeading,
           curBearing,
-          isNavigationActive
+          isNavigationActive,
+          isLiveSharingActive
         ),
         anchor: 'center',
       })
@@ -1876,10 +1913,175 @@ export const App: React.FC = () => {
         userIconPref,
         effectiveHeading,
         curBearing,
-        isNavigationActive
+        isNavigationActive,
+        isLiveSharingActive
       );
     }
-  }, [isMapReady, userIconPref, isNavigationActive]);
+  }, [isMapReady, userIconPref, isNavigationActive, isLiveSharingActive]);
+
+  // Restore persisted live location sharing config on auth change
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setLiveShareConfig({
+        visibility: 'off',
+        sharedWith: [],
+        durationPreset: '4h',
+        startedAt: new Date().toISOString(),
+        expiresAt: null,
+        expiresAtMs: null,
+      });
+      setLivePeers([]);
+      setSelectedLivePeer(null);
+      return;
+    }
+    const persisted = loadPersistedShareConfig(currentUser.uid);
+    if (persisted) {
+      setLiveShareConfig(persisted);
+    }
+  }, [currentUser?.uid]);
+
+  // Publish GPS fixes while live location sharing is active
+  useEffect(() => {
+    if (!currentUser?.uid || !userLocation || liveShareConfig.visibility === 'off') {
+      return;
+    }
+    void LiveLocationCloudService.publishFixIfNeeded(
+      currentUser,
+      liveShareConfig,
+      userLocation,
+      userIconPref,
+      () => {
+        setLiveShareConfig((prev) => ({
+          ...prev,
+          visibility: 'off',
+          expiresAt: null,
+          expiresAtMs: null,
+        }));
+        showToast('שיתוף המיקום החי הסתיים (פג תוקף)');
+      }
+    );
+  }, [currentUser, userLocation, liveShareConfig, userIconPref, showToast]);
+
+  // Subscribe to other users' live locations
+  useEffect(() => {
+    if (!currentUser?.uid || !isOnline || visibility.peerLocations === false) {
+      setLivePeers([]);
+      setSelectedLivePeer(null);
+      return;
+    }
+    return LiveLocationCloudService.subscribeLiveLocations(
+      currentUser,
+      { includePublic: visibility.publicPeerLocations !== false },
+      (peers) => {
+        setLivePeers(peers);
+        setSelectedLivePeer((prev) =>
+          prev ? peers.find((p) => p.uid === prev.uid) ?? null : null
+        );
+      },
+      (err: any) => {
+        const code = String(err?.code || '');
+        if (code === 'permission-denied') {
+          showToast('אין הרשאת Firestore לקריאת מיקומים חיים (יש לפרוס firestore.rules)', 5000);
+        }
+      }
+    );
+  }, [
+    currentUser,
+    isOnline,
+    visibility.peerLocations,
+    visibility.publicPeerLocations,
+  ]);
+
+  // Render live peer markers on MapLibre
+  useEffect(() => {
+    const map = mapRef.current;
+    const markersMap = peerMarkersRef.current;
+    if (!map || !isMapReady || visibility.peerLocations === false) {
+      markersMap.forEach((m) => m.remove());
+      markersMap.clear();
+      return;
+    }
+
+    const activeUids = new Set(livePeers.map((p) => p.uid));
+    for (const [uid, marker] of markersMap.entries()) {
+      if (!activeUids.has(uid)) {
+        marker.remove();
+        markersMap.delete(uid);
+      }
+    }
+
+    const mapBearing = map.getBearing() ?? 0;
+    for (const peer of livePeers) {
+      const peerPref: UserLocationIconPreference = {
+        icon: UserLocationIconService.resolveIconOptionById(peer.iconId),
+        accentColor: peer.accentColor || '#0ea5e9',
+      };
+      let marker = markersMap.get(peer.uid);
+      if (!marker) {
+        const container = document.createElement('div');
+        container.className = 'cursor-pointer select-none';
+        container.style.position = 'absolute';
+        container.style.top = '0';
+        container.style.left = '0';
+        container.style.zIndex = '18';
+
+        const iconWrap = document.createElement('div');
+        iconWrap.dataset.role = 'peer-icon-wrap';
+        iconWrap.style.position = 'relative';
+        iconWrap.style.width = '76px';
+        iconWrap.style.height = '76px';
+        UserLocationIconService.renderMarkerElement(
+          iconWrap,
+          peerPref,
+          peer.heading,
+          mapBearing,
+          false,
+          false
+        );
+        iconWrap.classList.remove('pointer-events-none');
+        iconWrap.style.position = 'relative';
+        container.appendChild(iconWrap);
+
+        const label = document.createElement('div');
+        label.dataset.role = 'peer-label';
+        label.className =
+          'px-1.5 py-0.5 rounded-md bg-slate-900/85 text-white text-[10px] font-bold whitespace-nowrap shadow border border-white/25 text-center mx-auto -mt-3 relative z-10';
+        label.textContent = peer.displayName;
+        container.appendChild(label);
+
+        container.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const latest = livePeersRef.current.find((p) => p.uid === peer.uid) ?? peer;
+          setSelectedLivePeer(latest);
+        });
+
+        marker = new maplibregl.Marker({ element: container, anchor: 'center' })
+          .setLngLat([peer.lon, peer.lat])
+          .addTo(map);
+        markersMap.set(peer.uid, marker);
+      } else {
+        marker.setLngLat([peer.lon, peer.lat]);
+        const el = marker.getElement();
+        const iconWrap = el.querySelector<HTMLElement>('[data-role="peer-icon-wrap"]');
+        if (iconWrap) {
+          UserLocationIconService.renderMarkerElement(
+            iconWrap,
+            peerPref,
+            peer.heading,
+            mapBearing,
+            false,
+            false
+          );
+          iconWrap.classList.remove('pointer-events-none');
+          iconWrap.style.position = 'relative';
+        }
+        const label = el.querySelector<HTMLElement>('[data-role="peer-label"]');
+        if (label && label.textContent !== peer.displayName) {
+          label.textContent = peer.displayName;
+        }
+      }
+    }
+  }, [isMapReady, livePeers, visibility.peerLocations]);
 
   // Keep screen awake (prevent sleep/dimming) whenever the user is in active navigation
   useEffect(() => {
@@ -5189,6 +5391,15 @@ export const App: React.FC = () => {
     try {
       if (currentUser) {
         writeStoredLastAuthUid(currentUser.uid);
+        if (isLiveSharingActiveRef.current && isOnline) {
+          await LiveLocationCloudService.stopSharing(
+            currentUser,
+            userLocationRef.current,
+            userIconPrefRef.current
+          ).catch(() => undefined);
+        } else {
+          savePersistedShareConfig(currentUser.uid, null);
+        }
         if (isOnline) {
           await PlannedTracksCloudService.syncPendingRoutesForUser(currentUser).catch(
             () => undefined
@@ -5209,6 +5420,69 @@ export const App: React.FC = () => {
       setIsAuthBusy(false);
     }
   }, [currentUser, isOnline, resetRouteSessionState, showToast]);
+
+  const handleSaveLiveShareConfig = useCallback(
+    async (nextConfig: LiveLocationShareConfig) => {
+      if (!currentUser) return;
+      setLiveShareConfig(nextConfig);
+      savePersistedShareConfig(currentUser.uid, nextConfig);
+      if (nextConfig.visibility === 'off') {
+        await LiveLocationCloudService.stopSharing(
+          currentUser,
+          userLocationRef.current,
+          userIconPrefRef.current
+        );
+        showToast('שיתוף המיקום הופסק');
+        return;
+      }
+      if (userLocationRef.current) {
+        await LiveLocationCloudService.publishNow(
+          currentUser,
+          nextConfig,
+          userLocationRef.current,
+          userIconPrefRef.current
+        );
+      }
+      showToast(
+        nextConfig.visibility === 'public'
+          ? 'המיקום החי שלך משותף כעת עם כל משתמשי NavApp'
+          : `המיקום החי שלך משותף עם ${nextConfig.sharedWith.length} משתמשים`
+      );
+    },
+    [currentUser, showToast]
+  );
+
+  const handleStopLiveShare = useCallback(async () => {
+    const offConfig: LiveLocationShareConfig = {
+      ...liveShareConfig,
+      visibility: 'off',
+      expiresAt: null,
+      expiresAtMs: null,
+    };
+    setLiveShareConfig(offConfig);
+    if (currentUser) {
+      await LiveLocationCloudService.stopSharing(
+        currentUser,
+        userLocationRef.current,
+        userIconPrefRef.current
+      );
+    }
+    showToast('שיתוף המיקום הופסק');
+  }, [currentUser, liveShareConfig, showToast]);
+
+  const handleNavigateToPeer = useCallback(
+    (peer: LiveLocationRecord) => {
+      void NavigationHeadingService.requestCompassPermissionIfNeeded();
+      handleFlyTo(peer.lon, peer.lat, 15.2);
+      showToast(`מכוון אל ${peer.displayName}`);
+      if (isMobile) {
+        setMobileDisplayMode('navigating');
+      } else {
+        setIsFreeNavigation(true);
+      }
+    },
+    [handleFlyTo, isMobile, showToast]
+  );
 
   const handleSyncPendingNow = useCallback(async () => {
     if (!currentUser) return;
@@ -6171,7 +6445,11 @@ export const App: React.FC = () => {
                 <button
                   onClick={() => setIsUserIconPickerOpen((v) => !v)}
                   className={`w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${
-                    isUserIconPickerOpen ? 'border-emerald-500 ring-2 ring-emerald-500/40' : ''
+                    isLiveSharingActive
+                      ? 'border-red-500 ring-2 ring-red-500/70'
+                      : isUserIconPickerOpen
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                        : ''
                   } ${t.pillBtn}`}
                   title={`שנה אייקון מיקום (${userIconPref.icon.labelHe})`}
                 >
@@ -6180,6 +6458,27 @@ export const App: React.FC = () => {
                     accentColor={userIconPref.accentColor}
                     size="sm"
                   />
+                </button>
+
+                <button
+                  onClick={() => setIsShareLocationModalOpen(true)}
+                  className={`relative w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${
+                    isLiveSharingActive
+                      ? 'bg-red-600 border-red-400 text-white'
+                      : t.pillBtn
+                  }`}
+                  title={
+                    isLiveSharingActive
+                      ? 'שיתוף מיקום חי פעיל — לחץ לניהול'
+                      : 'שתף מיקום חי עם משתמשים'
+                  }
+                >
+                  <Radio className={`w-4 h-4 ${isLiveSharingActive ? 'animate-pulse' : ''}`} />
+                  {livePeers.length > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow">
+                      {livePeers.length}
+                    </span>
+                  )}
                 </button>
 
                 {isNavigationActive && renderNavOrientationIconButton(false)}
@@ -6485,6 +6784,27 @@ export const App: React.FC = () => {
                 />
 
                 <button
+                  onClick={() => setIsShareLocationModalOpen(true)}
+                  className={`relative w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
+                    isLiveSharingActive
+                      ? 'bg-red-600 border-red-400 text-white'
+                      : t.pillBtn
+                  }`}
+                  title={
+                    isLiveSharingActive
+                      ? 'שיתוף מיקום חי פעיל — לחץ לניהול'
+                      : 'שתף מיקום חי עם משתמשים'
+                  }
+                >
+                  <Radio className={`w-4 h-4 ${isLiveSharingActive ? 'animate-pulse' : ''}`} />
+                  {livePeers.length > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow">
+                      {livePeers.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
                   onClick={() => {
                     if (mobileDisplayMode === 'navigating') {
                       setMobileNavOverlay(mobileNavOverlay === 'user-icon' ? null : 'user-icon');
@@ -6493,11 +6813,13 @@ export const App: React.FC = () => {
                     }
                   }}
                   className={`w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${
-                    (mobileDisplayMode === 'navigating'
-                      ? mobileNavOverlay === 'user-icon'
-                      : mobilePlanningOverlay === 'user-icon')
-                      ? 'border-emerald-500 ring-2 ring-emerald-500/50'
-                      : ''
+                    isLiveSharingActive
+                      ? 'border-red-500 ring-2 ring-red-500/75'
+                      : (mobileDisplayMode === 'navigating'
+                            ? mobileNavOverlay === 'user-icon'
+                            : mobilePlanningOverlay === 'user-icon')
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/50'
+                        : ''
                   } ${t.pillBtn}`}
                   title={`שנה אייקון מיקום (${userIconPref.icon.labelHe})`}
                 >
@@ -7249,6 +7571,49 @@ export const App: React.FC = () => {
           onSignInGoogle={handleSignInGoogle}
           onUpdateRecipients={handleUpdatePoiSharing}
           onClose={() => setShareModalPoiId(null)}
+        />
+      )}
+
+      {/* Live Location Sharing Modal */}
+      {isShareLocationModalOpen && (
+        <ShareLocationModal
+          theme={theme}
+          currentUser={currentUser}
+          isOnline={isOnline}
+          firebaseAvailable={AuthService.isAvailable()}
+          isAuthBusy={isAuthBusy}
+          hasGpsFix={Boolean(userLocation)}
+          userLocation={userLocation}
+          shareConfig={liveShareConfig}
+          peers={livePeers}
+          showPeerLocations={visibility.peerLocations !== false}
+          showPublicPeerLocations={visibility.publicPeerLocations !== false}
+          onToggleShowPeerLocations={(next) =>
+            setVisibility((prev) => ({ ...prev, peerLocations: next }))
+          }
+          onToggleShowPublicPeerLocations={(next) =>
+            setVisibility((prev) => ({ ...prev, publicPeerLocations: next }))
+          }
+          onSignInGoogle={handleSignInGoogle}
+          onSaveShareConfig={handleSaveLiveShareConfig}
+          onStopSharing={handleStopLiveShare}
+          onFocusPeer={(peer) => {
+            handleFlyTo(peer.lon, peer.lat, 15);
+            setSelectedLivePeer(peer);
+          }}
+          onClose={() => setIsShareLocationModalOpen(false)}
+        />
+      )}
+
+      {/* Peer Live Location Inspector */}
+      {selectedLivePeer && (
+        <PeerLocationInspector
+          peer={selectedLivePeer}
+          userLocation={userLocation}
+          theme={theme}
+          onCenterPeer={(peer) => handleFlyTo(peer.lon, peer.lat, 15)}
+          onNavigateToPeer={handleNavigateToPeer}
+          onClose={() => setSelectedLivePeer(null)}
         />
       )}
     </div>

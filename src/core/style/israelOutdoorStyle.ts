@@ -31,6 +31,8 @@ export interface OutdoorLayerVisibility {
   poiPeaks: boolean;
   poiUser: boolean;
   poiPrivate?: boolean;
+  peerLocations?: boolean;
+  publicPeerLocations?: boolean;
 }
 
 export type PoiLayerKey =
@@ -85,6 +87,8 @@ export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   poiPeaks: true,
   poiUser: true,
   poiPrivate: true,
+  peerLocations: true,
+  publicPeerLocations: true,
 };
 
 export function countActivePoiCategories(visibility: OutdoorLayerVisibility): number {

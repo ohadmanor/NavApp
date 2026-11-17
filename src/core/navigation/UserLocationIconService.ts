@@ -331,6 +331,10 @@ export class UserLocationIconService {
       });
   }
 
+  static resolveIconOptionById(iconId: string): UserLocationIconOption {
+    return BUILT_IN_USER_ICONS.find((i) => i.id === iconId) ?? BUILT_IN_USER_ICONS[0];
+  }
+
   /**
    * Renders or updates a MapLibre user position marker DOM container with the chosen icon,
    * accent color, pulsing accuracy halo, and Google Maps-style directional beam & arrow.
@@ -340,12 +344,13 @@ export class UserLocationIconService {
     pref: UserLocationIconPreference,
     heading: number | null,
     mapBearing = 0,
-    isNavigationActive = false
+    isNavigationActive = false,
+    isSharingLive = false
   ): void {
     const color = pref.accentColor || '#0ea5e9';
     const isDefaultDot = pref.icon.id === 'gps-puck';
     const sizePx = isDefaultDot ? 72 : 76;
-    const renderKey = `${pref.icon.id}|${color}|${pref.icon.svgUrl || ''}|${Boolean(pref.icon.inlineSvg)}`;
+    const renderKey = `${pref.icon.id}|${color}|${pref.icon.svgUrl || ''}|${Boolean(pref.icon.inlineSvg)}|${Boolean(isSharingLive)}`;
     const safeColorToken = color.replace(/[^a-zA-Z0-9]/g, '') || '0ea5e9';
 
     // CRITICAL: Preserve MapLibre's `.maplibregl-marker` class & `position: absolute; top: 0; left: 0`
@@ -396,7 +401,9 @@ export class UserLocationIconService {
         badge.className =
           'relative w-6 h-6 rounded-full border-[2.5px] border-white flex items-center justify-center shadow-lg';
         badge.style.backgroundColor = color;
-        badge.style.boxShadow = `0 0 12px ${color}`;
+        badge.style.boxShadow = isSharingLive
+          ? '0 0 0 3px #ef4444, 0 0 14px rgba(239, 68, 68, 0.85)'
+          : `0 0 12px ${color}`;
 
         // Stationary dot vs directional navigation chevron (like Google Maps)
         const coreDot = document.createElement('span');
@@ -420,7 +427,9 @@ export class UserLocationIconService {
         badge.className =
           'relative w-8 h-8 rounded-full border-[2.5px] border-white flex items-center justify-center shadow-lg';
         badge.style.backgroundColor = color;
-        badge.style.boxShadow = `0 2px 12px ${color}b3`;
+        badge.style.boxShadow = isSharingLive
+          ? '0 0 0 3px #ef4444, 0 0 16px rgba(239, 68, 68, 0.85)'
+          : `0 2px 12px ${color}b3`;
 
         const iconSlot = document.createElement('span');
         iconSlot.className = 'flex items-center justify-center w-5 h-5 text-white';

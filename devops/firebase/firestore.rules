@@ -507,5 +507,109 @@ service cloud.firestore {
     match /planing_tracks/{userId}/settings/{settingId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+
+    function validLiveLocation(data, uid) {
+      return data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'visibility',
+          'active',
+          'sharedWith',
+          'sharedWithUids',
+          'sharedWithEmails',
+          'lon',
+          'lat',
+          'accuracy',
+          'altitude',
+          'heading',
+          'speed',
+          'iconId',
+          'accentColor',
+          'startedAt',
+          'updatedAt',
+          'expiresAt',
+          'expiresAtMs'
+        ]) &&
+        data.keys().hasAll([
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'visibility',
+          'active',
+          'sharedWith',
+          'sharedWithUids',
+          'sharedWithEmails',
+          'lon',
+          'lat',
+          'accuracy',
+          'altitude',
+          'heading',
+          'speed',
+          'iconId',
+          'accentColor',
+          'startedAt',
+          'updatedAt',
+          'expiresAt',
+          'expiresAtMs'
+        ]) &&
+        data.uid == uid &&
+        data.uid is string &&
+        data.uid.size() > 0 &&
+        data.uid.size() <= 128 &&
+        data.displayName is string &&
+        data.displayName.size() > 0 &&
+        data.displayName.size() <= 200 &&
+        (data.email == null || (data.email is string && data.email.size() <= 200)) &&
+        (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 1000)) &&
+        data.visibility in ['off', 'shared', 'public'] &&
+        data.active is bool &&
+        data.sharedWith is list &&
+        data.sharedWith.size() <= 50 &&
+        data.sharedWithUids is list &&
+        data.sharedWithUids.size() <= 50 &&
+        data.sharedWithEmails is list &&
+        data.sharedWithEmails.size() <= 50 &&
+        (data.lon is int || data.lon is float) &&
+        data.lon >= -180 &&
+        data.lon <= 180 &&
+        (data.lat is int || data.lat is float) &&
+        data.lat >= -90 &&
+        data.lat <= 90 &&
+        (data.accuracy == null || data.accuracy is int || data.accuracy is float) &&
+        (data.altitude == null || data.altitude is int || data.altitude is float) &&
+        (data.heading == null || data.heading is int || data.heading is float) &&
+        (data.speed == null || data.speed is int || data.speed is float) &&
+        data.iconId is string &&
+        data.iconId.size() > 0 &&
+        data.iconId.size() <= 128 &&
+        data.accentColor is string &&
+        data.accentColor.size() > 0 &&
+        data.accentColor.size() <= 32 &&
+        data.startedAt is string &&
+        data.startedAt.size() > 0 &&
+        data.startedAt.size() <= 64 &&
+        data.updatedAt is string &&
+        data.updatedAt.size() > 0 &&
+        data.updatedAt.size() <= 64 &&
+        (data.expiresAt == null || (data.expiresAt is string && data.expiresAt.size() <= 64)) &&
+        (data.expiresAtMs == null || data.expiresAtMs is int || data.expiresAtMs is float);
+    }
+
+    match /live_locations/{uid} {
+      allow get, list: if signedIn() && (
+        resource.data.uid == request.auth.uid ||
+        resource.data.visibility == 'public' ||
+        request.auth.uid in resource.data.sharedWithUids ||
+        (request.auth.token.email != null &&
+          request.auth.token.email.lower() in resource.data.sharedWithEmails)
+      );
+      allow create, update: if signedIn() &&
+        request.auth.uid == uid &&
+        validLiveLocation(request.resource.data, uid);
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
   }
 }
