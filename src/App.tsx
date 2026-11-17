@@ -27,6 +27,7 @@ import {
   Search,
   FolderTree,
   Radio,
+  X,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
 import { offlineDataFiles } from './core/pmtiles/OfflineDataFiles';
@@ -121,6 +122,7 @@ import { ElevationProfileDrawer } from './components/navigation/ElevationProfile
 import { PlanningTrailDbDrawer } from './components/navigation/PlanningTrailDbDrawer';
 import { SendToPlanningDbModal } from './components/navigation/SendToPlanningDbModal';
 import { PlanningTrailManager } from './core/navigation/PlanningTrailManager';
+import { ensureZofimRoutesSeeded } from './core/navigation/seedZofimRoutes';
 import type {
   TrailCategoryId,
   TrailDifficulty,
@@ -420,6 +422,11 @@ export const App: React.FC = () => {
   const [planningTrails, setPlanningTrails] = useState<PlanningTrailRecord[]>([]);
   const [selectedPlanningTrailId, setSelectedPlanningTrailId] = useState<string | null>(null);
   const [showPlanningFolderOnMap, setShowPlanningFolderOnMap] = useState(false);
+  const [planningDbWidthPx, setPlanningDbWidthPx] = useState<number>(() =>
+    typeof window !== 'undefined'
+      ? Math.min(620, Math.max(440, Math.round(window.innerWidth * 0.44)))
+      : 560
+  );
   const [sendToPlanningRouteTarget, setSendToPlanningRouteTarget] =
     useState<SavedRouteRecord | null>(null);
 
@@ -507,6 +514,7 @@ export const App: React.FC = () => {
   const [isRoutingLeg, setIsRoutingLeg] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  const editingPlanningTrailIdRef = useRef<string | null>(null);
   const [pinnedBackgroundRouteIds, setPinnedBackgroundRouteIds] = useState<string[]>(() =>
     readStoredPinnedRouteIds()
   );
@@ -5210,6 +5218,8 @@ export const App: React.FC = () => {
   );
 
   const handleCancelEditPlan = useCallback(() => {
+    const wasPlanningTrail = Boolean(editingPlanningTrailIdRef.current);
+    editingPlanningTrailIdRef.current = null;
     editingRouteIdRef.current = null;
     setEditingRouteId(null);
     setPlanRouteName('');
@@ -5217,10 +5227,10 @@ export const App: React.FC = () => {
     if (isMobileRef.current) {
       setMobilePlanningOverlay(null);
       setMobileDisplayMode('planning');
-      setMobileTab('routes');
+      setMobileTab(wasPlanningTrail ? 'planning-db' : 'routes');
       setMobileSheetExpanded(true);
     } else {
-      setDesktopDrawer('routes');
+      setDesktopDrawer(wasPlanningTrail ? 'planning-db' : 'routes');
     }
   }, [handleClearPlan]);
 
@@ -5261,6 +5271,7 @@ export const App: React.FC = () => {
     const legs = planLegsRef.current;
     const mode = planningModeRef.current;
     const targetEditId = editingRouteIdRef.current;
+    const targetPlanningTrailId = editingPlanningTrailIdRef.current;
 
     if (wps.length < 2 || legs.length === 0) {
       showToast('נדרשות לפחות 2 נקודות ציר כדי לשמור מסלול');
@@ -5278,6 +5289,46 @@ export const App: React.FC = () => {
       const segments = legs
         .map((l) => l.coordinates)
         .filter((coords) => coords.length >= 2);
+
+      if (targetPlanningTrailId) {
+        const updatedTrail = await PlanningTrailManager.updatePlannedTrailGeometry(
+          targetPlanningTrailId,
+          {
+            name: finalName,
+            mode,
+            segments,
+            waypoints: wps,
+          }
+        );
+        if (updatedTrail) {
+          setPlanningTrails((prev) =>
+            prev.map((t) => (t.id === updatedTrail.id ? updatedTrail : t))
+          );
+          setSelectedPlanningTrailId(updatedTrail.id);
+        }
+        editingPlanningTrailIdRef.current = null;
+        disconnectedCandidateRef.current = null;
+        planWaypointsRef.current = [];
+        planLegsRef.current = [];
+        setDisconnectedCandidate(null);
+        setPlanWaypoints([]);
+        setPlanLegs([]);
+        setPlanPreviewPoint(null);
+        setPlanCursorCoord(null);
+        setPlanRouteName('');
+        setPlanElevStats({ ascent: 0, descent: 0 });
+
+        if (isMobileRef.current) {
+          setMobilePlanningOverlay(null);
+          setMobileDisplayMode('planning');
+          setMobileTab('planning-db');
+          setMobileSheetExpanded(true);
+        } else {
+          setDesktopDrawer('planning-db');
+        }
+        showToast(`"${finalName}" עודכן במאגר התכנון`);
+        return;
+      }
 
       const savedLocal = targetEditId
         ? await RouteManager.updatePlannedRoute(targetEditId, {
@@ -5669,6 +5720,7 @@ export const App: React.FC = () => {
     let cancelled = false;
     void (async () => {
       try {
+        await ensureZofimRoutesSeeded(uid);
         const [loadedFolders, loadedTrails] = await Promise.all([
           PlanningTrailManager.listFolders(uid),
           PlanningTrailManager.listTrailSummaries(uid),
@@ -5726,7 +5778,7 @@ export const App: React.FC = () => {
       patch: Partial<
         Pick<
           PlanningTrailRecord,
-          'folderId' | 'categoryId' | 'difficulty' | 'isStarred' | 'tags'
+          'name' | 'folderId' | 'categoryId' | 'difficulty' | 'isStarred' | 'tags' | 'notes'
         >
       >
     ) => {
@@ -5736,6 +5788,148 @@ export const App: React.FC = () => {
     },
     []
   );
+
+  const handleSelectPlanningTrail = useCallback(async (trailId: string) => {
+    setSelectedPlanningTrailId(trailId);
+    const full = await PlanningTrailManager.loadFullTrail(trailId);
+    if (!full) return;
+    if (full.geojson?.features?.length) {
+      const previewRoute: SavedRouteRecord = {
+        id: full.id,
+        name: full.name,
+        sourceFormat: full.sourceFormat,
+        planningMode: full.planningMode,
+        waypoints: full.waypoints,
+        distanceKm: full.distanceKm,
+        ascentMeters: full.ascentMeters,
+        descentMeters: full.descentMeters,
+        minEle: full.minEle,
+        maxEle: full.maxEle,
+        color: full.color,
+        visible: true,
+        bounds: full.bounds,
+        hasFullPayload: true,
+        geojson: full.geojson,
+        elevationProfile: full.elevationProfile,
+        gpxXml: full.gpxXml,
+        createdAt: full.createdAt,
+        updatedAt: full.updatedAt,
+      };
+      setActiveRoute(previewRoute);
+      if (full.bounds) {
+        const [minLon, minLat, maxLon, maxLat] = full.bounds;
+        handleFlyTo((minLon + maxLon) / 2, (minLat + maxLat) / 2, 13);
+      }
+    }
+  }, []);
+
+  const handleStartResizePlanningDb = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const maxAllowed = Math.max(360, Math.floor(window.innerWidth * 0.55));
+      const startWidth = Math.min(planningDbWidthPx, maxAllowed);
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const deltaX = startX - moveEvent.clientX;
+        const maxW = Math.max(360, Math.floor(window.innerWidth * 0.55));
+        const nextW = Math.min(maxW, Math.max(360, startWidth + deltaX));
+        setPlanningDbWidthPx(nextW);
+      };
+
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+    [planningDbWidthPx]
+  );
+
+  const handleEditPlanningTrailOnMap = useCallback(async (trailId: string) => {
+    const full = await PlanningTrailManager.loadFullTrail(trailId);
+    if (!full) return;
+
+    const mode: PlanningMode =
+      full.planningMode ||
+      (full.categoryId === 'bicycle' ? 'bicycle' : full.categoryId === 'hiking' ? 'foot' : '4x4');
+
+    let wps: PlannedWaypoint[] = (full.waypoints || []).map((wp) => ({
+      ...wp,
+      legType: wp.legType || 'network',
+    }));
+    const legs: PlannedLeg[] = [];
+    const lineFeatures = (full.geojson?.features || []).filter(
+      (f): f is GeoJSON.Feature<GeoJSON.LineString> =>
+        f.geometry?.type === 'LineString' && f.geometry.coordinates.length >= 2
+    );
+
+    if (wps.length >= 2) {
+      for (let i = 0; i < wps.length - 1; i++) {
+        const segCoords = lineFeatures[i]?.geometry.coordinates as [number, number][] | undefined;
+        const coords: [number, number][] =
+          segCoords && segCoords.length >= 2
+            ? segCoords
+            : [
+                [wps[i].lon, wps[i].lat],
+                [wps[i + 1].lon, wps[i + 1].lat],
+              ];
+        legs.push({
+          coordinates: coords,
+          distanceKm: turf.length(turf.lineString(coords), { units: 'kilometers' }),
+          legType: wps[i + 1].legType || 'network',
+          roadLabels: wps[i + 1].roadLabel ? [wps[i + 1].roadLabel!] : [],
+        });
+      }
+    } else if (lineFeatures.length > 0) {
+      const flat = lineFeatures.flatMap((f) => f.geometry.coordinates as [number, number][]);
+      if (flat.length >= 2) {
+        wps = [
+          { lon: flat[0][0], lat: flat[0][1], legType: 'network' },
+          { lon: flat[flat.length - 1][0], lat: flat[flat.length - 1][1], legType: 'network' },
+        ];
+        legs.push({
+          coordinates: flat,
+          distanceKm: turf.length(turf.lineString(flat), { units: 'kilometers' }),
+          legType: 'network',
+          roadLabels: [],
+        });
+      }
+    }
+
+    editingPlanningTrailIdRef.current = full.id;
+    editingRouteIdRef.current = null;
+    setEditingRouteId(null);
+    planningModeRef.current = mode;
+    setPlanningMode(mode);
+    setPlanRouteName(full.name);
+    disconnectedCandidateRef.current = null;
+    setDisconnectedCandidate(null);
+    setPlanPreviewPoint(null);
+    setPlanCursorCoord(null);
+    planWaypointsRef.current = wps;
+    setPlanWaypoints(wps);
+    planLegsRef.current = legs;
+    setPlanLegs(legs);
+
+    if (isMobileRef.current) {
+      setMobileDisplayMode('planning');
+      setMobilePlanningOverlay('plan-route');
+      setMobileSheetExpanded(true);
+    } else {
+      setDesktopDrawer('plan-route');
+    }
+
+    if (full.bounds) {
+      const [minLon, minLat, maxLon, maxLat] = full.bounds;
+      handleFlyTo((minLon + maxLon) / 2, (minLat + maxLat) / 2, 13);
+    }
+    if (legs.length > 0 && wps.length >= 2) {
+      void recomputePlanElevationStats(legs, wps);
+    }
+  }, [recomputePlanElevationStats]);
 
   const handleDeletePlanningTrail = useCallback(
     async (trailId: string) => {
@@ -5968,15 +6162,30 @@ export const App: React.FC = () => {
         {!isMobile && (
           <>
             {/* Top-Right (RTL Start): Search Capsule + Contextual Floating Drawer */}
-            <div className="absolute top-3 right-3 z-30 w-[380px] max-w-[calc(100vw-24px)] flex flex-col gap-2 pointer-events-none">
-              <div className="pointer-events-auto">
+            <div className="absolute top-3 right-3 z-30 max-w-[calc(100vw-24px)] flex flex-col gap-2 pointer-events-none">
+              <div className="pointer-events-auto w-[380px] max-w-full ml-auto">
                 {renderSearchBar(false)}
               </div>
 
               {desktopDrawer && (
                 <div
-                  className={`pointer-events-auto rounded-2xl border overflow-hidden flex flex-col max-h-[calc(100vh-155px)] ${t.panel}`}
+                  style={
+                    desktopDrawer === 'planning-db'
+                      ? {
+                          width: `min(${planningDbWidthPx}px, 55vw)`,
+                          height: !isDesktopDrawerMinimized ? 'calc(100vh - 155px)' : undefined,
+                        }
+                      : { width: '380px' }
+                  }
+                  className={`relative ml-auto max-w-full pointer-events-auto rounded-2xl border overflow-hidden flex flex-col max-h-[calc(100vh-155px)] ${t.panel}`}
                 >
+                  {desktopDrawer === 'planning-db' && !isDesktopDrawerMinimized && (
+                    <div
+                      onPointerDown={handleStartResizePlanningDb}
+                      title="גרור לשינוי רוחב החלון (עד 55%)"
+                      className="absolute top-0 bottom-0 left-0 w-2 cursor-ew-resize hover:bg-emerald-500/35 active:bg-emerald-500/50 transition-colors z-20"
+                    />
+                  )}
                   <div
                     dir="rtl"
                     className="flex items-center justify-between gap-2 px-3 py-1.5 shrink-0"
@@ -5984,11 +6193,24 @@ export const App: React.FC = () => {
                     <span className={`text-[11px] font-bold ${t.muted}`}>
                       {DESKTOP_DRAWER_TITLES[desktopDrawer] ?? ''}
                     </span>
-                    <MinimizeToggle
-                      minimized={isDesktopDrawerMinimized}
-                      onToggle={() => setIsDesktopDrawerMinimized((v) => !v)}
-                      theme={theme}
-                    />
+                    <div className="flex items-center gap-1">
+                      <MinimizeToggle
+                        minimized={isDesktopDrawerMinimized}
+                        onToggle={() => setIsDesktopDrawerMinimized((v) => !v)}
+                        theme={theme}
+                      />
+                      {desktopDrawer === 'planning-db' && (
+                        <button
+                          type="button"
+                          onClick={() => setDesktopDrawer(null)}
+                          className={`p-1 rounded-lg transition ${t.hoverRow} ${t.muted}`}
+                          title="סגור חלון"
+                          aria-label="סגור חלון"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div
                     className={
@@ -6028,16 +6250,14 @@ export const App: React.FC = () => {
                       folders={planningFolders}
                       trails={planningTrails}
                       selectedTrailId={selectedPlanningTrailId}
-                      showFolderOnMap={showPlanningFolderOnMap}
-                      onSelectTrail={(trailId) => setSelectedPlanningTrailId(trailId)}
-                      onToggleShowFolderOnMap={() => setShowPlanningFolderOnMap((v) => !v)}
+                      onSelectTrail={handleSelectPlanningTrail}
                       onCreateFolder={handleCreatePlanningFolder}
                       onRenameFolder={handleRenamePlanningFolder}
                       onDeleteFolder={handleDeletePlanningFolder}
                       onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                      onEditTrailOnMap={handleEditPlanningTrailOnMap}
                       onDeleteTrail={handleDeletePlanningTrail}
                       onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
-                      onClose={() => setDesktopDrawer(null)}
                     />
                   )}
 
@@ -7075,13 +7295,12 @@ export const App: React.FC = () => {
                   folders={planningFolders}
                   trails={planningTrails}
                   selectedTrailId={selectedPlanningTrailId}
-                  showFolderOnMap={showPlanningFolderOnMap}
-                  onSelectTrail={(trailId) => setSelectedPlanningTrailId(trailId)}
-                  onToggleShowFolderOnMap={() => setShowPlanningFolderOnMap((v) => !v)}
+                  onSelectTrail={handleSelectPlanningTrail}
                   onCreateFolder={handleCreatePlanningFolder}
                   onRenameFolder={handleRenamePlanningFolder}
                   onDeleteFolder={handleDeletePlanningFolder}
                   onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                  onEditTrailOnMap={handleEditPlanningTrailOnMap}
                   onDeleteTrail={handleDeletePlanningTrail}
                   onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
                   onClose={() => setMobileTab('explore')}

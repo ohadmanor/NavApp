@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Folder,
   FolderPlus,
@@ -10,7 +10,6 @@ import {
   Pencil,
   ChevronLeft,
   ChevronDown,
-  Map as MapIcon,
   X,
   ArrowRight,
   SlidersHorizontal,
@@ -42,9 +41,9 @@ interface PlanningTrailDbDrawerProps {
   folders: PlanningFolderRecord[];
   trails: PlanningTrailRecord[];
   selectedTrailId: string | null;
-  showFolderOnMap: boolean;
+  showFolderOnMap?: boolean;
   onSelectTrail: (trailId: string) => void;
-  onToggleShowFolderOnMap: (visibleTrailIds: string[]) => void;
+  onToggleShowFolderOnMap?: (visibleTrailIds: string[]) => void;
   onCreateFolder: (params: {
     name: string;
     parentId: string | null;
@@ -56,10 +55,11 @@ interface PlanningTrailDbDrawerProps {
     patch: Partial<
       Pick<
         PlanningTrailRecord,
-        'folderId' | 'categoryId' | 'difficulty' | 'isStarred' | 'tags'
+        'name' | 'folderId' | 'categoryId' | 'difficulty' | 'isStarred' | 'tags' | 'notes'
       >
     >
   ) => Promise<void>;
+  onEditTrailOnMap?: (trailId: string) => void;
   onDeleteTrail: (trailId: string) => Promise<void>;
   onSendTrailToActiveRoutes: (trailId: string) => Promise<void>;
   onClose?: () => void;
@@ -78,27 +78,44 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
   onRenameFolder,
   onDeleteFolder,
   onUpdateTrailMetadata,
+  onEditTrailOnMap,
   onDeleteTrail,
   onSendTrailToActiveRoutes,
   onClose,
 }) => {
   const surface = getSurfaceTheme(theme);
   const [activeFolderId, setActiveFolderId] = useState<string>('v-all');
-  const [includeSubfolders, setIncludeSubfolders] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<TrailCategoryId | 'all'>('all');
   const [difficultyFilter, setDifficultyFilter] = useState<TrailDifficulty | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('updated');
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
 
+  useEffect(() => {
+    setExpandedFolders((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const f of folders) {
+        if (f.parentId === null && next[f.id] === undefined) {
+          next[f.id] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [folders]);
+
   // Modals / Inline editors
   const [showNewFolderForm, setShowNewFolderForm] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderParentId, setNewFolderParentId] = useState<string>('');
   const [editingTrail, setEditingTrail] = useState<PlanningTrailRecord | null>(null);
+  const [editName, setEditName] = useState<string>('');
   const [editFolderId, setEditFolderId] = useState<string>('');
   const [editCategoryId, setEditCategoryId] = useState<TrailCategoryId>('4x4');
   const [editDifficulty, setEditDifficulty] = useState<TrailDifficulty>('medium');
+  const [editTagsText, setEditTagsText] = useState<string>('');
+  const [editNotes, setEditNotes] = useState<string>('');
 
   const folderTree = useMemo(
     () => PlanningTrailManager.buildFolderTree(folders, trails),
@@ -118,9 +135,7 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
     } else if (activeFolderId === 'v-unfiled') {
       list = list.filter((t) => !t.folderId);
     } else if (activeFolderId !== 'v-all') {
-      const ids = includeSubfolders
-        ? PlanningTrailManager.getDescendantFolderIds(activeFolderId, folders)
-        : new Set([activeFolderId]);
+      const ids = PlanningTrailManager.getDescendantFolderIds(activeFolderId, folders);
       list = list.filter((t) => t.folderId && ids.has(t.folderId));
     }
 
@@ -158,7 +173,6 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
     trails,
     folders,
     activeFolderId,
-    includeSubfolders,
     categoryFilter,
     difficultyFilter,
     searchQuery,
@@ -203,18 +217,28 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
 
   const openEditTrailModal = (trail: PlanningTrailRecord) => {
     setEditingTrail(trail);
+    setEditName(trail.name);
     setEditFolderId(trail.folderId || '');
     setEditCategoryId(trail.categoryId);
     setEditDifficulty(trail.difficulty || 'medium');
+    setEditTagsText((trail.tags || []).join(', '));
+    setEditNotes(trail.notes || '');
   };
 
   const handleSaveTrailEdits = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTrail) return;
+    const parsedTags = editTagsText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     await onUpdateTrailMetadata(editingTrail.id, {
+      name: editName.trim() || editingTrail.name,
       folderId: editFolderId || null,
       categoryId: editCategoryId,
       difficulty: editDifficulty,
+      tags: parsedTags,
+      notes: editNotes.trim(),
     });
     setEditingTrail(null);
   };
@@ -369,17 +393,31 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
             <span>+{Math.round(trail.ascentMeters)} מ&apos;</span>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 openEditTrailModal(trail);
               }}
-              className={`px-2 py-1 rounded-lg border text-[11px] ${surface.pillBtn}`}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] ${surface.pillBtn}`}
             >
-              תיקייה / קושי
+              <Pencil className="w-3 h-3" />
+              ערוך
             </button>
+            {onEditTrailOnMap && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEditTrailOnMap(trail.id);
+                }}
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] ${surface.pillBtn}`}
+                title="ערוך או צייר את תוואי המסלול על המפה"
+              >
+                תוואי במפה
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {
@@ -426,9 +464,9 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
   ];
 
   return (
-    <div className={`flex flex-col h-full gap-3 ${isMobile ? 'p-3' : 'p-3.5'}`} dir="rtl">
+    <div className={`flex flex-col flex-1 min-h-0 overflow-hidden gap-3 ${isMobile ? 'p-3' : 'p-3.5'}`} dir="rtl">
       {/* Header */}
-      <div className={`flex flex-wrap items-center justify-between gap-2 pb-2 border-b ${surface.divider}`}>
+      <div className={`flex flex-wrap items-center justify-between gap-2 pb-2 border-b shrink-0 ${surface.divider}`}>
         <div className="flex items-center gap-2">
           <FolderTree className="w-5 h-5 text-emerald-500" />
           <div>
@@ -443,24 +481,11 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
           <button
             type="button"
             onClick={handleOpenNewFolder}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 hover:bg-emerald-500/25"
+            title="תיקייה חדשה"
+            aria-label="תיקייה חדשה"
+            className="p-2 rounded-xl bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 hover:bg-emerald-500/25 transition"
           >
-            <FolderPlus className="w-3.5 h-3.5" />
-            תיקייה חדשה
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              onToggleShowFolderOnMap(filteredTrails.slice(0, 25).map((t) => t.id))
-            }
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              showFolderOnMap
-                ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                : surface.pillBtn
-            }`}
-          >
-            <MapIcon className="w-3.5 h-3.5" />
-            {showFolderOnMap ? 'מציג במפה' : 'הצג במפה'}
+            <FolderPlus className="w-4 h-4" />
           </button>
           {onClose && (
             <button
@@ -517,9 +542,9 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
       )}
 
       {/* Main Content: Desktop Two-Pane vs Mobile Drill-down */}
-      <div className={`flex-1 min-h-0 ${isMobile ? 'flex flex-col gap-2.5' : 'grid grid-cols-12 gap-3'}`}>
+      <div className={`flex-1 min-h-0 overflow-hidden ${isMobile ? 'flex flex-col gap-2.5' : 'grid grid-cols-[minmax(200px,48%)_1fr] gap-3'}`}>
         {!isMobile && (
-          <aside className={`col-span-4 rounded-xl border p-2 overflow-y-auto space-y-2 ${surface.subCard}`}>
+          <aside className={`h-full min-h-0 rounded-xl border p-2.5 overflow-y-auto space-y-2 ${surface.subCard}`}>
             <div className={`text-[10px] font-bold uppercase px-1 ${surface.muted}`}>
               תצוגות מהירות
             </div>
@@ -554,9 +579,9 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
           </aside>
         )}
 
-        <div className={`${isMobile ? 'flex-1' : 'col-span-8'} flex flex-col gap-2 min-w-0 min-h-0`}>
+        <div className="flex-1 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
           {/* Breadcrumbs + Mobile Back + Subfolders toggle */}
-          <div className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl border text-xs ${surface.subCard}`}>
+          <div className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl border text-xs shrink-0 ${surface.subCard}`}>
             <div className="flex items-center gap-1.5 min-w-0">
               {isMobile && !activeFolderId.startsWith('v-') && (
                 <button
@@ -572,15 +597,6 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
               )}
               <span className="font-semibold truncate">📁 {breadcrumbLabel}</span>
             </div>
-            <label className="flex items-center gap-1 text-[11px] cursor-pointer shrink-0">
-              <input
-                type="checkbox"
-                checked={includeSubfolders}
-                onChange={(e) => setIncludeSubfolders(e.target.checked)}
-                className="accent-emerald-500"
-              />
-              תתי-תיקיות
-            </label>
           </div>
 
           {/* Mobile Child Folders Drill-Down */}
@@ -599,8 +615,8 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
             </div>
           )}
 
-          {/* Search + Difficulty + Sort */}
-          <div className="flex flex-wrap gap-1.5">
+          {/* Search + Category + Difficulty + Sort */}
+          <div className="flex flex-wrap gap-1.5 shrink-0">
             <div className="relative flex-1 min-w-[130px]">
               <Search className={`w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 ${surface.muted}`} />
               <input
@@ -611,6 +627,23 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
                 className={`w-full pr-8 pl-2.5 py-1.5 rounded-xl border text-xs ${surface.fieldBox}`}
               />
             </div>
+
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value as TrailCategoryId | 'all')}
+              className={`px-2 py-1.5 rounded-xl border text-xs ${surface.fieldBox}`}
+              aria-label="סינון לפי סוג מסלול"
+            >
+              <option value="all">סוג: הכל</option>
+              {TRAIL_CATEGORY_ORDER.map((cid) => {
+                const cat = TRAIL_CATEGORY_META[cid];
+                return (
+                  <option key={cid} value={cid}>
+                    {cat.emoji} {cat.labelHe}
+                  </option>
+                );
+              })}
+            </select>
 
             <select
               value={difficultyFilter}
@@ -641,40 +674,8 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
             </div>
           </div>
 
-          {/* Category Filter Chips */}
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-            <button
-              type="button"
-              onClick={() => setCategoryFilter('all')}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
-                categoryFilter === 'all'
-                  ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                  : surface.chipIdle
-              }`}
-            >
-              ✦ הכל
-            </button>
-            {TRAIL_CATEGORY_ORDER.map((cid) => {
-              const cat = TRAIL_CATEGORY_META[cid];
-              return (
-                <button
-                  key={cid}
-                  type="button"
-                  onClick={() => setCategoryFilter(cid)}
-                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
-                    categoryFilter === cid
-                      ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                      : surface.chipIdle
-                  }`}
-                >
-                  {cat.emoji} {cat.labelHe}
-                </button>
-              );
-            })}
-          </div>
-
           {/* Trail List */}
-          <div className="flex-1 overflow-y-auto space-y-2 pr-0.5">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-0.5">
             {filteredTrails.length > 0 ? (
               filteredTrails.map(renderTrailCard)
             ) : (
@@ -686,18 +687,28 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
         </div>
       </div>
 
-      {/* Edit Trail Metadata Modal */}
+      {/* Edit Trail Modal */}
       {editingTrail && (
         <div className="fixed inset-0 z-[130] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <form
             onSubmit={handleSaveTrailEdits}
-            className={`w-full max-w-sm rounded-2xl border p-4 space-y-3 ${surface.panelSolid}`}
+            className={`w-full max-w-md rounded-2xl border p-4 space-y-3 max-h-[85vh] overflow-y-auto ${surface.panelSolid}`}
           >
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold truncate">{editingTrail.name}</h4>
+              <h4 className="text-sm font-bold truncate">עריכת מסלול</h4>
               <button type="button" onClick={() => setEditingTrail(null)}>
                 <X className="w-4 h-4" />
               </button>
+            </div>
+            <div>
+              <label className={`block text-xs mb-1 ${surface.muted}`}>שם המסלול</label>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                required
+                className={`w-full px-3 py-2 rounded-xl border text-xs ${surface.fieldBox}`}
+              />
             </div>
             <div>
               <label className={`block text-xs mb-1 ${surface.muted}`}>תיקייה</label>
@@ -747,20 +758,56 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
                 ))}
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setEditingTrail(null)}
-                className={`px-3 py-1.5 rounded-xl text-xs border ${surface.pillBtn}`}
-              >
-                ביטול
-              </button>
-              <button
-                type="submit"
-                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500 text-slate-950"
-              >
-                שמור
-              </button>
+            <div>
+              <label className={`block text-xs mb-1 ${surface.muted}`}>תגיות (מופרדות בפסיק)</label>
+              <input
+                type="text"
+                value={editTagsText}
+                onChange={(e) => setEditTagsText(e.target.value)}
+                placeholder="צופים, מפה 1, אדום..."
+                className={`w-full px-3 py-2 rounded-xl border text-xs ${surface.fieldBox}`}
+              />
+            </div>
+            <div>
+              <label className={`block text-xs mb-1 ${surface.muted}`}>הערות ופרטי מסלול</label>
+              <textarea
+                rows={4}
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                className={`w-full px-3 py-2 rounded-xl border text-xs ${surface.fieldBox}`}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              {onEditTrailOnMap ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = editingTrail.id;
+                    setEditingTrail(null);
+                    onEditTrailOnMap(id);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border ${surface.pillBtn}`}
+                >
+                  ערוך / צייר תוואי במפה
+                </button>
+              ) : (
+                <span />
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingTrail(null)}
+                  className={`px-3 py-1.5 rounded-xl text-xs border ${surface.pillBtn}`}
+                >
+                  ביטול
+                </button>
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500 text-slate-950"
+                >
+                  שמור
+                </button>
+              </div>
             </div>
           </form>
         </div>

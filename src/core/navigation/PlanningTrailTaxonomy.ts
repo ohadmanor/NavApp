@@ -75,11 +75,6 @@ export const TRAIL_CATEGORY_ORDER: TrailCategoryId[] = [
   '4x4',
   'hiking',
   'bicycle',
-  'family',
-  'water',
-  'overnight',
-  'scenic',
-  'custom',
 ];
 
 export const TRAIL_CATEGORY_META: Record<TrailCategoryId, TrailCategorySpec> = {

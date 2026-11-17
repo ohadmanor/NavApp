@@ -1,10 +1,13 @@
+import * as turf from '@turf/turf';
 import {
   db,
+  type PlannedWaypoint,
   type PlanningFolderRecord,
   type PlanningTrailPayloadRecord,
   type PlanningTrailRecord,
   type SavedRouteRecord,
 } from '../db/NavDatabase';
+import type { PlanningMode } from '../routing/RoutingProfiles';
 import {
   TRAIL_CATEGORY_META,
   inferDefaultCategoryFromPlanningMode,
@@ -568,5 +571,53 @@ export class PlanningTrailManager {
     };
 
     return this.persistFullTrail(trailRecord);
+  }
+
+  static async updatePlannedTrailGeometry(
+    trailId: string,
+    params: {
+      name: string;
+      mode: PlanningMode;
+      segments: Array<Array<[number, number]>>;
+      waypoints: PlannedWaypoint[];
+    }
+  ): Promise<PlanningTrailRecord | undefined> {
+    const existing = await this.loadFullTrail(trailId);
+    if (!existing) return undefined;
+
+    const features: GeoJSON.Feature<GeoJSON.LineString>[] = params.segments
+      .filter((seg) => seg.length >= 2)
+      .map((coords) => ({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: coords },
+      }));
+
+    const geojson: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features,
+    };
+
+    let distanceKm = 0;
+    for (const f of features) {
+      distanceKm += turf.length(f, { units: 'kilometers' });
+    }
+
+    const now = new Date().toISOString();
+    const updated: PlanningTrailRecord = {
+      ...existing,
+      name: params.name.trim() || existing.name,
+      planningMode: params.mode,
+      sourceFormat: 'planned',
+      distanceKm: Number(distanceKm.toFixed(2)),
+      bounds: computeRouteBounds(geojson, existing.elevationProfile),
+      geojson,
+      waypoints: params.waypoints,
+      hasFullPayload: true,
+      cloudSyncStatus: 'pending',
+      updatedAt: now,
+    };
+
+    return this.persistFullTrail(updated);
   }
 }
