@@ -122,7 +122,10 @@ import { ElevationProfileDrawer } from './components/navigation/ElevationProfile
 import { PlanningTrailDbDrawer } from './components/navigation/PlanningTrailDbDrawer';
 import { SendToPlanningDbModal } from './components/navigation/SendToPlanningDbModal';
 import { PlanningTrailManager } from './core/navigation/PlanningTrailManager';
-import { ensureZofimRoutesSeeded } from './core/navigation/seedZofimRoutes';
+import {
+  ensureZofimRoutesSeeded,
+  resolveZofimTrailFallback,
+} from './core/navigation/seedZofimRoutes';
 import type {
   TrailCategoryId,
   TrailDifficulty,
@@ -147,6 +150,7 @@ import {
   type PlannedLeg,
 } from './components/navigation/RoutePlannerPanel';
 import { LayerSwitcherSheet, type LayerSheetSection } from './components/map/LayerSwitcherSheet';
+import { raiseRegionalTrailNamesAbove } from './core/style/regionalTrails';
 import { MinimizeToggle } from './components/ui/MinimizeToggle';
 import {
   UserIconPickerSheet,
@@ -168,6 +172,7 @@ import {
 import { highwayWayGeometryService } from './core/trails/HighwayWayGeometryService';
 import {
   trailWayIdFromMvtId,
+  type TrailAnnotationSearchItem,
   type TrailWayCandidate,
   type TrailWayGeometry,
 } from './core/trails/TrailAnnotationTypes';
@@ -378,6 +383,7 @@ export const App: React.FC = () => {
     type: 'FeatureCollection',
     features: [],
   });
+  const [trailSearchItems, setTrailSearchItems] = useState<TrailAnnotationSearchItem[]>([]);
   const [showTrailOverlay, setShowTrailOverlay] = useState(true);
   const [mapStyleRevision, setMapStyleRevision] = useState(0);
   const [selectedTrailWay, setSelectedTrailWay] = useState<TrailWayGeometry | null>(null);
@@ -572,11 +578,11 @@ export const App: React.FC = () => {
     (isMobile && mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'plan-route');
 
   const isRoutesUiOpen =
-    (!isMobile && desktopDrawer === 'routes') ||
+    (!isMobile && (desktopDrawer === 'routes' || desktopDrawer === 'planning-db')) ||
     (isMobile &&
       mobileDisplayMode === 'planning' &&
       !mobilePlanningOverlay &&
-      mobileTab === 'routes');
+      (mobileTab === 'routes' || mobileTab === 'planning-db'));
 
   const routeDisplayContext = useMemo<RouteDisplayContext>(
     () => ({
@@ -887,9 +893,13 @@ export const App: React.FC = () => {
         return;
       }
       if (!isTrailAddWaysModeRef.current) {
-        const overlayLayers = ['community-trails-line', 'community-trails-stale'].filter((id) =>
-          Boolean(map.getLayer(id))
-        );
+        const overlayLayers = [
+          'community-trails-track-right',
+          'community-trails-track-left',
+          'community-trails-path-line',
+          'community-trails-casing',
+          'community-trails-stale',
+        ].filter((id) => Boolean(map.getLayer(id)));
         const overlayHit = overlayLayers.length
           ? map
               .queryRenderedFeatures(
@@ -2294,6 +2304,8 @@ export const App: React.FC = () => {
               for (const ring of f.geometry.coordinates) {
                 if (ring.length >= 1) activeCoordLists.push(ring);
               }
+            } else if (f.geometry?.type === 'Point' && f.geometry.coordinates.length >= 2) {
+              activeCoordLists.push([f.geometry.coordinates]);
             }
           }
           const firstCoords = activeCoordLists[0] || [];
@@ -2518,6 +2530,10 @@ export const App: React.FC = () => {
             });
           }
         }
+        raiseRegionalTrailNamesAbove(
+          map,
+          poiTierSpecs.map((tier) => tier.id)
+        );
 
         // Route Planning Overlays (draft network legs, straight fallback legs, snapped cursor preview, numbered waypoints)
         const modeColor = currentPlan.activeColor || PLANNING_MODE_META[currentPlan.mode].color;
@@ -3430,19 +3446,96 @@ export const App: React.FC = () => {
       map.addSource(sourceId, { type: 'geojson', data: trailOverlayGeoJSON });
     }
 
+    const spniMapColorExpr: maplibregl.ExpressionSpecification = [
+      'match',
+      ['coalesce', ['get', 'color'], ''],
+      '#dc2626',
+      '#FF0000',
+      '#ea580c',
+      '#FF8000',
+      '#ca8a04',
+      '#EAB308',
+      '#16a34a',
+      '#00C000',
+      '#2563eb',
+      '#0044FF',
+      '#7c3aed',
+      '#800080',
+      '#334155',
+      '#111111',
+      ['coalesce', ['get', 'color'], '#FF0000'],
+    ];
+
     const beforeId = map.getLayer('saved-routes-line') ? 'saved-routes-line' : undefined;
     if (!map.getLayer('community-trails-casing')) {
+      const isTrackOrRoadFilter: maplibregl.FilterSpecification = [
+        'all',
+        ['!=', ['coalesce', ['get', 'stale'], false], true],
+        ['!=', ['get', 'trailId'], 'selection-preview'],
+        ['!', ['in', ['coalesce', ['get', 'highwayClass'], ''], ['literal', ['path', 'footway']]]],
+      ];
       map.addLayer(
         {
           id: 'community-trails-casing',
           type: 'line',
           source: sourceId,
-          filter: ['!=', ['coalesce', ['get', 'stale'], false], true],
+          filter: isTrackOrRoadFilter,
           layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
           paint: {
-            'line-color': theme === 'topo-dark' ? '#f8fafc' : '#0f172a',
-            'line-width': 7,
-            'line-opacity': 0.8,
+            'line-color': theme === 'topo-dark' ? '#1e293b' : '#FFFFFF',
+            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 3.5, 13, 5, 16, 8, 22, 32],
+          },
+        },
+        beforeId
+      );
+      map.addLayer(
+        {
+          id: 'community-trails-track-right',
+          type: 'line',
+          source: sourceId,
+          filter: isTrackOrRoadFilter,
+          layout: { 'line-cap': 'round', 'line-join': 'miter', visibility: showTrailOverlay ? 'visible' : 'none' },
+          paint: {
+            'line-color': spniMapColorExpr,
+            'line-dasharray': [8, 2.5],
+            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 2, 22, 8],
+            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 2.5, 22, 10],
+          },
+        },
+        beforeId
+      );
+      map.addLayer(
+        {
+          id: 'community-trails-track-left',
+          type: 'line',
+          source: sourceId,
+          filter: isTrackOrRoadFilter,
+          layout: { 'line-cap': 'round', 'line-join': 'miter', visibility: showTrailOverlay ? 'visible' : 'none' },
+          paint: {
+            'line-color': spniMapColorExpr,
+            'line-dasharray': [8, 2.5],
+            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 12, -1, 16, -2, 22, -8],
+            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 2.5, 22, 10],
+          },
+        },
+        beforeId
+      );
+      map.addLayer(
+        {
+          id: 'community-trails-path-line',
+          type: 'line',
+          source: sourceId,
+          filter: [
+            'all',
+            ['!=', ['coalesce', ['get', 'stale'], false], true],
+            ['!=', ['get', 'trailId'], 'selection-preview'],
+            ['in', ['coalesce', ['get', 'highwayClass'], ''], ['literal', ['path', 'footway']]],
+          ],
+          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
+          paint: {
+            'line-color': spniMapColorExpr,
+            'line-dasharray': [4, 3],
+            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 11, 1.8, 13, 2, 16, 4, 22, 16],
           },
         },
         beforeId
@@ -3452,12 +3545,12 @@ export const App: React.FC = () => {
           id: 'community-trails-line',
           type: 'line',
           source: sourceId,
-          filter: ['!=', ['coalesce', ['get', 'stale'], false], true],
+          filter: ['==', ['get', 'trailId'], 'selection-preview'],
           layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
           paint: {
-            'line-color': ['get', 'color'],
-            'line-width': 4,
-            'line-opacity': 0.95,
+            'line-color': '#facc15',
+            'line-width': 5,
+            'line-opacity': 0.9,
           },
         },
         beforeId
@@ -3475,7 +3568,7 @@ export const App: React.FC = () => {
           },
           paint: {
             'line-color': '#f59e0b',
-            'line-width': 4,
+            'line-width': 3.5,
             'line-opacity': 0.9,
             'line-dasharray': [2, 1],
           },
@@ -3487,19 +3580,27 @@ export const App: React.FC = () => {
           id: 'community-trails-number',
           type: 'symbol',
           source: sourceId,
+          filter: ['!=', ['get', 'trailId'], 'selection-preview'],
           layout: {
             'symbol-placement': 'line',
-            'symbol-spacing': 600,
-            'text-field': ['get', 'number'],
+            'symbol-spacing': 400,
+            'text-offset': [0, -1],
+            'text-field': [
+              'case',
+              ['!=', ['coalesce', ['get', 'name'], ''], ''],
+              ['concat', ['get', 'name'], ' (', ['coalesce', ['get', 'number'], ''], ')'],
+              ['coalesce', ['get', 'number'], ''],
+            ],
             'text-size': 12,
             'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
             'text-allow-overlap': false,
             visibility: showTrailOverlay ? 'visible' : 'none',
           },
           paint: {
-            'text-color': ['get', 'color'],
-            'text-halo-color': theme === 'topo-dark' ? '#0b1015' : '#ffffff',
-            'text-halo-width': 2,
+            'text-color': spniMapColorExpr,
+            'text-halo-color': theme === 'topo-dark' ? '#0B1015' : '#FFFFFF',
+            'text-halo-width': 2.5,
+            'text-halo-blur': 1,
           },
         },
         beforeId
@@ -3508,6 +3609,9 @@ export const App: React.FC = () => {
 
     for (const layerId of [
       'community-trails-casing',
+      'community-trails-track-right',
+      'community-trails-track-left',
+      'community-trails-path-line',
       'community-trails-line',
       'community-trails-stale',
       'community-trails-number',
@@ -3623,6 +3727,7 @@ export const App: React.FC = () => {
         referenceCoord: searchRefCoordRef.current,
         pois,
         routes,
+        trailAnnotations: trailSearchItems,
         deletedSignatures: PoiManager.getDeletedSignatures(),
         limit: 30,
       });
@@ -3647,6 +3752,7 @@ export const App: React.FC = () => {
     searchStatus.fingerprint,
     pois,
     routes,
+    trailSearchItems,
   ]);
 
   // Auto-select longest saved route when opening Routes drawer with none active
@@ -3793,7 +3899,10 @@ export const App: React.FC = () => {
             beginCameraTransition(1000);
             map.flyTo({
               center: [(minX + maxX) / 2, (minY + maxY) / 2],
-              zoom: 15,
+              zoom: 14.5,
+              padding: isMobileRef.current
+                ? { top: 115, bottom: 70, left: 40, right: 40 }
+                : { top: 90, bottom: 90, left: 90, right: 430 },
               essential: true,
             });
           } else {
@@ -4067,7 +4176,29 @@ export const App: React.FC = () => {
     setIsSearchFocused(false);
     setIsNavSearchOpen(false);
 
+    const hasActiveOperation = isMobile
+      ? isTrailMarkingMode ||
+        mobileDisplayMode === 'navigating' ||
+        mobileTab !== 'explore' ||
+        (mobilePlanningOverlay !== null && mobilePlanningOverlay !== 'poi')
+      : isTrailMarkingMode || (desktopDrawer !== null && desktopDrawer !== 'poi');
+
+    if (item.kind === 'trail-annotation') {
+      setShowTrailOverlay(true);
+      handleFlyTo(item.lon, item.lat, item.recommendedZoom || 14.5);
+      showToast(item.title);
+      if (isTrailMarkingMode && item.trailAnnotationId) {
+        setSelectedTrailAnnotationId(item.trailAnnotationId);
+      }
+      return;
+    }
+
     if (item.kind === 'route' && item.routeRecord) {
+      if (hasActiveOperation) {
+        handleFlyTo(item.lon, item.lat, item.recommendedZoom || 13.5);
+        showToast(item.title);
+        return;
+      }
       setSelectedPoi(null);
       void handleSelectRoute(item.routeRecord);
       if (isMobile) {
@@ -4093,6 +4224,12 @@ export const App: React.FC = () => {
       setSelectedPoi(poiRec);
       handleFlyTo(poiRec.lon, poiRec.lat, item.recommendedZoom || 15.2);
       setMobileNavOverlay('poi-mini');
+      return;
+    }
+
+    if (hasActiveOperation) {
+      handleFlyTo(poiRec.lon, poiRec.lat, item.recommendedZoom || 15.2);
+      showToast(item.title);
       return;
     }
 
@@ -5791,8 +5928,38 @@ export const App: React.FC = () => {
 
   const handleSelectPlanningTrail = useCallback(async (trailId: string) => {
     setSelectedPlanningTrailId(trailId);
-    const full = await PlanningTrailManager.loadFullTrail(trailId);
+    let full = await PlanningTrailManager.loadFullTrail(trailId);
     if (!full) return;
+    if (!full.geojson?.features?.length && trailId.startsWith('pt-zofim-')) {
+      const fallback = resolveZofimTrailFallback(trailId);
+      if (fallback) {
+        full = {
+          ...full,
+          geojson: fallback.geojson,
+          bounds: fallback.bounds,
+          hasFullPayload: fallback.hasFullPayload,
+        };
+      }
+    }
+    if (!full.geojson?.features?.length && full.bounds && full.bounds.length === 4) {
+      const [minLon, minLat, maxLon, maxLat] = full.bounds;
+      full = {
+        ...full,
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              properties: { name: full.name },
+              geometry: {
+                type: 'Point',
+                coordinates: [(minLon + maxLon) / 2, (minLat + maxLat) / 2],
+              },
+            },
+          ],
+        },
+      };
+    }
     if (full.geojson?.features?.length) {
       const previewRoute: SavedRouteRecord = {
         id: full.id,
@@ -5816,12 +5983,11 @@ export const App: React.FC = () => {
         updatedAt: full.updatedAt,
       };
       setActiveRoute(previewRoute);
-      if (full.bounds) {
-        const [minLon, minLat, maxLon, maxLat] = full.bounds;
-        handleFlyTo((minLon + maxLon) / 2, (minLat + maxLat) / 2, 13);
-      }
+      fitBoundsToRoutes([previewRoute]);
+    } else {
+      showToast('למסלול זה אין נתוני מיקום או ציר במפה.');
     }
-  }, []);
+  }, [fitBoundsToRoutes, showToast]);
 
   const handleStartResizePlanningDb = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -6150,6 +6316,7 @@ export const App: React.FC = () => {
             onConsumeSelectedAnnotation={consumeSelectedTrailAnnotation}
             onAddWaysModeChange={handleTrailAddWaysModeChange}
             onGeoJSONChange={setTrailOverlayGeoJSON}
+            onSearchItemsChange={setTrailSearchItems}
             onNotify={showToast}
             onClose={() => {
               setSelectedTrailWay(null);

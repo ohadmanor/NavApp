@@ -100,9 +100,12 @@ public final class CarStyleBuilder {
         if ("trail-line-track".equals(layerId)) {
             return vis.offroad4x4;
         }
+        // Named long-distance trails (lines + names) follow their own phone switch, off by default.
+        if (layerId.startsWith("trail-regional-") || "name-trail-regional".equals(layerId)) {
+            return vis.regionalTrails;
+        }
         if (
             layerId.startsWith("trail-israel-") ||
-            layerId.startsWith("trail-regional-") ||
             "trail-line-path".equals(layerId) ||
             "trail-line-cycleway".equals(layerId) ||
             "trail-line-road".equals(layerId) ||

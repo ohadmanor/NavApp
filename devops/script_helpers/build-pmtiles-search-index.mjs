@@ -17,7 +17,7 @@ import { PMTiles } from 'pmtiles';
 import {
   extractSearchIndexFromPmtiles,
   serializeSearchIndexPayload,
-} from '../src/core/search/pmtilesSearchCore.js';
+} from '../../src/core/search/pmtilesSearchCore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

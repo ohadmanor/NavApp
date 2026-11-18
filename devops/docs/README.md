@@ -11,6 +11,7 @@
   - [`decoupled-storage-implementation-plan.md`](./decoupled-storage-implementation-plan.md) — Decoupling code deployments (`deploy-firebase.bat`) from Firebase map data storage.
   - [`route-planning-implementation-plan.md`](./route-planning-implementation-plan.md) — Client-side route planning (4x4, Foot, Bicycle) & Firebase `planing_tracks` sync design.
   - [`trail-annotations-implementation-plan.md`](./trail-annotations-implementation-plan.md) — Community highway/trail colors, numbers, descriptions, authenticated editing, audit history, and persistence across PMTiles updates.
+  - [`pbf-to-pmtiles-pipeline-implementation-plan.md`](./pbf-to-pmtiles-pipeline-implementation-plan.md) — Standalone local PC service/app to download country `.osm.pbf`, fetch Firebase enrichment data, convert to `.pmtiles` via Tilemaker, and deploy to Firebase Hosting.
   - [`route-planning-v2-implementation-plan.md`](./route-planning-v2-implementation-plan.md) — Route Planning v2 (scalable 100s+ route library, map visibility rules, My/Shared split, and user-to-user sharing).
   - [`live-location-sharing-implementation-plan.md`](./live-location-sharing-implementation-plan.md) — Live continuous GPS location sharing with specific NavApp users or all signed-in users, auto-expiry, and map visibility controls.
   - [`planning-trail-db-implementation-plan.md`](./planning-trail-db-implementation-plan.md) — Planning Trail DB: unified large trail database with nested folders/subfolders, multi-dimensional categories, bulk GPX/KML folder import, and folder map preview.

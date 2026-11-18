@@ -126,6 +126,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     { key: 'militaryZones', label: 'שטחי אש ושטחים סגורים', badge: 'Firing', hiddenOnSatellite: true },
     { key: 'offroad4x4', label: 'צירי 4x4 ודרכי עפר (1-5)', badge: '4x4', hiddenOnSatellite: false },
     { key: 'hikingTrails', label: 'שבילים מסומנים ונתיבי הליכה', badge: 'Trails', hiddenOnSatellite: false },
+    { key: 'regionalTrails', label: 'שבילים איזורים', badge: 'Long', hiddenOnSatellite: false },
     { key: 'cycleways', label: 'שבילי אופניים', badge: 'Cycle', hiddenOnSatellite: false },
     { key: 'natureParks', label: 'גבולות שמורות טבע וגנים', badge: 'Parks', hiddenOnSatellite: true },
     { key: 'fuelAndFlood', label: 'קווי חיץ, סוללות ומכשולי שטח', badge: 'Hazard', hiddenOnSatellite: true },

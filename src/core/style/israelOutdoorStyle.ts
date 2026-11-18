@@ -6,6 +6,12 @@ import type { PoiCategory } from '../db/NavDatabase';
 import { POI_CATEGORY_ZOOM_RULES } from '../pois/poiTaxonomy';
 import { applyNmsStyleEnhancements, type MapStyleId } from './nmsStyleEnhancer';
 import { applyGovmapStyleEnhancements } from './govmapStyleEnhancer';
+import {
+  REGIONAL_TRAILS_SOURCE_ID,
+  REGIONAL_TRAIL_NAME_LAYER_ID,
+  buildRegionalTrailNameLayer,
+  buildRegionalTrailsSource,
+} from './regionalTrails';
 
 export type { MapStyleId };
 export const DEFAULT_MAP_STYLE: MapStyleId = 'nms';
@@ -19,6 +25,8 @@ export interface OutdoorLayerVisibility {
   tacticalGrid: boolean;
   militaryZones: boolean;
   hikingTrails: boolean;
+  /** Named long-distance trails (Golan Trail, Sea to Sea, ...) + their name labels. Off unless enabled; Shvil Israel is not part of it. */
+  regionalTrails?: boolean;
   cycleways: boolean;
   offroad4x4: boolean;
   natureParks: boolean;
@@ -75,6 +83,7 @@ export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   tacticalGrid: true,
   militaryZones: true,
   hikingTrails: true,
+  regionalTrails: false,
   cycleways: false,
   offroad4x4: true,
   natureParks: true,
@@ -456,6 +465,7 @@ export const NON_HIGHWAY_TRANSPORTATION_LAYER_IDS = new Set<string>([
 
 export const HIGHWAY_LAYER_IDS = new Set<string>([
   'trail-israel-lowzoom',
+  REGIONAL_TRAIL_NAME_LAYER_ID,
   ...(navappLayersRaw as any[])
     .filter(
       (l) =>
@@ -479,6 +489,7 @@ export const POI_STYLE_LAYER_IDS = new Set<string>(
 const IHM_STYLE_LAYER_IDS = new Set<string>([
   ...rawLayerById.keys(),
   'trail-israel-lowzoom',
+  REGIONAL_TRAIL_NAME_LAYER_ID,
   GOOGLE_SATELLITE_LAYER_ID,
   GOVMAP_ORTHO_LAYER_ID,
 ]);
@@ -1300,9 +1311,13 @@ function getVisibilityForIhmLayer(
   if (layerId === 'trail-line-track') {
     return visibility.offroad4x4;
   }
+  // Named long-distance trails (lines + names) have their own switch, off by default.
+  // Shvil Israel (trail-israel-*) stays with the marked hiking trails below.
+  if (layerId.startsWith('trail-regional-') || layerId === 'name-trail-regional') {
+    return Boolean(visibility.regionalTrails);
+  }
   if (
     layerId.startsWith('trail-israel-') ||
-    layerId.startsWith('trail-regional-') ||
     layerId === 'trail-line-path' ||
     layerId === 'trail-line-cycleway' ||
     layerId === 'trail-line-road' ||
@@ -1332,8 +1347,7 @@ function getVisibilityForIhmLayer(
     layerId.includes('box-cycleway') ||
     layerId.includes('box-steps') ||
     layerId === 'name-path' ||
-    layerId === 'name-trail-local' ||
-    layerId === 'name-trail-regional'
+    layerId === 'name-trail-local'
   ) {
     return true;
   }
@@ -1463,6 +1477,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
         ],
       },
     },
+    [REGIONAL_TRAILS_SOURCE_ID]: buildRegionalTrailsSource(),
   };
 
   if (effectiveDemUrl) {
@@ -1622,6 +1637,17 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     }
 
     layers.push(layer);
+
+    // Above every other line label (contours, streams, paths, roads) so the names the user switched
+    // on survive collisions; POI icons and place names placed later still win.
+    if (layer.id === 'name-primary') {
+      layers.push(
+        buildRegionalTrailNameLayer(
+          isDark,
+          getVisibilityForIhmLayer(REGIONAL_TRAIL_NAME_LAYER_ID, visibility) === true
+        )
+      );
+    }
   }
 
   // Place Terrain hillshade right after landcover polygons and before contours/trails/roads

@@ -150,6 +150,7 @@ public final class NativeMapStore {
         public boolean googleSatellite = false;
         public boolean hillshade = true;
         public boolean hikingTrails = true;
+        public boolean regionalTrails = false;
         public boolean offroad4x4 = true;
         public boolean pois = true;
         public boolean poiWater = true;
@@ -564,6 +565,7 @@ public final class NativeMapStore {
             vis.put("googleSatellite", state.visibility.googleSatellite);
             vis.put("hillshade", state.visibility.hillshade);
             vis.put("hikingTrails", state.visibility.hikingTrails);
+            vis.put("regionalTrails", state.visibility.regionalTrails);
             vis.put("offroad4x4", state.visibility.offroad4x4);
             vis.put("pois", state.visibility.pois);
             vis.put("poiWater", state.visibility.poiWater);
@@ -634,6 +636,7 @@ public final class NativeMapStore {
                 state.visibility.googleSatellite = vis.optBoolean("googleSatellite", false);
                 state.visibility.hillshade = vis.optBoolean("hillshade", true);
                 state.visibility.hikingTrails = vis.optBoolean("hikingTrails", true);
+                state.visibility.regionalTrails = vis.optBoolean("regionalTrails", false);
                 state.visibility.offroad4x4 = vis.optBoolean("offroad4x4", true);
                 state.visibility.pois = vis.optBoolean("pois", true);
                 state.visibility.poiWater = vis.optBoolean("poiWater", true);

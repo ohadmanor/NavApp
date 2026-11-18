@@ -171,7 +171,7 @@ describe('GovMap 1:25k (Topo25k) Offline Vector Style', () => {
       osmProtocolUrl: 'pmtiles://israel-osm',
       demProtocolUrl: 'pmtiles://israel-dem',
       contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
-      visibility: { ...DEFAULT_LAYER_VISIBILITY, govmapOrtho: true, cycleways: true },
+      visibility: { ...DEFAULT_LAYER_VISIBILITY, govmapOrtho: true, cycleways: true, regionalTrails: true },
       theme: 'topo-day',
     });
 

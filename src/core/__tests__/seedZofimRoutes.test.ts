@@ -68,14 +68,19 @@ describe('ensureZofimRoutesSeeded', () => {
     expect(trails.length).toBe(393);
 
     const subfolderIds = new Set(subfolders.map((f) => f.id));
+    let withPolyline = 0;
     for (const trail of trails) {
       expect(trail.ownerUid).toBe('user-1');
       expect(subfolderIds.has(trail.folderId!)).toBe(true);
-      expect(trail.geojson.features).toHaveLength(0);
-      expect(trail.bounds).toBeUndefined();
+      if (trail.hasFullPayload) {
+        withPolyline++;
+        expect(trail.geojson.features.length).toBeGreaterThan(0);
+        expect(trail.bounds).toBeDefined();
+      }
       expect(trail.categoryId).toBe('hiking');
       expect(trail.planningMode).toBe('foot');
     }
+    expect(withPolyline).toBe(279);
 
     // Idempotent on second call
     const secondRun = await ensureZofimRoutesSeeded('user-1');

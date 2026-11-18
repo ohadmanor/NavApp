@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NavApp — PBF → PMTiles Builder</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-title">
+      <span class="badge-dot" id="serviceDot"></span>
+      <h1>NavApp PBF → PMTiles Builder</h1>
+      <span class="pill" id="tilemakerPill">Checking Tilemaker...</span>
+    </div>
+    <div class="topbar-meta">
+      <span class="pill muted" id="runStatusPill">Idle</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card config-panel">
+      <h2>1. Country / Extract</h2>
+      <label class="field">
+        <span>Country</span>
+        <select id="countrySelect"></select>
+      </label>
+      <div id="customFields" class="hidden">
+        <label class="field">
+          <span>Custom .osm.pbf URL</span>
+          <input type="url" id="customPbfUrl" placeholder="https://download.geofabrik.de/..." />
+        </label>
+        <label class="field">
+          <span>Output Prefix</span>
+          <input type="text" id="customOutputPrefix" placeholder="Custom" />
+        </label>
+      </div>
+      <div class="cache-box" id="cacheStatus">Loading cache status...</div>
+      <label class="checkbox">
+        <input type="checkbox" id="forceDownload" />
+        <span>Force re-download PBF (ignore ETag cache)</span>
+      </label>
+
+      <h2>2. Firebase Enrichment</h2>
+      <label class="checkbox">
+        <input type="checkbox" id="includeFirestore" checked />
+        <span>Include Firestore community <code>trailAnnotations</code></span>
+      </label>
+
+      <h2>3. Build &amp; Upload Options</h2>
+      <label class="field">
+        <span>Tilemaker Engine</span>
+        <select id="tilemakerMode">
+          <option value="auto">Auto (Native → WSL)</option>
+          <option value="wsl">WSL (wsl tilemaker)</option>
+          <option value="native">Native Windows Binary</option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="rebuildSearchIndex" checked />
+        <span>Rebuild <code>Israel.search.idx</code> after build</span>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="dryRun" checked />
+        <span>Dry-Run (skip automatic Firebase Hosting upload)</span>
+      </label>
+
+      <div class="actions">
+        <button id="startBtn" class="btn primary">▶ Start Full Pipeline</button>
+        <button id="cancelBtn" class="btn danger" disabled>■ Cancel Run</button>
+      </div>
+    </section>
+
+    <section class="card pipeline-panel">
+      <div class="panel-header">
+        <h2>Pipeline Progress</h2>
+        <span class="muted" id="activeRunId">No active run</span>
+      </div>
+      <div class="stepper" id="stepper"></div>
+
+      <div class="validation-card hidden" id="validationCard">
+        <div class="validation-header">
+          <h3>Validation Summary</h3>
+          <button id="deployBtn" class="btn success hidden">☁ Deploy to Firebase Now</button>
+        </div>
+        <div class="validation-grid" id="validationGrid"></div>
+      </div>
+
+      <div class="logs-header">
+        <h3>Live Console Logs</h3>
+        <div class="logs-controls">
+          <select id="logLevelFilter">
+            <option value="all">All Levels</option>
+            <option value="info">Info</option>
+            <option value="warn">Warnings</option>
+            <option value="error">Errors</option>
+          </select>
+          <button id="copyLogsBtn" class="btn small">Copy Logs</button>
+        </div>
+      </div>
+      <pre class="log-console" id="logConsole">Waiting to start...</pre>
+    </section>
+
+    <section class="card history-panel">
+      <h2>Run History</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Country</th>
+              <th>Mode</th>
+              <th>Status</th>
+              <th>PMTiles Size</th>
+              <th>Zooms</th>
+              <th>Deployed</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="7" class="muted">No runs recorded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

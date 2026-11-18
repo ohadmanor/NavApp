@@ -21,6 +21,8 @@ src/public/data/*.geojson
 src/public/data/*.idx
 deploy_data/
 backups/
+tools/pbf-to-pmtiles/workspace/
+tools/pbf-to-pmtiles/bin/
 
 # Environment & Keystores (keep credentials safe)
 .env

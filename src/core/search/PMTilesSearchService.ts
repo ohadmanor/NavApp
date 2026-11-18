@@ -17,8 +17,10 @@ import {
   type SearchFilterCategory,
   type SearchTaxonomyInfo,
 } from './searchTaxonomy';
+import type { TrailAnnotationSearchItem } from '../trails/TrailAnnotationTypes';
+import { getIsraelTrailSearchItems } from '../trails/IsraelTrailsService';
 
-export type SearchResultKind = 'curated-poi' | 'pmtiles' | 'route' | 'coord';
+export type SearchResultKind = 'curated-poi' | 'pmtiles' | 'route' | 'trail-annotation' | 'coord';
 
 export interface SearchResultItem {
   id: string;
@@ -41,6 +43,7 @@ export interface SearchResultItem {
   sourceLabel: string;
   poiRecord?: PoiRecord;
   routeRecord?: SavedRouteRecord;
+  trailAnnotationId?: string;
   toPoiRecord(): PoiRecord;
 }
 
@@ -58,6 +61,7 @@ export interface SearchQueryOptions {
   referenceCoord?: { lon: number; lat: number } | null;
   pois?: PoiRecord[];
   routes?: SavedRouteRecord[];
+  trailAnnotations?: TrailAnnotationSearchItem[];
   deletedSignatures?: Array<{ id: string; normName: string; lon: number; lat: number }>;
   limit?: number;
 }
@@ -489,6 +493,7 @@ export class PMTilesSearchService {
     const referenceCoord = options.referenceCoord ?? null;
     const curatedPois = options.pois ?? [];
     const routes = options.routes ?? [];
+    const trailAnnotations = options.trailAnnotations ?? [];
 
     const trimmed = rawQuery.trim();
     const normQuery = normalizeSearchText(trimmed);
@@ -561,6 +566,20 @@ export class PMTilesSearchService {
     // 2. Saved & Planned Routes
     if ((filter === 'all' || filter === 'routes') && routes.length > 0) {
       candidates.push(...this.searchRoutes(normQuery, routes, referenceCoord));
+    }
+
+    // 2b. Community Trail Annotations & Israel Trail Directory (סימון שבילים - name & number)
+    if (filter === 'all' || filter === 'routes') {
+      if (trailAnnotations.length > 0) {
+        candidates.push(...this.searchTrailAnnotations(normQuery, trailAnnotations, referenceCoord, 420));
+      }
+      const communityNumbers = new Set(
+        trailAnnotations.map((t) => t.number.trim()).filter(Boolean)
+      );
+      const israelTrailItems = getIsraelTrailSearchItems().filter(
+        (m) => !m.number || !m.number.split(',').some((n) => communityNumbers.has(n.trim()))
+      );
+      candidates.push(...this.searchTrailAnnotations(normQuery, israelTrailItems, referenceCoord, 280));
     }
 
     // 3. Curated & User Offline POIs (db.pois)
@@ -833,6 +852,83 @@ export class PMTilesSearchService {
           descHe: `${formatLabel} • אורך ${r.distanceKm.toFixed(1)} ק״מ • טיפוס מצטבר ${r.ascentMeters} מ׳`,
           descEn: `Saved route (${r.distanceKm.toFixed(1)} km)`,
           source: formatLabel,
+          wikipedia: null,
+        }),
+      });
+    }
+    return out;
+  }
+
+  private searchTrailAnnotations(
+    normQuery: string,
+    trailAnnotations: TrailAnnotationSearchItem[],
+    referenceCoord: { lon: number; lat: number } | null,
+    scoreBoost = 420
+  ): SearchResultItem[] {
+    const out: SearchResultItem[] = [];
+    const qTokens = normQuery.split(' ').filter(Boolean);
+    for (const item of trailAnnotations) {
+      const nName = normalizeSearchText(item.name || '');
+      const nNumber = normalizeSearchText(item.number || '');
+      const nDesc = normalizeSearchText(item.description || '');
+      const directName = nName ? scoreSingleFieldMatch(nName, normQuery) : 0;
+      const directNumber = nNumber ? scoreSingleFieldMatch(nNumber, normQuery) : 0;
+      const combined = `${nName} ${nNumber} ${nDesc}`.trim();
+      const tokMatch =
+        directName === 0 &&
+        directNumber === 0 &&
+        qTokens.length > 0 &&
+        qTokens.every((tk) => combined.includes(tk))
+          ? 760
+          : 0;
+      const score = Math.max(directName, directNumber, tokMatch);
+      if (score === 0) continue;
+
+      const distKm = referenceCoord
+        ? haversineKmFast(referenceCoord.lon, referenceCoord.lat, item.lon, item.lat)
+        : null;
+      const title = item.name
+        ? `${item.name} (${item.number})`
+        : `שביל ${item.number}`;
+      const subtitle = item.description
+        ? `סימון שבילים #${item.number} • ${item.description.slice(0, 60)}`
+        : `סימון שבילים • שביל #${item.number}`;
+
+      out.push({
+        id: item.id.startsWith('israel-trail:') ? item.id : `trail-annotation:${item.id}`,
+        kind: 'trail-annotation',
+        title,
+        subtitle,
+        locality: '',
+        categoryLabel: 'סימון שבילים',
+        emoji: '🪧',
+        filterGroup: 'routes',
+        poiCategory: 'offroad',
+        subcategory: 'trail',
+        ref: item.number,
+        lon: item.lon,
+        lat: item.lat,
+        ele: null,
+        distanceKm: distKm,
+        recommendedZoom: 14.5,
+        score: score + scoreBoost,
+        sourceLabel: item.id.startsWith('israel-trail:') ? 'ישראל' : 'סימון שבילים',
+        trailAnnotationId: item.id.startsWith('israel-trail:') ? undefined : item.id,
+        toPoiRecord: () => ({
+          id: `trail-annotation-poi:${item.id}`,
+          name: title,
+          nameHe: title,
+          nameEn: title,
+          category: 'offroad',
+          subcategory: 'trail',
+          lon: item.lon,
+          lat: item.lat,
+          ele: null,
+          waterStatus: null,
+          difficulty4x4: null,
+          descHe: item.description || `שביל מסומן #${item.number}`,
+          descEn: item.description || `Marked trail #${item.number}`,
+          source: 'סימון שבילים',
           wikipedia: null,
         }),
       });

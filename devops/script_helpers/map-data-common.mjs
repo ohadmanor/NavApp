@@ -44,6 +44,13 @@ export const MAP_DATA_FILES = [
     kind: 'idx',
     constant: false,
   },
+  {
+    key: 'trails',
+    fileName: 'Israel.trails.json',
+    label: 'Israel Trails Enrichment Directory',
+    kind: 'json',
+    constant: false,
+  },
 ];
 
 export function findDataFileSpec(nameOrKey) {
@@ -92,6 +99,10 @@ export function isValidLocalDataFile(filePath, fileName) {
       if (lower.endsWith('.geojson')) {
         const trimmed = buf.subarray(0, n).toString('utf8').trimStart();
         return trimmed.startsWith('{');
+      }
+      if (lower.endsWith('.json')) {
+        const trimmed = buf.subarray(0, n).toString('utf8').trimStart();
+        return trimmed.startsWith('[') || trimmed.startsWith('{');
       }
       if (lower.endsWith('.idx')) {
         return (buf[0] === 0x1f && buf[1] === 0x8b) || buf.subarray(0, n).toString('utf8').trimStart().startsWith('{');

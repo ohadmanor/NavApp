@@ -18,6 +18,7 @@ import {
 import type {
   TrailAnnotationHistoryRecord,
   TrailAnnotationRecord,
+  TrailAnnotationSearchItem,
   TrailWayCandidate,
   TrailWayGeometry,
 } from '../../core/trails/TrailAnnotationTypes';
@@ -25,6 +26,7 @@ import {
   isTrailAnnotationColor,
   TRAIL_ANNOTATION_COLORS,
 } from '../../core/trails/TrailAnnotationTypes';
+import { findIsraelTrailMatch } from '../../core/trails/IsraelTrailsService';
 import type { MapTheme } from '../ui/themeTokens';
 import { getSurfaceTheme } from '../ui/themeTokens';
 
@@ -46,6 +48,7 @@ interface TrailAnnotationsPanelProps {
   onAddWaysModeChange: (enabled: boolean) => void;
   onClose: () => void;
   onGeoJSONChange: (geojson: GeoJSON.FeatureCollection) => void;
+  onSearchItemsChange?: (items: TrailAnnotationSearchItem[]) => void;
   onNotify: (message: string) => void;
 }
 
@@ -70,6 +73,7 @@ function historyChanges(event: TrailAnnotationHistoryRecord): string[] {
   if (!event.previous) return ['סימון שביל חדש'];
   const changes: string[] = [];
   if (event.previous.color !== event.next.color) changes.push('צבע');
+  if ((event.previous.name || '') !== (event.next.name || '')) changes.push('שם');
   if (event.previous.number !== event.next.number) changes.push('מספר');
   if (event.previous.description !== event.next.description) changes.push('תיאור');
   if (event.previous.status !== event.next.status) changes.push('מצב');
@@ -108,6 +112,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
   onAddWaysModeChange,
   onClose,
   onGeoJSONChange,
+  onSearchItemsChange,
   onNotify,
 }) => {
   const t = getSurfaceTheme(theme);
@@ -124,6 +129,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
   const [wayIds, setWayIds] = useState<string[]>([]);
   const [ways, setWays] = useState<Map<string, TrailWayGeometry>>(new Map());
   const [color, setColor] = useState<string>(TRAIL_ANNOTATION_COLORS[0].value);
+  const [name, setName] = useState('');
   const [number, setNumber] = useState('');
   const [description, setDescription] = useState('');
   const [reason, setReason] = useState('');
@@ -218,6 +224,29 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
   }, [annotations, resolutions, isEditing, wayIds, ways, onGeoJSONChange]);
 
   useEffect(() => {
+    if (!onSearchItemsChange) return;
+    const items: TrailAnnotationSearchItem[] = [];
+    for (const annotation of annotations) {
+      if (annotation.status !== 'active') continue;
+      const resolution = resolutions.get(annotation.id);
+      const firstCoord = resolution?.ways
+        .flatMap((w) => w.geometry.coordinates)
+        .flatMap((line) => line)[0];
+      if (!firstCoord) continue;
+      items.push({
+        id: annotation.id,
+        name: annotation.name || '',
+        number: annotation.number,
+        color: annotation.color,
+        description: annotation.description,
+        lon: firstCoord[0],
+        lat: firstCoord[1],
+      });
+    }
+    onSearchItemsChange(items);
+  }, [annotations, resolutions, onSearchItemsChange]);
+
+  useEffect(() => {
     onAddWaysModeChange(isEditing && addWaysMode);
   }, [isEditing, addWaysMode, onAddWaysModeChange]);
 
@@ -251,6 +280,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
           trailId,
           wayIds,
           color: isTrailAnnotationColor(color) ? color : TRAIL_ANNOTATION_COLORS[0].value,
+          name,
           number,
           description,
           reason,
@@ -261,7 +291,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
         });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [currentUser, isEditing, isSaving, trailId, wayIds, color, number, description, reason]);
+  }, [currentUser, isEditing, isSaving, trailId, wayIds, color, name, number, description, reason]);
 
   const openEditor = () => {
     setShowHistoryView(false);
@@ -274,18 +304,28 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
 
   const startNewTrailForWay = async (way: TrailWayGeometry) => {
     if (!currentUser) return;
+    const firstCoord = way.geometry.coordinates.find((line) => line.length > 0)?.[0];
+    const israelMatch = firstCoord
+      ? findIsraelTrailMatch({
+          number: way.detectedNumber,
+          lon: firstCoord[0],
+          lat: firstCoord[1],
+        })
+      : null;
     setTrailId(null);
     setExpectedRevision(0);
     setWayIds([way.wayId]);
     setWays(new Map([[way.wayId, way]]));
-    setColor(TRAIL_ANNOTATION_COLORS[0].value);
-    setNumber('');
-    setDescription('');
+    setColor(way.detectedColor ?? TRAIL_ANNOTATION_COLORS[0].value);
+    setName(way.detectedName ?? israelMatch?.name ?? '');
+    setNumber(way.detectedNumber ?? israelMatch?.numbers[0] ?? '');
+    setDescription(israelMatch?.description ?? '');
     setReason('');
     openEditor();
     const draft = await trailAnnotationsCloudService.loadDraft(currentUser.uid, null);
     if (draft && draft.wayIds.length === 1 && draft.wayIds[0] === way.wayId) {
       setColor(draft.color);
+      setName(draft.name ?? '');
       setNumber(draft.number);
       setDescription(draft.description);
       setReason(draft.reason);
@@ -308,23 +348,18 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
     }
     const nextWays = new Map((resolution?.ways || []).map((way) => [way.wayId, way]));
     if (freshWay) nextWays.set(freshWay.wayId, freshWay);
+    const draft = await trailAnnotationsCloudService.loadDraft(currentUser.uid, annotation.id);
+    const useDraft = Boolean(draft && draft.updatedAt > annotation.updatedAt);
     setTrailId(annotation.id);
     setExpectedRevision(annotation.revision);
-    setWayIds(annotation.wayIds);
+    setWayIds(useDraft ? draft!.wayIds : annotation.wayIds);
     setWays(nextWays);
-    setColor(annotation.color);
-    setNumber(annotation.number);
-    setDescription(annotation.description);
-    setReason('');
+    setColor(useDraft ? draft!.color : annotation.color);
+    setName(useDraft ? (draft!.name ?? '') : (annotation.name ?? ''));
+    setNumber(useDraft ? draft!.number : annotation.number);
+    setDescription(useDraft ? draft!.description : annotation.description);
+    setReason(useDraft ? draft!.reason : '');
     openEditor();
-    const draft = await trailAnnotationsCloudService.loadDraft(currentUser.uid, annotation.id);
-    if (draft && draft.updatedAt > annotation.updatedAt) {
-      setWayIds(draft.wayIds);
-      setColor(draft.color);
-      setNumber(draft.number);
-      setDescription(draft.description);
-      setReason(draft.reason);
-    }
   };
 
   useEffect(() => {
@@ -409,6 +444,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
         user: currentUser,
         wayIds,
         color,
+        name,
         number,
         description,
         reason,
@@ -488,7 +524,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
       <header className={`flex items-center justify-between gap-2 border-b px-4 py-3 ${t.divider}`}>
         <div>
           <h2 className="text-sm font-bold">
-            {!isEditing ? 'סימון שבילים' : trailId ? `שביל ${number || editingAnnotation?.number || ''}` : 'סימון שביל חדש'}
+            {!isEditing ? 'סימון שבילים' : trailId ? `שביל ${name || number || editingAnnotation?.name || editingAnnotation?.number || ''}` : 'סימון שביל חדש'}
           </h2>
           {isEditing && editingAnnotation && (
             <p className={`mt-0.5 flex items-center gap-1 text-[11px] ${t.muted}`}>
@@ -624,6 +660,17 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
               </div>
             </fieldset>
 
+            <label className="block text-xs font-semibold">
+              שם השביל
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                maxLength={120}
+                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm ${t.fieldBox}`}
+                placeholder="לדוגמה: נחל כזיב"
+                dir="auto"
+              />
+            </label>
             <label className="block text-xs font-semibold">
               מספר שביל
               <input

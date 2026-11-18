@@ -382,6 +382,7 @@ public final class CarMapController implements SurfaceCallback {
             + "|sat=" + v.googleSatellite
             + "|hs=" + v.hillshade
             + "|ht=" + v.hikingTrails
+            + "|rt=" + v.regionalTrails
             + "|4x4=" + v.offroad4x4
             + "|poi=" + v.pois + v.poiWater + v.poiHeritage + v.poiCampsites + v.poiOffroad + v.poiPeaks + v.poiUser
             + "|osm=" + store.hasOfflineOsm()

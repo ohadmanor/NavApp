@@ -1,0 +1,26 @@
+{
+  "name": "navapp-pbf-to-pmtiles",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone local PC service and CLI to download country OSM PBFs, merge Firebase enrichment data, convert to PMTiles via Tilemaker, and deploy to Firebase Hosting.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "express": "^4.21.2",
+    "pbf": "^5.1.2",
+    "pmtiles": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

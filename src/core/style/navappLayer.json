@@ -6759,12 +6759,18 @@
     "filter": [
       "all",
       [
-        "==",
+        "in",
         [
           "get",
           "network"
         ],
-        "rwn"
+        [
+          "literal",
+          [
+            "rwn",
+            "nwn"
+          ]
+        ]
       ],
       [
         "!",
@@ -6855,9 +6861,10 @@
     "filter": [
       "all",
       [
-        "==",
+        "in",
         "network",
-        "rwn"
+        "rwn",
+        "nwn"
       ],
       [
         "!has",
@@ -6947,12 +6954,16 @@
           ],
           "#22C55E",
           [
-            "==",
+            ">=",
             [
-              "get",
-              "name"
+              "index-of",
+              "green:red:green_left",
+              [
+                "var",
+                "osmc"
+              ]
             ],
-            "שביל ואדיות חיפה"
+            0
           ],
           "green",
           "transparent"
@@ -7018,9 +7029,10 @@
     "filter": [
       "all",
       [
-        "==",
+        "in",
         "network",
-        "rwn"
+        "rwn",
+        "nwn"
       ],
       [
         "!has",
@@ -7097,12 +7109,16 @@
           ],
           "#EAB308",
           [
-            "==",
+            ">=",
             [
-              "get",
-              "name"
+              "index-of",
+              "green:red:green_left",
+              [
+                "var",
+                "osmc"
+              ]
             ],
-            "שביל ואדיות חיפה"
+            0
           ],
           "red",
           "transparent"

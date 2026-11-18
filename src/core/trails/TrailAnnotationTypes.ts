@@ -17,6 +17,7 @@ export type TrailAnnotationOperation = 'create' | 'edit' | 'delete' | 'restore' 
 export interface TrailAnnotationSnapshot {
   wayIds: string[];
   color: TrailAnnotationColor;
+  name: string;
   number: string;
   description: string;
   status: TrailAnnotationStatus;
@@ -53,6 +54,9 @@ export interface TrailWayGeometry {
   layer: number;
   highwayClass: string;
   highwaySubclass: string;
+  detectedColor?: TrailAnnotationColor;
+  detectedName?: string;
+  detectedNumber?: string;
 }
 
 export interface TrailWayCandidate {
@@ -74,10 +78,21 @@ export interface TrailAnnotationDraftRecord {
   trailId: string | null;
   wayIds: string[];
   color: TrailAnnotationColor;
+  name: string;
   number: string;
   description: string;
   reason: string;
   updatedAt: string;
+}
+
+export interface TrailAnnotationSearchItem {
+  id: string;
+  name: string;
+  number: string;
+  color: TrailAnnotationColor;
+  description: string;
+  lon: number;
+  lat: number;
 }
 
 export interface ResolvedTrailWay extends TrailWayGeometry {
@@ -86,6 +101,7 @@ export interface ResolvedTrailWay extends TrailWayGeometry {
 
 export const TRAIL_ANNOTATION_LIMITS = {
   maxWayIds: 500,
+  maxNameLength: 120,
   maxNumberLength: 32,
   maxDescriptionLength: 4000,
   maxReasonLength: 500,
@@ -95,6 +111,65 @@ export const TRAIL_ANNOTATION_LIMITS = {
 
 export function isTrailAnnotationColor(value: unknown): value is TrailAnnotationColor {
   return TRAIL_ANNOTATION_COLORS.some((color) => color.value === value);
+}
+
+const TRAIL_COLOR_BY_NAME: Record<string, TrailAnnotationColor> = {
+  red: '#dc2626',
+  orange: '#ea580c',
+  yellow: '#ca8a04',
+  green: '#16a34a',
+  blue: '#2563eb',
+  purple: '#7c3aed',
+  black: '#334155',
+};
+
+/**
+ * Maps OSM `colour` / `osmc_symbol` feature properties to the matching
+ * community trail annotation color, if one is present.
+ */
+export function detectTrailColorFromProps(
+  props: Record<string, unknown> | null | undefined
+): TrailAnnotationColor | undefined {
+  if (!props) return undefined;
+  const rawColour = typeof props.colour === 'string' ? props.colour : '';
+  for (const part of rawColour.split(';')) {
+    const normalized = part.trim().toLowerCase();
+    if (normalized in TRAIL_COLOR_BY_NAME) {
+      return TRAIL_COLOR_BY_NAME[normalized];
+    }
+  }
+  const osmcSymbol = typeof props.osmc_symbol === 'string' ? props.osmc_symbol : '';
+  if (osmcSymbol) {
+    const firstToken = osmcSymbol.split(':')[0]?.trim().toLowerCase();
+    if (firstToken && firstToken in TRAIL_COLOR_BY_NAME) {
+      return TRAIL_COLOR_BY_NAME[firstToken];
+    }
+  }
+  return undefined;
+}
+
+export function detectTrailNameFromProps(
+  props: Record<string, unknown> | null | undefined
+): string | undefined {
+  if (!props) return undefined;
+  for (const key of ['name:he', 'name', 'name:en', 'name_en', 'int_name']) {
+    const val = props[key];
+    if (typeof val === 'string' && val.trim()) {
+      return val.trim().slice(0, TRAIL_ANNOTATION_LIMITS.maxNameLength);
+    }
+  }
+  return undefined;
+}
+
+export function detectTrailNumberFromProps(
+  props: Record<string, unknown> | null | undefined
+): string | undefined {
+  if (!props) return undefined;
+  const val = props.ref;
+  if (typeof val === 'string' && val.trim()) {
+    return val.trim().slice(0, TRAIL_ANNOTATION_LIMITS.maxNumberLength);
+  }
+  return undefined;
 }
 
 export function trailWayIdFromMvtId(featureId: unknown): string | null {
@@ -119,6 +194,7 @@ export function parseTrailWayId(wayId: string): number | null {
 export function validateTrailAnnotationInput(input: {
   wayIds: string[];
   color: unknown;
+  name?: string;
   number: string;
   description: string;
   reason?: string;
@@ -136,6 +212,9 @@ export function validateTrailAnnotationInput(input: {
     return 'One or more selected highway IDs are invalid.';
   }
   if (!isTrailAnnotationColor(input.color)) return 'Choose a supported trail color.';
+  if ((input.name?.length ?? 0) > TRAIL_ANNOTATION_LIMITS.maxNameLength) {
+    return `Trail name must be at most ${TRAIL_ANNOTATION_LIMITS.maxNameLength} characters.`;
+  }
   const number = input.number.trim();
   if (!number || number.length > TRAIL_ANNOTATION_LIMITS.maxNumberLength) {
     return `Enter a trail number (up to ${TRAIL_ANNOTATION_LIMITS.maxNumberLength} characters).`;

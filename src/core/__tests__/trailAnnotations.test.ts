@@ -7,10 +7,15 @@ import {
 } from '../routing/TileRoadGraphBuilder';
 import { HighwayWayGeometryService } from '../trails/HighwayWayGeometryService';
 import {
+  detectTrailColorFromProps,
+  detectTrailNameFromProps,
+  detectTrailNumberFromProps,
   parseTrailWayId,
   trailWayIdFromMvtId,
   validateTrailAnnotationInput,
 } from '../trails/TrailAnnotationTypes';
+import { PMTilesSearchService } from '../search/PMTilesSearchService';
+import { findIsraelTrailMatch } from '../trails/IsraelTrailsService';
 
 function createWay(
   featureId: string,
@@ -112,5 +117,66 @@ describe('community trail annotation identity and geometry', () => {
         description: '',
       })
     ).toContain('more than once');
+  });
+
+  it('detects trail colors from OSM colour and osmc_symbol tags', async () => {
+    expect(detectTrailColorFromProps({ colour: 'blue' })).toBe('#2563eb');
+    expect(detectTrailColorFromProps({ colour: 'green;black' })).toBe('#16a34a');
+    expect(detectTrailColorFromProps({ osmc_symbol: 'blue:white:blue_stripe' })).toBe('#2563eb');
+    expect(detectTrailColorFromProps({ class: 'path' })).toBeUndefined();
+
+    const tx = 100;
+    const ty = 200;
+    const y = ty * TILE_EXTENT + 2000;
+    const coloredWay = createWay('77', [
+      { gx: tx * TILE_EXTENT + 400, gy: y },
+      { gx: tx * TILE_EXTENT + 800, gy: y },
+    ]);
+    coloredWay.props.colour = 'blue';
+    const builder = new TileRoadGraphBuilder();
+    vi.spyOn(builder, 'getDecodedTileWays').mockResolvedValue([coloredWay]);
+    const [lon, lat] = globalPixelToLonLat(tx * TILE_EXTENT + 500, y);
+
+    const resolved = await new HighwayWayGeometryService(builder).resolveWayAt(
+      'osm:way:77',
+      lon,
+      lat,
+      'release-1'
+    );
+    expect(resolved.detectedColor).toBe('#2563eb');
+  });
+
+  it('detects trail name/ref from OSM props and searches trail annotations by name and number', () => {
+    expect(detectTrailNameFromProps({ 'name:he': 'נחל כזיב', name: 'Nahal Kziv' })).toBe('נחל כזיב');
+    expect(detectTrailNumberFromProps({ ref: '02341' })).toBe('02341');
+
+    const service = new PMTilesSearchService();
+    const trailAnnotations = [
+      {
+        id: 'trail-1',
+        name: 'נחל כזיב',
+        number: '02341',
+        color: '#16a34a' as const,
+        description: 'שביל ירוק בנחל כזיב',
+        lon: 35.2,
+        lat: 33.04,
+      },
+    ];
+    const byName = service.search('כזיב', { trailAnnotations });
+    expect(byName.length).toBeGreaterThanOrEqual(1);
+    expect(byName[0].id).toBe('trail-annotation:trail-1');
+    expect(byName[0].kind).toBe('trail-annotation');
+    expect(byName[0].title).toBe('נחל כזיב (02341)');
+
+    const byNumber = service.search('02341', { trailAnnotations });
+    expect(byNumber).toHaveLength(1);
+    expect(byNumber[0].trailAnnotationId).toBe('trail-1');
+
+    const israelMatch = findIsraelTrailMatch({ number: '11420', lon: 35.374, lat: 31.107 });
+    expect(israelMatch).not.toBeNull();
+    expect(israelMatch!.name).toContain('סדום');
+
+    const israelSearch = service.search('11420', { filter: 'routes' });
+    expect(israelSearch.some((r) => r.id.startsWith('israel-trail:') && r.ref.includes('11420'))).toBe(true);
   });
 });

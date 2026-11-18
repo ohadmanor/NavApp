@@ -1325,7 +1325,7 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
         osmProtocolUrl: 'pmtiles://israel-osm',
         demProtocolUrl: 'pmtiles://israel-dem',
         contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
-        visibility: { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true, cycleways: true, terrain3d: true },
+        visibility: { ...DEFAULT_LAYER_VISIBILITY, googleSatellite: true, cycleways: true, regionalTrails: true, terrain3d: true },
         theme,
       });
 

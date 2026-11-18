@@ -1,0 +1,34 @@
+{
+  "layers": {
+    "place": { "minzoom": 0, "maxzoom": 14 },
+    "boundary": { "minzoom": 0, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
+    "water": { "minzoom": 0, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
+    "waterway": { "minzoom": 8, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003 },
+    "landcover": { "minzoom": 0, "maxzoom": 14, "simplify_below": 13, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
+    "landuse": { "minzoom": 4, "maxzoom": 14, "simplify_below": 13, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
+    "park": { "minzoom": 4, "maxzoom": 14 },
+    "transportation": { "minzoom": 4, "maxzoom": 14, "simplify_below": 13, "simplify_level": 0.0003 },
+    "transportation_name": { "minzoom": 8, "maxzoom": 14 },
+    "building": { "minzoom": 13, "maxzoom": 14 },
+    "aeroway": { "minzoom": 11, "maxzoom": 14 },
+    "mountain_peak": { "minzoom": 10, "maxzoom": 14 },
+    "poi": { "minzoom": 12, "maxzoom": 14 }
+  },
+  "settings": {
+    "minzoom": 0,
+    "maxzoom": 14,
+    "basezoom": 14,
+    "include_ids": true,
+    "compress": "gzip",
+    "combine_below": 14,
+    "name": "NavApp Israel Outdoor OpenMapTiles",
+    "version": "1.0",
+    "description": "NavApp OpenMapTiles vector archive",
+    "filemetadata": {
+      "tilejson": "2.0.0",
+      "scheme": "xyz",
+      "type": "baselayer",
+      "format": "pbf"
+    }
+  }
+}

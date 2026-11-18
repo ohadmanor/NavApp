@@ -51,6 +51,7 @@ export interface CarSyncStatePayload {
     googleSatellite: boolean;
     hillshade: boolean;
     hikingTrails: boolean;
+    regionalTrails: boolean;
     offroad4x4: boolean;
     pois: boolean;
     poiWater: boolean;
@@ -140,6 +141,7 @@ export function buildCarSyncPayload(input: CarSyncSnapshotInput): {
       googleSatellite: !!input.visibility.googleSatellite,
       hillshade: !!input.visibility.hillshade,
       hikingTrails: !!input.visibility.hikingTrails,
+      regionalTrails: !!input.visibility.regionalTrails,
       offroad4x4: !!input.visibility.offroad4x4,
       pois: !!input.visibility.pois,
       poiWater: !!input.visibility.poiWater,

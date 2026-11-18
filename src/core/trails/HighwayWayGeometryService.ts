@@ -6,6 +6,9 @@ import {
 } from '../routing/TileRoadGraphBuilder';
 import type { DecodedWay, TileCoord } from '../routing/TileRoadGraphBuilder';
 import {
+  detectTrailColorFromProps,
+  detectTrailNameFromProps,
+  detectTrailNumberFromProps,
   parseTrailWayId,
   TRAIL_ANNOTATION_LIMITS,
   type ResolvedTrailWay,
@@ -198,6 +201,9 @@ export class HighwayWayGeometryService {
       coordinates: lines,
     };
     const props = first.props;
+    const detectedColor = detectTrailColorFromProps(props);
+    const detectedName = detectTrailNameFromProps(props);
+    const detectedNumber = detectTrailNumberFromProps(props);
     return {
       wayId,
       geometry: merged,
@@ -205,6 +211,9 @@ export class HighwayWayGeometryService {
       layer: first.layer,
       highwayClass: String(props.class || ''),
       highwaySubclass: String(props.subclass || ''),
+      ...(detectedColor ? { detectedColor } : {}),
+      ...(detectedName ? { detectedName } : {}),
+      ...(detectedNumber ? { detectedNumber } : {}),
       fragments,
     };
   }

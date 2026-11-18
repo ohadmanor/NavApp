@@ -90,6 +90,7 @@ In MapLibre GL JS:
 | **Minor & Service Road Names** | `transportation_name` (`minor, service`) | **z14** *(layer minzoom: z8)* | **z15** | **z15** |
 | **Track & Path Names** | `transportation_name` (`track, path`) | **z13 / z14** *(layer minzoom: z8)* | **z0** | **z13 / z14** |
 | **Regional & Local Trail Labels** | `transportation_name` (`network: rwn, lwn`) | **z8** | **z13** | **z13** |
+| **Long-Distance Trail Names** (layer switch `regionalTrails`, off by default; excludes Shvil Israel) | bundled GeoJSON [`regionalTrailLabels.json`](../../src/core/style/regionalTrailLabels.json) — the tiles carry no route names; regenerate with [`build-regional-trail-labels.mjs`](../script_helpers/build-regional-trail-labels.mjs) | — | **z11** | **z11** |
 | **Nature Park / Reserve Names** | `park` | **z11** | **z12** | **z12** |
 | **River & Waterway Names** | `waterway` | **z8** | **z0** | **z8** |
 | **Lake & Sea Names** | `water_name` | **z14** | **z0** | **z14** |

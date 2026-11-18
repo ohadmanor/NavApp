@@ -219,6 +219,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'wayIds',
           'color',
+          'name',
           'number',
           'description',
           'status',
@@ -236,6 +237,7 @@ service cloud.firestore {
         ]) &&
         data.wayIds is list &&
         data.color is string &&
+        (!('name' in data) || (data.name is string && data.name.size() <= 120)) &&
         data.number is string &&
         data.description is string &&
         data.status in ['active', 'deleted'] &&
@@ -249,6 +251,7 @@ service cloud.firestore {
           'schemaVersion',
           'wayIds',
           'color',
+          'name',
           'number',
           'description',
           'status',
@@ -284,6 +287,7 @@ service cloud.firestore {
         data.wayIds.size() > 0 &&
         data.wayIds.size() <= 500 &&
         data.color in ['#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#2563eb', '#7c3aed', '#334155'] &&
+        (!('name' in data) || (data.name is string && data.name.size() <= 120)) &&
         data.number is string &&
         data.number.size() > 0 &&
         data.number.size() <= 32 &&
@@ -325,6 +329,7 @@ service cloud.firestore {
         validTrailSnapshot(history.next) &&
         history.next.wayIds == data.wayIds &&
         history.next.color == data.color &&
+        history.next.get('name', '') == data.get('name', '') &&
         history.next.number == data.number &&
         history.next.description == data.description &&
         history.next.status == data.status &&
@@ -335,6 +340,7 @@ service cloud.firestore {
           : validTrailSnapshot(history.previous) &&
             history.previous.wayIds == oldData.wayIds &&
             history.previous.color == oldData.color &&
+            history.previous.get('name', '') == oldData.get('name', '') &&
             history.previous.number == oldData.number &&
             history.previous.description == oldData.description &&
             history.previous.status == oldData.status &&
@@ -354,6 +360,7 @@ service cloud.firestore {
         validTrailSnapshot(history.next) &&
         history.next.wayIds == annotation.wayIds &&
         history.next.color == annotation.color &&
+        history.next.get('name', '') == annotation.get('name', '') &&
         history.next.number == annotation.number &&
         history.next.description == annotation.description &&
         history.next.status == annotation.status &&
@@ -363,6 +370,7 @@ service cloud.firestore {
           ? validTrailSnapshot(history.previous) &&
             history.previous.wayIds == existingAnnotation.data.wayIds &&
             history.previous.color == existingAnnotation.data.color &&
+            history.previous.get('name', '') == existingAnnotation.data.get('name', '') &&
             history.previous.number == existingAnnotation.data.number &&
             history.previous.description == existingAnnotation.data.description &&
             history.previous.status == existingAnnotation.data.status &&
@@ -430,7 +438,17 @@ service cloud.firestore {
 
       match /geometry/{geometryFile} {
         allow get, list: if true;
-        allow write: if false;
+        allow create: if signedIn() &&
+          geometryFile.matches('^[1-9][0-9]*-[A-Za-z0-9_-]{16,64}\\.json$') &&
+          request.resource.data.keys().hasOnly(['schemaVersion', 'releaseId', 'geometryJson']) &&
+          request.resource.data.schemaVersion == 1 &&
+          request.resource.data.releaseId is string &&
+          request.resource.data.releaseId.size() > 0 &&
+          request.resource.data.releaseId.size() <= 256 &&
+          request.resource.data.geometryJson is string &&
+          request.resource.data.geometryJson.size() > 0 &&
+          request.resource.data.geometryJson.size() <= 900000;
+        allow update, delete: if false;
       }
     }
 

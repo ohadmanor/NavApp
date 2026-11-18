@@ -8,6 +8,7 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  setDoc,
   startAfter,
   type DocumentData,
 } from 'firebase/firestore';
@@ -37,6 +38,21 @@ import { getFirebaseServices } from './firebaseApp';
 const TRAIL_ANNOTATIONS_COLLECTION = 'trail_annotations';
 const MAX_PUBLIC_ANNOTATIONS = 200;
 const MAX_HISTORY_PAGE_SIZE = 50;
+const MAX_FIRESTORE_GEOMETRY_BYTES = 900_000;
+
+let storageUnavailableForSession = false;
+
+function isStorageUnavailableError(error: unknown): boolean {
+  const code = String((error as { code?: unknown } | null)?.code || '');
+  const message = String((error as { message?: unknown } | null)?.message || '');
+  return (
+    code.includes('storage/unknown') ||
+    code.includes('storage/unauthorized') ||
+    code.includes('storage/bucket-not-found') ||
+    code.includes('storage/retry-limit-exceeded') ||
+    message.includes('timeout')
+  );
+}
 
 export interface TrailAnnotationLoadResult {
   annotations: TrailAnnotationRecord[];
@@ -60,6 +76,7 @@ export interface SaveTrailAnnotationInput {
   user: NavUser;
   wayIds: string[];
   color: string;
+  name: string;
   number: string;
   description: string;
   reason: string;
@@ -114,6 +131,7 @@ function normalizeAnnotation(id: string, value: DocumentData): TrailAnnotationRe
     schemaVersion: 1,
     wayIds: value.wayIds.map(String),
     color: value.color,
+    name: typeof value.name === 'string' ? value.name : '',
     number: value.number,
     description: value.description,
     status: value.status,
@@ -132,6 +150,7 @@ function snapshot(annotation: TrailAnnotationRecord): TrailAnnotationSnapshot {
   return {
     wayIds: annotation.wayIds,
     color: annotation.color,
+    name: annotation.name,
     number: annotation.number,
     description: annotation.description,
     status: annotation.status,
@@ -193,8 +212,10 @@ function annotationGeometryCollection(
           properties: {
             trailId: annotation.id,
             wayId,
+            name: annotation.name,
             number: annotation.number,
             color: annotation.color,
+            highwayClass: way.highwayClass,
             updatedAt: annotation.updatedAt,
             stale: staleWayIds.has(wayId),
           },
@@ -314,6 +335,7 @@ export class TrailAnnotationsCloudService {
     const validationError = validateTrailAnnotationInput({
       wayIds: input.wayIds,
       color: input.color,
+      name: input.name,
       number: input.number,
       description: input.description,
       reason: input.reason,
@@ -322,9 +344,18 @@ export class TrailAnnotationsCloudService {
 
     const revision = input.expectedRevision + 1;
     const historyId = randomId();
-    const geometryPath = status === 'deleted' ? current!.geometryPath : `${TRAIL_ANNOTATIONS_COLLECTION}/${trailId}/geometry/${revision}-${historyId}.json`;
-    const selectionReleaseId = status === 'deleted' ? current!.selectionReleaseId : input.releaseId;
-    if (status === 'active') {
+    const sameWays =
+      current !== null &&
+      current.wayIds.length === input.wayIds.length &&
+      current.wayIds.every((id, index) => id === input.wayIds[index]);
+    const shouldUploadGeometry = status === 'active' && !sameWays;
+    const geometryPath = shouldUploadGeometry
+      ? `${TRAIL_ANNOTATIONS_COLLECTION}/${trailId}/geometry/${revision}-${historyId}.json`
+      : current!.geometryPath;
+    const selectionReleaseId = shouldUploadGeometry
+      ? input.releaseId
+      : current!.selectionReleaseId;
+    if (shouldUploadGeometry) {
       if (input.geometries.length !== input.wayIds.length) {
         throw new Error('Resolve every selected highway way before publishing.');
       }
@@ -347,20 +378,44 @@ export class TrailAnnotationsCloudService {
       if (geometryBytes > TRAIL_ANNOTATION_LIMITS.maxGeometryBytes) {
         throw new Error('This trail geometry is too large to publish. Split it into smaller trails.');
       }
-      await uploadString(ref(services.storage, geometryPath), geometryJson, 'raw', {
-        contentType: 'application/json',
-        customMetadata: {
-          trailId,
-          revision: String(revision),
+      let uploadedToStorage = false;
+      if (!storageUnavailableForSession) {
+        try {
+          await uploadString(ref(services.storage, geometryPath), geometryJson, 'raw', {
+            contentType: 'application/json',
+            customMetadata: {
+              trailId,
+              revision: String(revision),
+              releaseId: input.releaseId,
+            },
+          });
+          uploadedToStorage = true;
+        } catch (error) {
+          if (!isStorageUnavailableError(error)) {
+            throw error;
+          }
+          storageUnavailableForSession = true;
+        }
+      }
+      if (!uploadedToStorage) {
+        if (geometryBytes > MAX_FIRESTORE_GEOMETRY_BYTES) {
+          throw new Error(
+            'גאומטריית השביל גדולה מדי לשמירה ב-Firestore. יש לפצל למספר מקטעים קצרים יותר.'
+          );
+        }
+        await setDoc(doc(services.firestore, geometryPath), {
+          schemaVersion: 1,
           releaseId: input.releaseId,
-        },
-      });
+          geometryJson,
+        });
+      }
     }
 
     const previous = current ? snapshot(current) : null;
     const next: TrailAnnotationSnapshot = {
       wayIds: [...input.wayIds],
       color: input.color as TrailAnnotationRecord['color'],
+      name: input.name.trim(),
       number: input.number.trim(),
       description: input.description.trim(),
       status,
@@ -457,6 +512,7 @@ export class TrailAnnotationsCloudService {
         user,
         wayIds: annotation.wayIds,
         color: annotation.color,
+        name: annotation.name,
         number: annotation.number,
         description: annotation.description,
         reason: 'Community annotation deleted',
@@ -479,16 +535,46 @@ export class TrailAnnotationsCloudService {
     const fetchRemoteWays = async (): Promise<TrailWayGeometry[]> => {
       if (remoteWays) return remoteWays;
       if (!services) throw new Error('No cached geometry is available while signed out.');
-      const bytes = await getBytes(
-        ref(services.storage, annotation.geometryPath),
-        TRAIL_ANNOTATION_LIMITS.maxGeometryBytes
-      );
-      const parsed = JSON.parse(new TextDecoder().decode(bytes)) as {
+      let parsed: {
         schemaVersion?: number;
         releaseId?: string;
         ways?: unknown[];
-      };
+      } | null = null;
+
+      if (!storageUnavailableForSession) {
+        try {
+          const bytes = await getBytes(
+            ref(services.storage, annotation.geometryPath),
+            TRAIL_ANNOTATION_LIMITS.maxGeometryBytes
+          );
+          parsed = JSON.parse(new TextDecoder().decode(bytes)) as {
+            schemaVersion?: number;
+            releaseId?: string;
+            ways?: unknown[];
+          };
+        } catch (error) {
+          if (isStorageUnavailableError(error)) {
+            storageUnavailableForSession = true;
+          }
+        }
+      }
+
+      if (!parsed) {
+        const firestoreSnap = await getDoc(doc(services.firestore, annotation.geometryPath));
+        if (firestoreSnap.exists()) {
+          const data = firestoreSnap.data() as { geometryJson?: unknown };
+          if (typeof data.geometryJson === 'string') {
+            parsed = JSON.parse(data.geometryJson) as {
+              schemaVersion?: number;
+              releaseId?: string;
+              ways?: unknown[];
+            };
+          }
+        }
+      }
+
       if (
+        !parsed ||
         parsed.schemaVersion !== 1 ||
         !Array.isArray(parsed.ways) ||
         parsed.ways.length !== annotation.wayIds.length
@@ -561,6 +647,7 @@ export class TrailAnnotationsCloudService {
     trailId: string | null;
     wayIds: string[];
     color: TrailAnnotationRecord['color'];
+    name: string;
     number: string;
     description: string;
     reason: string;

@@ -1,0 +1,28 @@
+{
+  "countries": [
+    {
+      "key": "israel-and-palestine",
+      "name": "Israel & Palestine",
+      "outputPrefix": "Israel",
+      "pbfUrl": "https://download.geofabrik.de/asia/israel-and-palestine-latest.osm.pbf",
+      "md5Url": "https://download.geofabrik.de/asia/israel-and-palestine-latest.osm.pbf.md5",
+      "bbox": [34.2, 29.45, 35.9, 33.35]
+    },
+    {
+      "key": "cyprus",
+      "name": "Cyprus",
+      "outputPrefix": "Cyprus",
+      "pbfUrl": "https://download.geofabrik.de/europe/cyprus-latest.osm.pbf",
+      "md5Url": "https://download.geofabrik.de/europe/cyprus-latest.osm.pbf.md5",
+      "bbox": [32.2, 34.5, 34.65, 35.75]
+    },
+    {
+      "key": "jordan",
+      "name": "Jordan",
+      "outputPrefix": "Jordan",
+      "pbfUrl": "https://download.geofabrik.de/asia/jordan-latest.osm.pbf",
+      "md5Url": "https://download.geofabrik.de/asia/jordan-latest.osm.pbf.md5",
+      "bbox": [34.9, 29.1, 39.3, 33.4]
+    }
+  ]
+}
