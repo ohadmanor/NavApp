@@ -135,7 +135,42 @@ export function evaluateEdgeAccess(
   const tracktype = normTag(props.tracktype);
   const hasSpniMark = Boolean(normTag(props.colour) || normTag(props.osmc_symbol));
   const oneway = parseOneway(props.oneway);
-  const roadLabel = buildRoadLabel(cls, subclass, props);
+  const customName = typeof props.name === 'string' && props.name.trim() ? props.name.trim() : '';
+  const roadLabel = customName || buildRoadLabel(cls, subclass, props);
+
+  const communityAccess = props._communityAccess as
+    | { allow4x4?: boolean; allowFoot?: boolean; allowBicycle?: boolean }
+    | undefined;
+  if (communityAccess && typeof communityAccess === 'object') {
+    const allowedForMode =
+      mode === '4x4'
+        ? Boolean(communityAccess.allow4x4)
+        : mode === 'foot'
+          ? Boolean(communityAccess.allowFoot)
+          : Boolean(communityAccess.allowBicycle);
+    if (!allowedForMode) {
+      return {
+        allowed: false,
+        forwardAllowed: false,
+        reverseAllowed: false,
+        costMultiplier: 1,
+        roadLabel: '',
+      };
+    }
+    let costMultiplier = 1.0;
+    if (cls === 'track') {
+      costMultiplier = tracktype === 'grade1' ? 1.05 : tracktype === 'grade2' ? 1.15 : 1.25;
+    } else if (cls === 'path' || cls === 'footway' || cls === 'steps') {
+      costMultiplier = mode === '4x4' ? 1.8 : 1.05;
+    }
+    return {
+      allowed: true,
+      forwardAllowed: oneway !== -1,
+      reverseAllowed: oneway !== 1,
+      costMultiplier,
+      roadLabel,
+    };
+  }
 
   if (mode === '4x4') {
     const isTrack = cls === 'track';

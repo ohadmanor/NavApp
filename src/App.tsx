@@ -36,6 +36,7 @@ import {
   applyLayerVisibilityToMap,
   buildPoiTieredLayerFilter,
   getVectorPoiLayerCategory,
+  isAerialOverlayActive,
   isMasterPoiActive,
   POI_STYLE_LAYER_IDS,
   HIGHWAY_LAYER_IDS,
@@ -185,6 +186,12 @@ const TrailAnnotationsPanel = React.lazy(() =>
     default: m.TrailAnnotationsPanel,
   }))
 );
+const CommunityRoadEditor = React.lazy(() =>
+  import('./components/map/CommunityRoadEditor').then((m) => ({
+    default: m.CommunityRoadEditor,
+  }))
+);
+import type { CommunityRoadEditDraftInput } from './components/map/CommunityRoadEditor';
 import {
   UserStateSyncService,
   type MergeUserStateResult,
@@ -194,7 +201,18 @@ import {
 import { getSurfaceTheme, type MapTheme } from './components/ui/themeTokens';
 import {
   getTrailMapReleaseId,
+  trailAnnotationsCloudService,
 } from './core/firebase/TrailAnnotationsCloudService';
+import { communityRoadsCloudService } from './core/firebase/CommunityRoadsCloudService';
+import {
+  snapPointToExistingRoads,
+  type RoadSnapCandidate,
+} from './core/routing/CommunityRoadSnapper';
+import {
+  isCommunityHighwayClass,
+  type CommunityHighwayClass,
+  type CommunityRoadRecord,
+} from './core/trails/CommunityRoadTypes';
 import { highwayWayGeometryService } from './core/trails/HighwayWayGeometryService';
 import {
   trailWayIdFromMvtId,
@@ -415,6 +433,14 @@ export const App: React.FC = () => {
   const [selectedTrailWay, setSelectedTrailWay] = useState<TrailWayGeometry | null>(null);
   const [trailWayCandidates, setTrailWayCandidates] = useState<TrailWayCandidate[]>([]);
   const [isTrailMarkingMode, setIsTrailMarkingMode] = useState(false);
+  const [trailSubMode, setTrailSubMode] = useState<'add-road' | 'edit-road'>('edit-road');
+  const [communityRoads, setCommunityRoads] = useState<CommunityRoadRecord[]>(() =>
+    communityRoadsCloudService.getCachedRoads()
+  );
+  const [roadDraft, setRoadDraft] = useState<CommunityRoadEditDraftInput | null>(null);
+  const [isDrawingRoad, setIsDrawingRoad] = useState(false);
+  const [selectedRoadVertexIndex, setSelectedRoadVertexIndex] = useState<number | null>(null);
+  const [roadSnapPreview, setRoadSnapPreview] = useState<RoadSnapCandidate | null>(null);
   const [selectedTrailAnnotationId, setSelectedTrailAnnotationId] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<OutdoorLayerVisibility>(
     () => initialConfig.visibility
@@ -692,6 +718,18 @@ export const App: React.FC = () => {
   isPlanningRouteRef.current = isPlanningRouteMode;
   const isTrailMarkingModeRef = useRef<boolean>(isTrailMarkingMode);
   isTrailMarkingModeRef.current = isTrailMarkingMode;
+  const trailSubModeRef = useRef<'add-road' | 'edit-road'>(trailSubMode);
+  trailSubModeRef.current = trailSubMode;
+  const baseHighwayLayerFiltersRef = useRef<Map<string, any>>(new Map());
+  const isDrawingRoadRef = useRef<boolean>(isDrawingRoad);
+  isDrawingRoadRef.current = isDrawingRoad;
+  const roadDraftRef = useRef<CommunityRoadEditDraftInput | null>(roadDraft);
+  roadDraftRef.current = roadDraft;
+  const selectedRoadVertexIndexRef = useRef<number | null>(selectedRoadVertexIndex);
+  selectedRoadVertexIndexRef.current = selectedRoadVertexIndex;
+  const draggingRoadVertexIdxRef = useRef<number | null>(null);
+  const justDraggedRoadVertexRef = useRef<boolean>(false);
+  const lastRoadSnapTsRef = useRef<number>(0);
   const isTrailAddWaysModeRef = useRef(false);
   const planningModeRef = useRef<PlanningMode>(planningMode);
   planningModeRef.current = planningMode;
@@ -911,13 +949,415 @@ export const App: React.FC = () => {
     [osmInfo, showToast]
   );
 
+  useEffect(() => {
+    const unsub = communityRoadsCloudService.subscribe((roads) => {
+      setCommunityRoads(roads);
+    });
+    void communityRoadsCloudService.loadCommunityRoads();
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (currentUser && isOnline) {
+      void communityRoadsCloudService.syncPendingRoads(currentUser);
+    }
+  }, [currentUser, isOnline]);
+
+  const communityRoadsGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
+    const features: GeoJSON.Feature[] = [];
+    for (const road of communityRoads) {
+      if (road.status !== 'active' || road.coordinates.length < 2) continue;
+      features.push({
+        type: 'Feature',
+        properties: {
+          roadId: road.id,
+          kind: road.kind,
+          highwayClass: road.highwayClass,
+          tracktype: road.tracktype || '',
+          name: road.name || '',
+          trailColor: road.trailColor || '',
+          trailNumber: road.trailNumber || '',
+          trailName: road.trailName || '',
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: road.coordinates,
+        },
+      });
+    }
+    return { type: 'FeatureCollection', features };
+  }, [communityRoads]);
+
+  const communityRoadDraftGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
+    const features: GeoJSON.Feature[] = [];
+    if (roadDraft && roadDraft.coordinates.length >= 2) {
+      features.push({
+        type: 'Feature',
+        properties: { role: 'draft-line' },
+        geometry: {
+          type: 'LineString',
+          coordinates: roadDraft.coordinates,
+        },
+      });
+    }
+    if (roadDraft) {
+      roadDraft.coordinates.forEach((coord, idx) => {
+        const isAnchored = roadDraft.anchors.some((a) => a.vertexIndex === idx);
+        features.push({
+          type: 'Feature',
+          properties: {
+            role: isAnchored ? 'anchor-vertex' : 'draft-vertex',
+            vertexIndex: idx,
+            selected: idx === selectedRoadVertexIndex,
+          },
+          geometry: { type: 'Point', coordinates: coord },
+        });
+        if (idx < roadDraft.coordinates.length - 1) {
+          const nextCoord = roadDraft.coordinates[idx + 1];
+          features.push({
+            type: 'Feature',
+            properties: {
+              role: 'midpoint-handle',
+              insertAfterIndex: idx,
+            },
+            geometry: {
+              type: 'Point',
+              coordinates: [(coord[0] + nextCoord[0]) / 2, (coord[1] + nextCoord[1]) / 2],
+            },
+          });
+        }
+      });
+    }
+    if ((isDrawingRoad || selectedRoadVertexIndex !== null) && roadSnapPreview) {
+      features.push({
+        type: 'Feature',
+        properties: { role: 'snap-ring' },
+        geometry: { type: 'Point', coordinates: roadSnapPreview.coord },
+      });
+    }
+    return { type: 'FeatureCollection', features };
+  }, [roadDraft, isDrawingRoad, selectedRoadVertexIndex, roadSnapPreview]);
+
+  const moveRoadDraftVertex = useCallback(
+    (vertexIndex: number, lon: number, lat: number, snap: RoadSnapCandidate | null) => {
+      const nextCoord: [number, number] = snap
+        ? snap.coord
+        : [Number(lon.toFixed(6)), Number(lat.toFixed(6))];
+      setRoadDraft((prev) => {
+        if (!prev || vertexIndex < 0 || vertexIndex >= prev.coordinates.length) return prev;
+        const nextCoords = prev.coordinates.slice();
+        nextCoords[vertexIndex] = nextCoord;
+        const filteredAnchors = prev.anchors.filter((a) => a.vertexIndex !== vertexIndex);
+        const nextAnchors = snap
+          ? [
+              ...filteredAnchors,
+              {
+                vertexIndex,
+                targetWayId: snap.targetWayId,
+                coord: snap.coord,
+                gx: snap.gx,
+                gy: snap.gy,
+                snapType: snap.snapType,
+              },
+            ]
+          : filteredAnchors;
+        return {
+          ...prev,
+          coordinates: nextCoords,
+          anchors: nextAnchors,
+        };
+      });
+    },
+    []
+  );
+
   const handleTrailMapClick = useCallback(
     async (event: maplibregl.MapMouseEvent) => {
+      if (justDraggedRoadVertexRef.current) {
+        justDraggedRoadVertexRef.current = false;
+        return;
+      }
       const map = mapRef.current;
       if (!map || !osmInfo || isNavigationActiveRef.current || map.getZoom() < 13.5) {
         showToast('יש להתקרב למפה לרמת שביל מפורטת לפני בחירה.');
         return;
       }
+
+      if (roadDraftRef.current && map.getLayer('community-road-draft-vertices')) {
+        const vertexHits = map.queryRenderedFeatures(
+          [
+            [event.point.x - 12, event.point.y - 12],
+            [event.point.x + 12, event.point.y + 12],
+          ],
+          { layers: ['community-road-draft-vertices'] }
+        );
+        const hitIdx = vertexHits[0]?.properties?.vertexIndex;
+        if (typeof hitIdx === 'number') {
+          setSelectedRoadVertexIndex((prev) => (prev === hitIdx ? null : hitIdx));
+          return;
+        }
+        if (map.getLayer('community-road-draft-midpoints')) {
+          const midHits = map.queryRenderedFeatures(
+            [
+              [event.point.x - 10, event.point.y - 10],
+              [event.point.x + 10, event.point.y + 10],
+            ],
+            { layers: ['community-road-draft-midpoints'] }
+          );
+          const insertAfter = midHits[0]?.properties?.insertAfterIndex;
+          if (typeof insertAfter === 'number') {
+            const newPt: [number, number] = [
+              Number(event.lngLat.lng.toFixed(6)),
+              Number(event.lngLat.lat.toFixed(6)),
+            ];
+            setRoadDraft((prev) => {
+              if (!prev) return prev;
+              const nextCoords = prev.coordinates.slice();
+              nextCoords.splice(insertAfter + 1, 0, newPt);
+              const nextAnchors = prev.anchors.map((a) => ({
+                ...a,
+                vertexIndex: a.vertexIndex > insertAfter ? a.vertexIndex + 1 : a.vertexIndex,
+              }));
+              return { ...prev, coordinates: nextCoords, anchors: nextAnchors };
+            });
+            setSelectedRoadVertexIndex(insertAfter + 1);
+            showToast(`נוספה נקודה #${insertAfter + 2} באמצע הדרך — גרור או לחץ להזזה`);
+            return;
+          }
+        }
+        if (selectedRoadVertexIndexRef.current !== null) {
+          const idxToMove = selectedRoadVertexIndexRef.current;
+          const snap = await snapPointToExistingRoads(
+            event.lngLat.lng,
+            event.lngLat.lat,
+            12,
+            8,
+            roadDraftRef.current?.roadId,
+            roadDraftRef.current?.sourceOsmWayId
+          );
+          moveRoadDraftVertex(idxToMove, event.lngLat.lng, event.lngLat.lat, snap);
+          setSelectedRoadVertexIndex(null);
+          setRoadSnapPreview(null);
+          showToast(snap ? `נקודה #${idxToMove + 1} הוזזה והוצמדה ל-${snap.roadLabel}` : `נקודה #${idxToMove + 1} הוזזה`);
+          return;
+        }
+      }
+
+      if (isDrawingRoadRef.current) {
+        const snap = await snapPointToExistingRoads(
+          event.lngLat.lng,
+          event.lngLat.lat,
+          35,
+          8,
+          roadDraftRef.current?.roadId,
+          roadDraftRef.current?.sourceOsmWayId
+        );
+        const nextCoord: [number, number] = snap
+          ? snap.coord
+          : [Number(event.lngLat.lng.toFixed(6)), Number(event.lngLat.lat.toFixed(6))];
+        setRoadDraft((prev) => {
+          const base: CommunityRoadEditDraftInput = prev ?? {
+            roadId: null,
+            expectedRevision: 0,
+            kind: 'new',
+            coordinates: [],
+            anchors: [],
+            highwayClass: 'track',
+          };
+          const vertexIndex = base.coordinates.length;
+          const nextAnchors = snap
+            ? [
+                ...base.anchors,
+                {
+                  vertexIndex,
+                  targetWayId: snap.targetWayId,
+                  coord: snap.coord,
+                  gx: snap.gx,
+                  gy: snap.gy,
+                  snapType: snap.snapType,
+                },
+              ]
+            : base.anchors;
+          return {
+            ...base,
+            coordinates: [...base.coordinates, nextCoord],
+            anchors: nextAnchors,
+          };
+        });
+        if (snap) {
+          showToast(`הוצמדה נקודה ל-${snap.roadLabel}`);
+        }
+        return;
+      }
+
+      if (trailSubModeRef.current === 'edit-road') {
+        const commHitLayers = [
+          'community-roads-casing',
+          'community-roads-track-right',
+          'community-roads-track-left',
+          'community-roads-line',
+        ].filter((id) => Boolean(map.getLayer(id)));
+        if (commHitLayers.length > 0) {
+          const commHits = map.queryRenderedFeatures(
+            [
+              [event.point.x - 10, event.point.y - 10],
+              [event.point.x + 10, event.point.y + 10],
+            ],
+            { layers: commHitLayers }
+          );
+          const hitRoadId = commHits[0]?.properties?.roadId;
+          if (typeof hitRoadId === 'string') {
+            const existing = communityRoadsCloudService
+              .getCachedRoads()
+              .find((r) => r.id === hitRoadId);
+            if (existing) {
+              setIsDrawingRoad(false);
+              setRoadDraft({
+                roadId: existing.id,
+                expectedRevision: existing.revision,
+                kind: existing.kind,
+                sourceOsmWayId: existing.sourceOsmWayId,
+                coordinates: existing.coordinates,
+                anchors: existing.anchors,
+                highwayClass: existing.highwayClass,
+                tracktype: existing.tracktype,
+                surface: existing.surface,
+                name: existing.name,
+                description: existing.description,
+                oneway: existing.oneway,
+                allow4x4: existing.allow4x4,
+                allowFoot: existing.allowFoot,
+                allowBicycle: existing.allowBicycle,
+                trailColor: existing.trailColor || '',
+                trailNumber: existing.trailNumber || '',
+                trailName: existing.trailName || '',
+                existingRecord: existing,
+              });
+              return;
+            }
+          }
+        }
+        const sourceLayerById = new Map(
+          map.getStyle().layers.map((layer) => [
+            layer.id,
+            (layer as maplibregl.LayerSpecification & { 'source-layer'?: string })['source-layer'],
+          ])
+        );
+        const layers = Array.from(HIGHWAY_LAYER_IDS).filter(
+          (id) => Boolean(map.getLayer(id)) && sourceLayerById.get(id) === 'transportation'
+        );
+        const hits = layers.length
+          ? map.queryRenderedFeatures(
+              [
+                [event.point.x - 12, event.point.y - 12],
+                [event.point.x + 12, event.point.y + 12],
+              ],
+              { layers }
+            )
+          : [];
+        const firstFeature = hits.find(
+          (f) => sourceLayerById.get(f.layer.id) === 'transportation' && f.properties?.class && trailWayIdFromMvtId(f.id)
+        );
+        if (!firstFeature) {
+          showToast('לא נמצאה דרך לעריכה בנקודה זו.');
+          return;
+        }
+        const osmWayId = trailWayIdFromMvtId(firstFeature.id)!;
+        const existingOverride = communityRoadsCloudService
+          .getCachedRoads()
+          .find((r) => r.kind === 'osm-override' && r.sourceOsmWayId === osmWayId && r.status === 'active');
+        if (existingOverride) {
+          setIsDrawingRoad(false);
+          setRoadDraft({
+            roadId: existingOverride.id,
+            expectedRevision: existingOverride.revision,
+            kind: 'osm-override',
+            sourceOsmWayId: osmWayId,
+            coordinates: existingOverride.coordinates,
+            anchors: existingOverride.anchors,
+            highwayClass: existingOverride.highwayClass,
+            tracktype: existingOverride.tracktype,
+            surface: existingOverride.surface,
+            name: existingOverride.name,
+            description: existingOverride.description,
+            oneway: existingOverride.oneway,
+            allow4x4: existingOverride.allow4x4,
+            allowFoot: existingOverride.allowFoot,
+            allowBicycle: existingOverride.allowBicycle,
+            trailColor: existingOverride.trailColor || '',
+            trailNumber: existingOverride.trailNumber || '',
+            trailName: existingOverride.trailName || '',
+            existingRecord: existingOverride,
+          });
+          return;
+        }
+        try {
+          const resolved = await highwayWayGeometryService.resolveWayAt(
+            osmWayId,
+            event.lngLat.lng,
+            event.lngLat.lat,
+            getTrailMapReleaseId(osmInfo)
+          );
+          const rawClass = String(firstFeature.properties?.class || 'unclassified').toLowerCase();
+          const highwayClass: CommunityHighwayClass = isCommunityHighwayClass(rawClass)
+            ? rawClass
+            : 'unclassified';
+          const coords = (resolved.geometry.coordinates[0] || []).map(
+            ([lon, lat]) => [lon, lat] as [number, number]
+          );
+          const existingTrailFeature = trailOverlayGeoJSON.features.find(
+            (f) => f.properties?.wayId === osmWayId
+          );
+          setIsDrawingRoad(false);
+          setRoadDraft({
+            roadId: null,
+            expectedRevision: 0,
+            kind: 'osm-override',
+            sourceOsmWayId: osmWayId,
+            coordinates: coords,
+            anchors: [],
+            highwayClass,
+            name: resolved.detectedName || '',
+            trailColor:
+              resolved.detectedColor ||
+              (existingTrailFeature?.properties?.color as CommunityRoadEditDraftInput['trailColor']) ||
+              '',
+            trailNumber:
+              resolved.detectedNumber || String(existingTrailFeature?.properties?.number || ''),
+            trailName:
+              resolved.detectedName || String(existingTrailFeature?.properties?.name || ''),
+          });
+        } catch (err) {
+          showToast(err instanceof Error ? err.message : 'טעינת הדרך לעריכה נכשלה.');
+        }
+        return;
+      }
+
+      const commMarkLayers = ['community-roads-casing', 'community-roads-line'].filter((id) =>
+        Boolean(map.getLayer(id))
+      );
+      if (commMarkLayers.length > 0) {
+        const commHits = map.queryRenderedFeatures(
+          [
+            [event.point.x - 10, event.point.y - 10],
+            [event.point.x + 10, event.point.y + 10],
+          ],
+          { layers: commMarkLayers }
+        );
+        const hitRoadId = commHits[0]?.properties?.roadId;
+        if (typeof hitRoadId === 'string') {
+          await resolveTrailCandidate({
+            wayId: `community:road:${hitRoadId}`,
+            lon: event.lngLat.lng,
+            lat: event.lngLat.lat,
+            highwayClass: String(commHits[0]?.properties?.highwayClass || 'track'),
+            highwaySubclass: String(commHits[0]?.properties?.tracktype || ''),
+            layer: 0,
+          });
+          return;
+        }
+      }
+
       if (!isTrailAddWaysModeRef.current) {
         const overlayLayers = [
           'community-trails-track-right',
@@ -994,7 +1434,7 @@ export const App: React.FC = () => {
       const candidate = candidates.values().next().value as TrailWayCandidate | undefined;
       if (candidate) await resolveTrailCandidate(candidate);
     },
-    [osmInfo, resolveTrailCandidate, showToast]
+    [osmInfo, resolveTrailCandidate, moveRoadDraftVertex, showToast]
   );
   handleTrailMapClickRef.current = handleTrailMapClick;
 
@@ -1012,10 +1452,41 @@ export const App: React.FC = () => {
 
   const exitTrailMarkingMode = useCallback(() => {
     setIsTrailMarkingMode(false);
+    setTrailSubMode('edit-road');
+    setIsDrawingRoad(false);
+    setRoadDraft(null);
+    setSelectedRoadVertexIndex(null);
+    setRoadSnapPreview(null);
     setSelectedTrailWay(null);
     setSelectedTrailAnnotationId(null);
     setTrailWayCandidates([]);
   }, []);
+
+  const switchTrailSubMode = useCallback(
+    (nextMode: 'add-road' | 'edit-road') => {
+      setTrailSubMode(nextMode);
+      setSelectedTrailWay(null);
+      setSelectedTrailAnnotationId(null);
+      setTrailWayCandidates([]);
+      setSelectedRoadVertexIndex(null);
+      setRoadSnapPreview(null);
+      if (nextMode === 'add-road') {
+        setRoadDraft({
+          roadId: null,
+          expectedRevision: 0,
+          kind: 'new',
+          coordinates: [],
+          anchors: [],
+          highwayClass: 'track',
+        });
+        setIsDrawingRoad(true);
+      } else {
+        setIsDrawingRoad(false);
+        setRoadDraft(null);
+      }
+    },
+    []
+  );
 
   // A newly opened window always starts expanded.
   useEffect(() => {
@@ -3247,7 +3718,16 @@ export const App: React.FC = () => {
     };
 
     const handleMapPlanDblClick = (e: maplibregl.MapMouseEvent) => {
-      if (isCancelled || !isPlanningRouteRef.current) return;
+      if (isCancelled) return;
+      if (isTrailMarkingModeRef.current && trailSubModeRef.current === 'add-road' && isDrawingRoadRef.current) {
+        e.preventDefault();
+        if ((roadDraftRef.current?.coordinates.length ?? 0) >= 2) {
+          setIsDrawingRoad(false);
+          setRoadSnapPreview(null);
+        }
+        return;
+      }
+      if (!isPlanningRouteRef.current) return;
       e.preventDefault();
       if (clickTimerRef.current) {
         window.clearTimeout(clickTimerRef.current);
@@ -3256,8 +3736,98 @@ export const App: React.FC = () => {
       void handleFinishPlanningRef.current();
     };
 
+    const startRoadVertexDrag = (e: maplibregl.MapLayerMouseEvent | maplibregl.MapLayerTouchEvent) => {
+      if (!isTrailMarkingModeRef.current || !roadDraftRef.current) return;
+      const idx = e.features?.[0]?.properties?.vertexIndex;
+      if (typeof idx !== 'number') return;
+      e.preventDefault();
+      draggingRoadVertexIdxRef.current = idx;
+      setSelectedRoadVertexIndex(idx);
+      map.dragPan.disable();
+    };
+
+    const handleTrailRoadMouseMove = (e: maplibregl.MapMouseEvent) => {
+      if (isCancelled || !isTrailMarkingModeRef.current) return;
+      const dragIdx = draggingRoadVertexIdxRef.current;
+      if (dragIdx !== null && roadDraftRef.current) {
+        moveRoadDraftVertex(dragIdx, e.lngLat.lng, e.lngLat.lat, null);
+        const now = performance.now();
+        if (now - lastRoadSnapTsRef.current >= 80) {
+          lastRoadSnapTsRef.current = now;
+          void snapPointToExistingRoads(
+            e.lngLat.lng,
+            e.lngLat.lat,
+            12,
+            8,
+            roadDraftRef.current?.roadId,
+            roadDraftRef.current?.sourceOsmWayId
+          ).then((snap) => {
+            if (!isCancelled && draggingRoadVertexIdxRef.current === dragIdx) {
+              setRoadSnapPreview(snap);
+            }
+          });
+        }
+        return;
+      }
+      if (
+        !(
+          isDrawingRoadRef.current ||
+          (roadDraftRef.current && selectedRoadVertexIndexRef.current !== null)
+        )
+      ) {
+        return;
+      }
+      const now = performance.now();
+      if (now - lastRoadSnapTsRef.current < 80) return;
+      lastRoadSnapTsRef.current = now;
+      const snapRadius = selectedRoadVertexIndexRef.current !== null && !isDrawingRoadRef.current ? 12 : 35;
+      void snapPointToExistingRoads(
+        e.lngLat.lng,
+        e.lngLat.lat,
+        snapRadius,
+        8,
+        roadDraftRef.current?.roadId,
+        roadDraftRef.current?.sourceOsmWayId
+      ).then((snap) => {
+        if (!isCancelled) {
+          setRoadSnapPreview(snap);
+        }
+      });
+    };
+
+    const finishRoadVertexDrag = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) => {
+      const dragIdx = draggingRoadVertexIdxRef.current;
+      if (dragIdx === null) return;
+      draggingRoadVertexIdxRef.current = null;
+      justDraggedRoadVertexRef.current = true;
+      map.dragPan.enable();
+      const lng = e.lngLat.lng;
+      const lat = e.lngLat.lat;
+      void snapPointToExistingRoads(
+        lng,
+        lat,
+        12,
+        8,
+        roadDraftRef.current?.roadId,
+        roadDraftRef.current?.sourceOsmWayId
+      ).then((snap) => {
+        moveRoadDraftVertex(dragIdx, lng, lat, snap);
+        setRoadSnapPreview(null);
+      });
+    };
+
     map.on('click', handleMapClick);
     map.on('dblclick', handleMapPlanDblClick);
+    map.on('mousedown', 'community-road-draft-vertices', startRoadVertexDrag);
+    map.on('touchstart', 'community-road-draft-vertices', startRoadVertexDrag);
+    map.on('mousemove', handleTrailRoadMouseMove);
+    map.on('touchmove', (e) => {
+      if (draggingRoadVertexIdxRef.current !== null && roadDraftRef.current) {
+        moveRoadDraftVertex(draggingRoadVertexIdxRef.current, e.lngLat.lng, e.lngLat.lat, null);
+      }
+    });
+    map.on('mouseup', finishRoadVertexDrag);
+    map.on('touchend', finishRoadVertexDrag);
     const hoverPoiLayerIds = [...geoJsonPoiLayerIds, ...Array.from(POI_STYLE_LAYER_IDS)];
     for (const poiHoverLayerId of hoverPoiLayerIds) {
       map.on('mousemove', poiHoverLayerId, (e) => {
@@ -3464,12 +4034,387 @@ export const App: React.FC = () => {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady || !map.isStyleLoaded()) return;
+
+    const roadsSourceId = 'community-roads-src';
+    const existingRoadsSrc = map.getSource(roadsSourceId) as maplibregl.GeoJSONSource | undefined;
+    if (existingRoadsSrc) {
+      existingRoadsSrc.setData(communityRoadsGeoJSON);
+    } else {
+      map.addSource(roadsSourceId, { type: 'geojson', data: communityRoadsGeoJSON });
+    }
+
+    const beforeTrailsId = map.getLayer('community-trails-casing')
+      ? 'community-trails-casing'
+      : map.getLayer('saved-routes-line')
+        ? 'saved-routes-line'
+        : undefined;
+
+    if (!map.getLayer('community-roads-casing')) {
+      const roadTrailSpniColorExpr: maplibregl.ExpressionSpecification = [
+        'match',
+        ['coalesce', ['get', 'trailColor'], ''],
+        '#dc2626',
+        '#FF0000',
+        '#2563eb',
+        '#0044FF',
+        '#16a34a',
+        '#00C000',
+        '#334155',
+        '#111111',
+        '#9a5b32',
+      ];
+      map.addLayer(
+        {
+          id: 'community-roads-casing',
+          type: 'line',
+          source: roadsSourceId,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': theme === 'topo-dark' ? '#0f172a' : '#ffffff',
+            'line-opacity': [
+              'case',
+              ['==', ['get', 'highwayClass'], 'track'],
+              0.95,
+              [
+                'any',
+                ['!=', ['coalesce', ['get', 'trailColor'], ''], ''],
+                ['!', ['in', ['get', 'highwayClass'], ['literal', ['path', 'footway', 'steps', 'bridleway']]]],
+              ],
+              0.75,
+              0,
+            ],
+            'line-width': [
+              'interpolate',
+              ['exponential', 2],
+              ['zoom'],
+              12,
+              ['case', ['==', ['get', 'highwayClass'], 'track'], 3.5, 2.5],
+              13,
+              ['case', ['==', ['get', 'highwayClass'], 'track'], 5, 3.5],
+              16,
+              ['case', ['==', ['get', 'highwayClass'], 'track'], 8, 6],
+              22,
+              ['case', ['==', ['get', 'highwayClass'], 'track'], 30, 18],
+            ],
+          },
+        },
+        beforeTrailsId
+      );
+      map.addLayer(
+        {
+          id: 'community-roads-track-right',
+          type: 'line',
+          source: roadsSourceId,
+          filter: ['==', ['get', 'highwayClass'], 'track'],
+          layout: { 'line-cap': 'round', 'line-join': 'miter' },
+          paint: {
+            'line-color': roadTrailSpniColorExpr,
+            'line-dasharray': [6, 2],
+            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 13, 1.5, 16, 2.4, 22, 9.5],
+            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 13, 1, 16, 1.8, 22, 7],
+          },
+        },
+        beforeTrailsId
+      );
+      map.addLayer(
+        {
+          id: 'community-roads-track-left',
+          type: 'line',
+          source: roadsSourceId,
+          filter: ['==', ['get', 'highwayClass'], 'track'],
+          layout: { 'line-cap': 'round', 'line-join': 'miter' },
+          paint: {
+            'line-color': roadTrailSpniColorExpr,
+            'line-dasharray': [6, 2],
+            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 13, -1.5, 16, -2.4, 22, -9.5],
+            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 13, 1, 16, 1.8, 22, 7],
+          },
+        },
+        beforeTrailsId
+      );
+      map.addLayer(
+        {
+          id: 'community-roads-line',
+          type: 'line',
+          source: roadsSourceId,
+          filter: ['!=', ['get', 'highwayClass'], 'track'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': [
+              'match',
+              ['coalesce', ['get', 'trailColor'], ''],
+              '#dc2626',
+              '#FF0000',
+              '#2563eb',
+              '#0044FF',
+              '#16a34a',
+              '#00C000',
+              '#334155',
+              '#111111',
+              [
+                'match',
+                ['coalesce', ['get', 'highwayClass'], 'unclassified'],
+                'path',
+                '#9a5b32',
+                'footway',
+                '#9a5b32',
+                'steps',
+                '#9a5b32',
+                'bridleway',
+                '#9a5b32',
+                'cycleway',
+                '#0d9488',
+                'motorway',
+                '#e11d48',
+                'trunk',
+                '#ea580c',
+                'primary',
+                '#f59e0b',
+                'secondary',
+                '#eab308',
+                '#64748b',
+              ],
+            ],
+            'line-dasharray': [
+              'match',
+              ['coalesce', ['get', 'highwayClass'], 'unclassified'],
+              'path',
+              ['literal', [4, 2.5]],
+              'footway',
+              ['literal', [3, 2]],
+              'steps',
+              ['literal', [1.5, 1.5]],
+              'bridleway',
+              ['literal', [4, 2]],
+              'cycleway',
+              ['literal', [3, 1.5]],
+              ['literal', [1, 0]],
+            ],
+            'line-width': [
+              'interpolate',
+              ['exponential', 2],
+              ['zoom'],
+              12,
+              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 2.2, 1.8],
+              14,
+              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 3.2, 2.6],
+              16,
+              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 4.5, 4],
+              22,
+              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 16, 14],
+            ],
+          },
+        },
+        beforeTrailsId
+      );
+      map.addLayer(
+        {
+          id: 'community-roads-label',
+          type: 'symbol',
+          source: roadsSourceId,
+          minzoom: 13,
+          filter: [
+            'any',
+            ['!=', ['coalesce', ['get', 'name'], ''], ''],
+            ['!=', ['coalesce', ['get', 'trailNumber'], ''], ''],
+            ['!=', ['coalesce', ['get', 'trailName'], ''], ''],
+          ],
+          layout: {
+            'symbol-placement': 'line',
+            'text-field': [
+              'case',
+              ['!=', ['coalesce', ['get', 'trailNumber'], ''], ''],
+              ['get', 'trailNumber'],
+              ['!=', ['coalesce', ['get', 'trailName'], ''], ''],
+              ['get', 'trailName'],
+              ['get', 'name'],
+            ],
+            'text-size': 11,
+            'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
+          },
+          paint: {
+            'text-color': [
+              'match',
+              ['coalesce', ['get', 'trailColor'], ''],
+              '#dc2626',
+              '#FF0000',
+              '#2563eb',
+              '#0044FF',
+              '#16a34a',
+              '#00C000',
+              '#334155',
+              '#111111',
+              theme === 'topo-dark' ? '#f8fafc' : '#1e293b',
+            ],
+            'text-halo-color': theme === 'topo-dark' ? '#0f172a' : '#ffffff',
+            'text-halo-width': 2,
+          },
+        },
+        beforeTrailsId
+      );
+    }
+
+    const draftSourceId = 'community-road-draft-src';
+    const existingDraftSrc = map.getSource(draftSourceId) as maplibregl.GeoJSONSource | undefined;
+    if (existingDraftSrc) {
+      existingDraftSrc.setData(communityRoadDraftGeoJSON);
+    } else {
+      map.addSource(draftSourceId, { type: 'geojson', data: communityRoadDraftGeoJSON });
+    }
+    if (!map.getLayer('community-road-draft-line')) {
+      map.addLayer({
+        id: 'community-road-draft-line',
+        type: 'line',
+        source: draftSourceId,
+        filter: ['==', ['get', 'role'], 'draft-line'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#10b981',
+          'line-width': 4,
+          'line-dasharray': [3, 2],
+        },
+      });
+      map.addLayer({
+        id: 'community-road-draft-midpoints',
+        type: 'circle',
+        source: draftSourceId,
+        filter: ['==', ['get', 'role'], 'midpoint-handle'],
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#ffffff',
+          'circle-opacity': 0.85,
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#10b981',
+        },
+      });
+      map.addLayer({
+        id: 'community-road-draft-vertices',
+        type: 'circle',
+        source: draftSourceId,
+        filter: ['in', ['get', 'role'], ['literal', ['draft-vertex', 'anchor-vertex']]],
+        paint: {
+          'circle-radius': [
+            'case',
+            ['==', ['coalesce', ['get', 'selected'], false], true],
+            8.5,
+            ['==', ['get', 'role'], 'anchor-vertex'],
+            6,
+            4.5,
+          ],
+          'circle-color': [
+            'case',
+            ['==', ['coalesce', ['get', 'selected'], false], true],
+            '#0ea5e9',
+            ['==', ['get', 'role'], 'anchor-vertex'],
+            '#10b981',
+            '#f59e0b',
+          ],
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#ffffff',
+        },
+      });
+      map.addLayer({
+        id: 'community-road-snap-ring',
+        type: 'circle',
+        source: draftSourceId,
+        filter: ['==', ['get', 'role'], 'snap-ring'],
+        paint: {
+          'circle-radius': 9,
+          'circle-color': 'rgba(16, 185, 129, 0.2)',
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#10b981',
+        },
+      });
+    }
+
+    // Hide base OSM highway features that have an active osm-override so only the edited road renders
+    const overriddenIds = communityRoads
+      .filter((r) => r.status === 'active' && r.kind === 'osm-override' && r.sourceOsmWayId)
+      .map((r) => Number(r.sourceOsmWayId!.replace('osm:way:', '')))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    for (const layer of map.getStyle().layers) {
+      const srcLayer = (layer as maplibregl.LayerSpecification & { 'source-layer'?: string })['source-layer'];
+      if (srcLayer !== 'transportation' || !HIGHWAY_LAYER_IDS.has(layer.id)) continue;
+      const filterKey = `${mapStyleRevision}:${layer.id}`;
+      if (!baseHighwayLayerFiltersRef.current.has(filterKey)) {
+        baseHighwayLayerFiltersRef.current.set(filterKey, map.getFilter(layer.id) ?? null);
+      }
+      const origFilter = baseHighwayLayerFiltersRef.current.get(filterKey);
+      try {
+        if (overriddenIds.length > 0) {
+          const serialized = origFilter ? JSON.stringify(origFilter) : '';
+          const isExpressionFilter =
+            serialized.includes('["get",') ||
+            serialized.includes('["coalesce",') ||
+            serialized.includes('["id"]') ||
+            serialized.includes('["literal",');
+          const excludeFilter = isExpressionFilter
+            ? (['!', ['in', ['id'], ['literal', overriddenIds]]] as unknown as maplibregl.FilterSpecification)
+            : (['!in', '$id', ...overriddenIds] as unknown as maplibregl.FilterSpecification);
+          const combined = origFilter
+            ? (['all', origFilter, excludeFilter] as unknown as maplibregl.FilterSpecification)
+            : excludeFilter;
+          map.setFilter(layer.id, combined);
+        } else {
+          map.setFilter(layer.id, origFilter ?? null);
+        }
+      } catch {
+        // Ignore layers with incompatible filter syntax
+      }
+    }
+
+    const hideCommunityRoads =
+      isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap);
+    for (const roadLayerId of [
+      'community-roads-casing',
+      'community-roads-track-right',
+      'community-roads-track-left',
+      'community-roads-line',
+      'community-roads-label',
+    ]) {
+      if (map.getLayer(roadLayerId)) {
+        map.setLayoutProperty(roadLayerId, 'visibility', hideCommunityRoads ? 'none' : 'visible');
+      }
+    }
+  }, [
+    isMapReady,
+    theme,
+    mapStyleRevision,
+    visibility.googleSatellite,
+    visibility.govmapOrtho,
+    visibility.hideRoadsOnExternalMap,
+    communityRoads,
+    communityRoadsGeoJSON,
+    communityRoadDraftGeoJSON,
+  ]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady || !map.isStyleLoaded()) return;
+    const overriddenTrailWayIds = new Set<string>();
+    for (const road of communityRoads) {
+      if (road.status !== 'active') continue;
+      overriddenTrailWayIds.add(`community:road:${road.id}`);
+      if (road.kind === 'osm-override' && road.sourceOsmWayId) {
+        overriddenTrailWayIds.add(road.sourceOsmWayId);
+      }
+    }
+    const filteredTrailOverlay: GeoJSON.FeatureCollection =
+      overriddenTrailWayIds.size === 0
+        ? trailOverlayGeoJSON
+        : {
+            type: 'FeatureCollection',
+            features: trailOverlayGeoJSON.features.filter((f) => {
+              const wid = f.properties?.wayId;
+              return typeof wid !== 'string' || !overriddenTrailWayIds.has(wid);
+            }),
+          };
     const sourceId = 'community-trails-src';
     const existing = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
     if (existing) {
-      existing.setData(trailOverlayGeoJSON);
+      existing.setData(filteredTrailOverlay);
     } else {
-      map.addSource(sourceId, { type: 'geojson', data: trailOverlayGeoJSON });
+      map.addSource(sourceId, { type: 'geojson', data: filteredTrailOverlay });
     }
 
     const spniMapColorExpr: maplibregl.ExpressionSpecification = [
@@ -3633,6 +4578,8 @@ export const App: React.FC = () => {
       );
     }
 
+    const trailsVisible =
+      showTrailOverlay && !(isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap));
     for (const layerId of [
       'community-trails-casing',
       'community-trails-track-right',
@@ -3643,14 +4590,18 @@ export const App: React.FC = () => {
       'community-trails-number',
     ]) {
       if (map.getLayer(layerId)) {
-        map.setLayoutProperty(layerId, 'visibility', showTrailOverlay ? 'visible' : 'none');
+        map.setLayoutProperty(layerId, 'visibility', trailsVisible ? 'visible' : 'none');
       }
     }
   }, [
     isMapReady,
     mapStyleRevision,
+    communityRoads,
     trailOverlayGeoJSON,
     showTrailOverlay,
+    visibility.googleSatellite,
+    visibility.govmapOrtho,
+    visibility.hideRoadsOnExternalMap,
     theme,
   ]);
 
@@ -6331,13 +7282,125 @@ export const App: React.FC = () => {
         )}
 
         <div
-          className={`fixed z-[55] ${
+          className={`fixed z-[55] flex flex-col gap-2 ${
             isMobile ? 'bottom-20 left-2 right-2' : 'top-16 right-3 w-[380px] max-w-[calc(100vw-24px)]'
           }`}
         >
+          {isTrailMarkingMode && (
+            <div
+              dir="rtl"
+              className={`flex items-center gap-1 rounded-xl border p-1 shadow-lg ${t.panel}`}
+              role="tablist"
+              aria-label="מצבי עריכת דרכים וסימון שבילים"
+            >
+              {[
+                { id: 'edit-road' as const, label: 'עריכת דרך / סימון' },
+                { id: 'add-road' as const, label: 'הוספת דרך חדשה' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={trailSubMode === tab.id}
+                  onClick={() => switchTrailSubMode(tab.id)}
+                  className={`flex-1 rounded-lg px-2 py-1.5 text-[11px] font-bold transition-colors ${
+                    trailSubMode === tab.id ? 'bg-emerald-600 text-white' : t.hoverRow
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {isTrailMarkingMode && isDrawingRoad && roadSnapPreview && (
+            <div
+              dir="rtl"
+              className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-[11px] font-semibold shadow ${t.panel}`}
+            >
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              <span>
+                נצמד ל-{roadSnapPreview.roadLabel} ({roadSnapPreview.distMeters} מ׳)
+              </span>
+            </div>
+          )}
+
+          {isTrailMarkingMode && roadDraft && (
+            <Suspense fallback={null}>
+              <CommunityRoadEditor
+                theme={theme}
+                currentUser={currentUser}
+                isOnline={isOnline}
+                draft={roadDraft}
+                isDrawingGeometry={isDrawingRoad}
+                selectedVertexIndex={selectedRoadVertexIndex}
+                onClearSelectedVertex={() => setSelectedRoadVertexIndex(null)}
+                onDeleteSelectedVertex={() => {
+                  const delIdx = selectedRoadVertexIndex;
+                  if (delIdx === null) return;
+                  setRoadDraft((prev) => {
+                    if (!prev || prev.coordinates.length <= 2) return prev;
+                    const nextCoords = prev.coordinates.filter((_, i) => i !== delIdx);
+                    const nextAnchors = prev.anchors
+                      .filter((a) => a.vertexIndex !== delIdx)
+                      .map((a) => ({
+                        ...a,
+                        vertexIndex: a.vertexIndex > delIdx ? a.vertexIndex - 1 : a.vertexIndex,
+                      }));
+                    return { ...prev, coordinates: nextCoords, anchors: nextAnchors };
+                  });
+                  setSelectedRoadVertexIndex(null);
+                }}
+                onStartExtendDrawing={() => {
+                  setSelectedRoadVertexIndex(null);
+                  setIsDrawingRoad(true);
+                }}
+                onUndoLastVertex={() =>
+                  setRoadDraft((prev) => {
+                    if (!prev || prev.coordinates.length === 0) return prev;
+                    const removedIdx = prev.coordinates.length - 1;
+                    if (selectedRoadVertexIndex === removedIdx) setSelectedRoadVertexIndex(null);
+                    return {
+                      ...prev,
+                      coordinates: prev.coordinates.slice(0, -1),
+                      anchors: prev.anchors.filter((a) => a.vertexIndex !== removedIdx),
+                    };
+                  })
+                }
+                onFinishDrawing={() => {
+                  setIsDrawingRoad(false);
+                  setSelectedRoadVertexIndex(null);
+                  setRoadSnapPreview(null);
+                }}
+                onCancel={() => {
+                  setIsDrawingRoad(false);
+                  setRoadDraft(null);
+                  setSelectedRoadVertexIndex(null);
+                  setRoadSnapPreview(null);
+                  setTrailSubMode('edit-road');
+                }}
+                onSaved={() => {
+                  setIsDrawingRoad(false);
+                  setRoadDraft(null);
+                  setSelectedRoadVertexIndex(null);
+                  setRoadSnapPreview(null);
+                  setTrailSubMode('edit-road');
+                }}
+                onDeleted={() => {
+                  setIsDrawingRoad(false);
+                  setRoadDraft(null);
+                  setSelectedRoadVertexIndex(null);
+                  setRoadSnapPreview(null);
+                  setTrailSubMode('edit-road');
+                }}
+                onNotify={showToast}
+              />
+            </Suspense>
+          )}
+
           <Suspense fallback={null}>
             <TrailAnnotationsPanel
-              isMarkingMode={isTrailMarkingMode}
+              isMarkingMode={false}
               theme={theme}
               currentUser={currentUser}
               firebaseAvailable={AuthService.isAvailable()}

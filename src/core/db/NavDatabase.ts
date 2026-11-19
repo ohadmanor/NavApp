@@ -6,6 +6,10 @@ import type {
   TrailAnnotationRecord,
   TrailGeometryCacheRecord,
 } from '../trails/TrailAnnotationTypes';
+import type {
+  CommunityRoadDraftRecord,
+  CommunityRoadRecord,
+} from '../trails/CommunityRoadTypes';
 
 export interface MapArchiveRecord {
   id: 'israel-dem' | 'israel-osm';
@@ -272,6 +276,8 @@ export class NavDatabase extends Dexie {
   trailAnnotations!: Table<TrailAnnotationRecord, string>;
   trailGeometryCache!: Table<TrailGeometryCacheRecord, string>;
   trailAnnotationDrafts!: Table<TrailAnnotationDraftRecord, string>;
+  communityRoads!: Table<CommunityRoadRecord, string>;
+  communityRoadDrafts!: Table<CommunityRoadDraftRecord, string>;
 
   constructor() {
     super('NavAppOutdoorDB');
@@ -401,6 +407,25 @@ export class NavDatabase extends Dexie {
       trailAnnotations: 'id, status, updatedAt, selectionReleaseId, *wayIds',
       trailGeometryCache: 'id, wayId, releaseId',
       trailAnnotationDrafts: 'id, ownerUid, updatedAt',
+    });
+    this.version(9).stores({
+      mapRegistry: 'id, role, storageKind, createdUtc',
+      pois: 'id, category, subcategory, nameHe, nameEn, source, visibility, ownerUid, ownership',
+      poiOverrides: 'id, deleted, category, updatedAt',
+      routes:
+        'id, name, visible, createdAt, updatedAt, ownerUid, ownership, cloudSyncStatus, sourceFormat',
+      routePayloads: 'id, updatedAt',
+      planningFolders: 'id, ownerUid, parentId, sortOrder, cloudSyncStatus, updatedAt, *pathIds',
+      planningTrails:
+        'id, ownerUid, name, folderId, categoryId, difficulty, isStarred, cloudSyncStatus, updatedAt, *tags',
+      planningTrailPayloads: 'id, updatedAt',
+      tracks: 'id, startedAt',
+      searchIndexCache: 'fingerprint, createdUtc',
+      trailAnnotations: 'id, status, updatedAt, selectionReleaseId, *wayIds',
+      trailGeometryCache: 'id, wayId, releaseId',
+      trailAnnotationDrafts: 'id, ownerUid, updatedAt',
+      communityRoads: 'id, kind, status, highwayClass, sourceOsmWayId, updatedAt',
+      communityRoadDrafts: 'id, ownerUid, updatedAt',
     });
   }
 }

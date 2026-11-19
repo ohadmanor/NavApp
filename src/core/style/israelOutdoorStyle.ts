@@ -19,6 +19,7 @@ export const DEFAULT_MAP_STYLE: MapStyleId = 'nms';
 export interface OutdoorLayerVisibility {
   googleSatellite: boolean;
   govmapOrtho?: boolean;
+  hideRoadsOnExternalMap?: boolean;
   hillshade: boolean;
   terrain3d: boolean;
   contours: boolean;
@@ -77,6 +78,7 @@ export function isAerialOverlayActive(visibility: OutdoorLayerVisibility): boole
 export const DEFAULT_LAYER_VISIBILITY: OutdoorLayerVisibility = {
   googleSatellite: false,
   govmapOrtho: false,
+  hideRoadsOnExternalMap: false,
   hillshade: true,
   terrain3d: false,
   contours: true,
@@ -1275,6 +1277,10 @@ function getVisibilityForIhmLayer(
 
   if (!IHM_STYLE_LAYER_IDS.has(layerId)) {
     return null;
+  }
+
+  if (aerialActive && visibility.hideRoadsOnExternalMap && HIGHWAY_LAYER_IDS.has(layerId)) {
+    return false;
   }
 
   if (

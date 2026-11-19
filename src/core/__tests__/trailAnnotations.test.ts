@@ -111,6 +111,15 @@ describe('community trail annotation identity and geometry', () => {
     ).toBeNull();
     expect(
       validateTrailAnnotationInput({
+        wayIds: ['osm:way:42'],
+        color: '#16a34a',
+        number: '',
+        description: 'שביל קהילתי ללא מספר',
+        reason: '',
+      })
+    ).toBeNull();
+    expect(
+      validateTrailAnnotationInput({
         wayIds: ['osm:way:42', 'osm:way:42'],
         color: '#16a34a',
         number: '1',

@@ -97,7 +97,9 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
     {
       key: 'googleSatellite',
       title: 'תצלום לוויין (Google Satellite)',
-      activeDesc: 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) — שאר השכבות מוסתרות',
+      activeDesc: visibility.hideRoadsOnExternalMap
+        ? 'מוצג תצלום לוויין נקי (דרכים וכבישים מוסתרים)'
+        : 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) — שאר השכבות מוסתרות',
       idleDesc: 'מוסיף תצלום לוויין ומציג דרכים, שבילים ונקודות עניין (POI) בלבד',
       badge: 'SAT',
     },
@@ -106,7 +108,9 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
           {
             key: 'govmapOrtho' as const,
             title: 'תצלום אוויר GovMap (מפ״י 2025)',
-            activeDesc: 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) מעל אורתופוטו GovMap',
+            activeDesc: visibility.hideRoadsOnExternalMap
+              ? 'מוצג תצלום אוויר GovMap נקי (דרכים וכבישים מוסתרים)'
+              : 'מוצגים כבישים, דרכים, שבילים ונקודות עניין (POI) מעל אורתופוטו GovMap',
             idleDesc: 'מוסיף תצלום אוויר עדכני של מפ״י ומציג דרכים, שבילים ונקודות עניין בלבד',
             badge: 'ORTHO',
           },
@@ -337,6 +341,35 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
             </button>
           );
         })}
+
+        {isAerialOverlayActive(visibility) && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={Boolean(visibility.hideRoadsOnExternalMap)}
+            onClick={() => toggle('hideRoadsOnExternalMap')}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-xs transition-colors ${
+              visibility.hideRoadsOnExternalMap ? 'border-amber-500 bg-amber-500/15' : t.subCard
+            }`}
+          >
+            <span className="text-right min-w-0">
+              <span className="font-bold block">הסתר דרכים וכבישים במפה החיצונית</span>
+              <span className={`text-[11px] block leading-tight ${t.muted}`}>
+                מסתיר את שכבת הכבישים, השבילים והדרכים מעל תצלום הלוויין/אוויר
+              </span>
+            </span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className={`font-mono text-xs ${t.muted}`}>Roads</span>
+              <span
+                className={`w-9 h-5 rounded-full p-0.5 transition-colors flex items-center ${
+                  visibility.hideRoadsOnExternalMap ? 'bg-amber-600 justify-start' : 'bg-slate-400/40 justify-end'
+                }`}
+              >
+                <span className="w-4 h-4 rounded-full bg-white shadow" />
+              </span>
+            </span>
+          </button>
+        )}
 
         {terrainToggles.map((item) => {
           const isOn =

@@ -1,6 +1,8 @@
 import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import { pmtilesRegistry } from '../pmtiles/PMTilesRegistry';
+import { communityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
+import type { CommunityRoadRecord, RoadConnectionAnchor } from '../trails/CommunityRoadTypes';
 import { evaluateEdgeAccess, type PlanningMode } from './RoutingProfiles';
 
 export const ROUTING_TILE_ZOOM = 14;
@@ -81,6 +83,118 @@ export function globalPixelToLonLat(gx: number, gy: number): [number, number] {
   const n = Math.PI - (2 * Math.PI * gy) / WORLD_PIXELS;
   const lat = (180 / Math.PI) * Math.atan(Math.sinh(n));
   return [Number(lon.toFixed(6)), Number(lat.toFixed(6))];
+}
+
+export function lonLatToGlobalPixel(lon: number, lat: number): { gx: number; gy: number } {
+  const clampedLat = Math.max(-85.0511, Math.min(85.0511, lat));
+  const xNorm = (lon + 180) / 360;
+  const latRad = (clampedLat * Math.PI) / 180;
+  const yNorm = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
+  return {
+    gx: Math.round(xNorm * WORLD_PIXELS),
+    gy: Math.round(yNorm * WORLD_PIXELS),
+  };
+}
+
+function tileBoundsLonLat(tiles: Iterable<TileCoord>): [number, number, number, number] {
+  const n = 1 << ROUTING_TILE_ZOOM;
+  let minTx = Infinity;
+  let maxTx = -Infinity;
+  let minTy = Infinity;
+  let maxTy = -Infinity;
+  for (const t of tiles) {
+    if (t.tx < minTx) minTx = t.tx;
+    if (t.tx > maxTx) maxTx = t.tx;
+    if (t.ty < minTy) minTy = t.ty;
+    if (t.ty > maxTy) maxTy = t.ty;
+  }
+  const minLon = (minTx / n) * 360 - 180;
+  const maxLon = ((maxTx + 1) / n) * 360 - 180;
+  const latFromTy = (ty: number) => {
+    const rad = Math.PI - (2 * Math.PI * ty) / n;
+    return (180 / Math.PI) * Math.atan(Math.sinh(rad));
+  };
+  const maxLat = latFromTy(minTy);
+  const minLat = latFromTy(maxTy + 1);
+  return [minLon, minLat, maxLon, maxLat];
+}
+
+function projectPointToSegmentMeters(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): { t: number; distMeters: number } {
+  const meanLatRad = (((ay + by) / 2) * Math.PI) / 180;
+  const metersPerDegLat = 111132.954;
+  const metersPerDegLon = 111319.49 * Math.cos(meanLatRad);
+  const abx = (bx - ax) * metersPerDegLon;
+  const aby = (by - ay) * metersPerDegLat;
+  const apx = (px - ax) * metersPerDegLon;
+  const apy = (py - ay) * metersPerDegLat;
+  const abLenSq = abx * abx + aby * aby;
+  if (abLenSq <= 1e-9) {
+    return { t: 0, distMeters: Math.hypot(apx, apy) };
+  }
+  const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / abLenSq));
+  const cx = ax * 0 + t * abx;
+  const cy = ay * 0 + t * aby;
+  return { t, distMeters: Math.hypot(apx - cx, apy - cy) };
+}
+
+function insertAnchorsIntoWay(way: DecodedWay, anchors: RoadConnectionAnchor[]): DecodedWay {
+  if (way.layer !== 0 || way.points.length < 2 || anchors.length === 0) return way;
+  const existingCoords = new Set(way.points.map((p) => `${p.gx},${p.gy}`));
+  const pendingAnchors = anchors.filter((a) => !existingCoords.has(`${a.gx},${a.gy}`));
+  if (pendingAnchors.length === 0) return way;
+
+  const insertionsBySeg = new Map<number, Array<{ t: number; pt: GlobalTilePoint }>>();
+  for (const anchor of pendingAnchors) {
+    let bestSeg = -1;
+    let bestT = 0;
+    let bestDist = 4.5; // meters tolerance for T-junction split
+    for (let i = 0; i < way.points.length - 1; i++) {
+      const a = way.points[i];
+      const b = way.points[i + 1];
+      const proj = projectPointToSegmentMeters(anchor.coord[0], anchor.coord[1], a.lon, a.lat, b.lon, b.lat);
+      if (proj.distMeters <= bestDist) {
+        bestDist = proj.distMeters;
+        bestSeg = i;
+        bestT = proj.t;
+      }
+    }
+    if (bestSeg >= 0) {
+      const list = insertionsBySeg.get(bestSeg) || [];
+      list.push({
+        t: bestT,
+        pt: {
+          gx: anchor.gx,
+          gy: anchor.gy,
+          lon: anchor.coord[0],
+          lat: anchor.coord[1],
+          isClipped: false,
+        },
+      });
+      insertionsBySeg.set(bestSeg, list);
+      existingCoords.add(`${anchor.gx},${anchor.gy}`);
+    }
+  }
+
+  if (insertionsBySeg.size === 0) return way;
+  const nextPoints: GlobalTilePoint[] = [];
+  for (let i = 0; i < way.points.length; i++) {
+    nextPoints.push(way.points[i]);
+    const ins = insertionsBySeg.get(i);
+    if (ins) {
+      ins.sort((x, y) => x.t - y.t);
+      for (const item of ins) {
+        nextPoints.push(item.pt);
+      }
+    }
+  }
+  return { ...way, points: nextPoints };
 }
 
 export function haversineMeters(a: [number, number], b: [number, number]): number {
@@ -288,7 +402,11 @@ export class TileRoadGraphBuilder {
   /**
    * Builds a connected, mode-filtered, intersection-split RoadGraph across the supplied z14 tiles.
    */
-  async buildGraphForTiles(tiles: TileCoord[], mode: PlanningMode): Promise<RoadGraph> {
+  async buildGraphForTiles(
+    tiles: TileCoord[],
+    mode: PlanningMode,
+    communityRoadsOverride?: CommunityRoadRecord[]
+  ): Promise<RoadGraph> {
     const uniqueTiles = new Map<string, TileCoord>();
     for (const t of tiles) {
       uniqueTiles.set(`${t.tx},${t.ty}`, t);
@@ -297,6 +415,29 @@ export class TileRoadGraphBuilder {
     const tileWaysList = await Promise.all(
       Array.from(uniqueTiles.values()).map((t) => this.getDecodedTileWays(t.tx, t.ty))
     );
+
+    const [minLon, minLat, maxLon, maxLat] = tileBoundsLonLat(uniqueTiles.values());
+    const allCommunityRoads =
+      communityRoadsOverride ?? communityRoadsCloudService.getCachedActiveRoads();
+    const intersectingRoads = allCommunityRoads.filter(
+      (road) =>
+        road.status === 'active' &&
+        road.bounds[2] >= minLon &&
+        road.bounds[0] <= maxLon &&
+        road.bounds[3] >= minLat &&
+        road.bounds[1] <= maxLat
+    );
+    const overriddenOsmFeatureIds = new Set<string>();
+    const allAnchors: RoadConnectionAnchor[] = [];
+    for (const road of intersectingRoads) {
+      if (road.kind === 'osm-override' && road.sourceOsmWayId) {
+        const osmNumeric = road.sourceOsmWayId.replace('osm:way:', '');
+        if (osmNumeric) overriddenOsmFeatureIds.add(osmNumeric);
+      }
+      for (const anchor of road.anchors) {
+        allAnchors.push(anchor);
+      }
+    }
 
     const eligibleWays: Array<{
       way: DecodedWay;
@@ -314,7 +455,9 @@ export class TileRoadGraphBuilder {
     }> = [];
 
     for (const ways of tileWaysList) {
-      for (const way of ways) {
+      for (const rawWay of ways) {
+        if (overriddenOsmFeatureIds.has(rawWay.featureId)) continue;
+        const way = allAnchors.length > 0 ? insertAnchorsIntoWay(rawWay, allAnchors) : rawWay;
         const access = evaluateEdgeAccess(way.props, mode);
         if (!access.allowed || way.points.length < 2) continue;
         filteredWays.push({ way, access });
@@ -349,6 +492,48 @@ export class TileRoadGraphBuilder {
             }
           }
         }
+      }
+    }
+
+    for (const road of intersectingRoads) {
+      const anchorByIdx = new Map<number, RoadConnectionAnchor>();
+      for (const a of road.anchors) {
+        anchorByIdx.set(a.vertexIndex, a);
+      }
+      const rawCommunityWay: DecodedWay = {
+        featureId: `community:road:${road.id}`,
+        layer: 0,
+        props: {
+          class: road.highwayClass,
+          tracktype: road.tracktype || '',
+          surface: road.surface || '',
+          oneway: road.oneway,
+          name: road.name,
+          _communityAccess: {
+            allow4x4: road.allow4x4,
+            allowFoot: road.allowFoot,
+            allowBicycle: road.allowBicycle,
+          },
+        },
+        points: road.coordinates.map(([lon, lat], idx) => {
+          const anchor = anchorByIdx.get(idx);
+          if (anchor) {
+            return {
+              gx: anchor.gx,
+              gy: anchor.gy,
+              lon: anchor.coord[0],
+              lat: anchor.coord[1],
+              isClipped: false,
+            };
+          }
+          const { gx, gy } = lonLatToGlobalPixel(lon, lat);
+          return { gx, gy, lon, lat, isClipped: false };
+        }),
+      };
+      const way = allAnchors.length > 0 ? insertAnchorsIntoWay(rawCommunityWay, allAnchors) : rawCommunityWay;
+      const access = evaluateEdgeAccess(way.props, mode);
+      if (access.allowed && way.points.length >= 2) {
+        filteredWays.push({ way, access });
       }
     }
 

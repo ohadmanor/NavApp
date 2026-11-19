@@ -888,11 +888,17 @@ export class PMTilesSearchService {
         ? haversineKmFast(referenceCoord.lon, referenceCoord.lat, item.lon, item.lat)
         : null;
       const title = item.name
-        ? `${item.name} (${item.number})`
-        : `שביל ${item.number}`;
+        ? item.number
+          ? `${item.name} (${item.number})`
+          : item.name
+        : item.number
+          ? `שביל ${item.number}`
+          : 'שביל מסומן';
       const subtitle = item.description
-        ? `סימון שבילים #${item.number} • ${item.description.slice(0, 60)}`
-        : `סימון שבילים • שביל #${item.number}`;
+        ? `${item.number ? `סימון שבילים #${item.number}` : 'סימון שבילים'} • ${item.description.slice(0, 60)}`
+        : item.number
+          ? `סימון שבילים • שביל #${item.number}`
+          : 'סימון שבילים';
 
       out.push({
         id: item.id.startsWith('israel-trail:') ? item.id : `trail-annotation:${item.id}`,

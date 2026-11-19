@@ -1,10 +1,13 @@
 import {
   haversineMeters,
+  lonLatToGlobalPixel,
   lonLatToTile,
   TILE_EXTENT,
   TileRoadGraphBuilder,
 } from '../routing/TileRoadGraphBuilder';
 import type { DecodedWay, TileCoord } from '../routing/TileRoadGraphBuilder';
+import { communityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
+import { parseCommunityRoadWayId } from './CommunityRoadTypes';
 import {
   detectTrailColorFromProps,
   detectTrailNameFromProps,
@@ -128,6 +131,39 @@ export class HighwayWayGeometryService {
     lat: number,
     releaseId: string
   ): Promise<ResolvedTrailWay> {
+    const communityRoadId = parseCommunityRoadWayId(wayId);
+    if (communityRoadId) {
+      const road = communityRoadsCloudService
+        .getCachedRoads()
+        .find((r) => r.id === communityRoadId);
+      if (!road) {
+        throw new Error('הדרך הקהילתית שנבחרה לא נמצאה במטמון המקומי.');
+      }
+      return {
+        wayId,
+        geometry: {
+          type: 'MultiLineString',
+          coordinates: [road.coordinates.map(([rlon, rlat]) => [rlon, rlat] as [number, number])],
+        },
+        releaseId,
+        layer: 0,
+        highwayClass: road.highwayClass,
+        highwaySubclass: road.tracktype || '',
+        ...(road.name ? { detectedName: road.name } : {}),
+        fragments: [
+          {
+            featureId: wayId,
+            layer: 0,
+            props: { class: road.highwayClass, name: road.name },
+            points: road.coordinates.map(([rlon, rlat]) => {
+              const { gx, gy } = lonLatToGlobalPixel(rlon, rlat);
+              return { gx, gy, lon: rlon, lat: rlat, isClipped: false };
+            }),
+          },
+        ],
+      };
+    }
+
     const featureId = parseTrailWayId(wayId);
     if (featureId === null) throw new Error('The selected highway does not have a stable way ID.');
 

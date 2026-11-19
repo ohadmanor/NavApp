@@ -289,7 +289,6 @@ service cloud.firestore {
         data.color in ['#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#2563eb', '#7c3aed', '#334155'] &&
         (!('name' in data) || (data.name is string && data.name.size() <= 120)) &&
         data.number is string &&
-        data.number.size() > 0 &&
         data.number.size() <= 32 &&
         data.description is string &&
         data.description.size() <= 4000 &&
@@ -448,6 +447,152 @@ service cloud.firestore {
           request.resource.data.geometryJson is string &&
           request.resource.data.geometryJson.size() > 0 &&
           request.resource.data.geometryJson.size() <= 900000;
+        allow update, delete: if false;
+      }
+    }
+
+    function communityRoadPath(roadId) {
+      return /databases/$(database)/documents/community_roads/$(roadId);
+    }
+
+    function communityRoadHistoryPath(roadId, historyId) {
+      return /databases/$(database)/documents/community_roads/$(roadId)/history/$(historyId);
+    }
+
+    function validCommunityHighwayClass(cls) {
+      return cls in [
+        'motorway', 'trunk', 'primary', 'secondary', 'tertiary',
+        'unclassified', 'residential', 'living_street', 'service',
+        'track', 'path', 'footway', 'cycleway', 'bridleway',
+        'pedestrian', 'steps'
+      ];
+    }
+
+    function validCommunityRoad(data, roadId) {
+      return roadId.matches('^[A-Za-z0-9_-]{8,128}$') &&
+        data.keys().hasOnly([
+          'schemaVersion',
+          'kind',
+          'sourceOsmWayId',
+          'coordinates',
+          'bounds',
+          'highwayClass',
+          'tracktype',
+          'surface',
+          'name',
+          'description',
+          'oneway',
+          'allow4x4',
+          'allowFoot',
+          'allowBicycle',
+          'anchors',
+          'trailColor',
+          'trailNumber',
+          'trailName',
+          'status',
+          'revision',
+          'lastHistoryId',
+          'createdByUid',
+          'createdAt',
+          'updatedByUid',
+          'updatedAt',
+          'osmSync'
+        ]) &&
+        data.schemaVersion == 1 &&
+        data.kind in ['new', 'osm-override'] &&
+        (!('sourceOsmWayId' in data) || (data.sourceOsmWayId is string && data.sourceOsmWayId.matches('^osm:way:[1-9][0-9]*$'))) &&
+        data.coordinates is list &&
+        data.coordinates.size() >= 2 &&
+        data.coordinates.size() <= 2000 &&
+        data.bounds is list &&
+        data.bounds.size() == 4 &&
+        validCommunityHighwayClass(data.highwayClass) &&
+        (!('tracktype' in data) || data.tracktype in ['', 'grade1', 'grade2', 'grade3', 'grade4', 'grade5']) &&
+        (!('surface' in data) || (data.surface is string && data.surface.size() <= 40)) &&
+        data.name is string &&
+        data.name.size() <= 120 &&
+        data.description is string &&
+        data.description.size() <= 4000 &&
+        data.oneway in [-1, 0, 1] &&
+        data.allow4x4 is bool &&
+        data.allowFoot is bool &&
+        data.allowBicycle is bool &&
+        (data.allow4x4 || data.allowFoot || data.allowBicycle) &&
+        data.anchors is list &&
+        (!('trailColor' in data) || data.trailColor in ['', '#dc2626', '#2563eb', '#16a34a', '#334155']) &&
+        (!('trailNumber' in data) || (data.trailNumber is string && data.trailNumber.size() <= 32)) &&
+        (!('trailName' in data) || (data.trailName is string && data.trailName.size() <= 120)) &&
+        data.status in ['active', 'deleted'] &&
+        data.revision is int &&
+        data.revision >= 1 &&
+        data.lastHistoryId is string &&
+        data.lastHistoryId.matches('^[1-9][0-9]*-[A-Za-z0-9_-]{8,64}$') &&
+        data.createdByUid is string &&
+        data.createdByUid.size() > 0 &&
+        data.createdByUid.size() <= 128 &&
+        data.updatedByUid is string &&
+        data.updatedByUid.size() > 0 &&
+        data.updatedByUid.size() <= 128 &&
+        data.updatedAt == request.time;
+    }
+
+    function validCommunityRoadHistoryPair(roadId, nextRoad, prevRoad, expectedOp) {
+      let historyDoc = getAfter(communityRoadHistoryPath(roadId, nextRoad.lastHistoryId)).data;
+      return historyDoc.revision == nextRoad.revision &&
+        historyDoc.operation == expectedOp &&
+        historyDoc.actorUid == request.auth.uid &&
+        historyDoc.occurredAt == request.time &&
+        (prevRoad == null ? historyDoc.previous == null : historyDoc.previous is map);
+    }
+
+    match /community_roads/{roadId} {
+      allow get, list: if true;
+      allow create: if signedIn() &&
+        validCommunityRoad(request.resource.data, roadId) &&
+        request.resource.data.revision == 1 &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        request.resource.data.updatedByUid == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        validCommunityRoadHistoryPair(roadId, request.resource.data, null, 'create');
+      allow update: if signedIn() &&
+        validCommunityRoad(request.resource.data, roadId) &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.revision == resource.data.revision + 1 &&
+        request.resource.data.updatedByUid == request.auth.uid &&
+        validCommunityRoadHistoryPair(
+          roadId,
+          request.resource.data,
+          resource.data,
+          request.resource.data.status == 'deleted'
+            ? 'delete'
+            : resource.data.status == 'deleted'
+              ? 'restore'
+              : 'edit'
+        );
+      allow delete: if false;
+
+      match /history/{historyId} {
+        allow get, list: if true;
+        allow create: if signedIn() &&
+          request.resource.data.keys().hasOnly([
+            'revision',
+            'operation',
+            'actorUid',
+            'occurredAt',
+            'previous',
+            'next',
+            'reason'
+          ]) &&
+          request.resource.data.revision is int &&
+          request.resource.data.revision > 0 &&
+          request.resource.data.operation in ['create', 'edit', 'delete', 'restore', 'osm-sync'] &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.occurredAt == request.time &&
+          request.resource.data.reason is string &&
+          request.resource.data.reason.size() <= 500 &&
+          existsAfter(communityRoadPath(roadId)) &&
+          getAfter(communityRoadPath(roadId)).data.lastHistoryId == historyId;
         allow update, delete: if false;
       }
     }
