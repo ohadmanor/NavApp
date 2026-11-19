@@ -1,4 +1,4 @@
-const CACHE_NAME = 'navapp-offline-v12';
+const CACHE_NAME = 'navapp-offline-v14';
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -79,12 +79,25 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  // Never intercept byte-range requests to large .pmtiles files or cross-origin requests (e.g. Google Satellite tiles)
+  // Never intercept byte-range requests to large .pmtiles files, OAuth callbacks, or cross-origin requests (e.g. Google Satellite tiles)
   if (
     url.pathname.endsWith('.pmtiles') ||
+    url.pathname === '/osm-callback' ||
+    url.searchParams.has('code') ||
     event.request.headers.get('range') ||
     url.origin !== self.location.origin
   ) {
+    return;
+  }
+  // Network-first for /osm-sync so admin sync view always loads latest app shell when online
+  if (
+    event.request.method === 'GET' &&
+    url.origin === self.location.origin &&
+    url.pathname === '/osm-sync'
+  ) {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match('/index.html'))
+    );
     return;
   }
   // Network-first for updatable lightweight data files (POIs & search index) so updates propagate without losing offline fallback

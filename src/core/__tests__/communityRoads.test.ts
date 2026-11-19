@@ -1,6 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/NavDatabase';
-import { CommunityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
+import {
+  communityRoadsCloudService,
+  CommunityRoadsCloudService,
+} from '../firebase/CommunityRoadsCloudService';
+import {
+  buildOsmAuthorizeUrl,
+  buildOsmSyncRoadItems,
+  completeOsmOAuthCallback,
+  getStoredOsmSession,
+  syncRoadToOsmFromBrowser,
+} from '../trails/OsmBrowserSyncService';
+import {
+  extractSyncedWayFromDiffResult,
+  pushRoadToOsmApi,
+} from '../trails/osmSyncCore.js';
 import {
   COMMUNITY_HIGHWAY_CLASSES,
   computeRoadBounds,
@@ -381,4 +395,241 @@ describe('Community Roads (Add / Edit Any Highway & OSM Sync)', () => {
     expect(store.get(saved.id)?.trailColor).toBe('#334155');
     expect(service.getCachedActiveRoads().some((r) => r.id === saved.id && r.trailColor === '#334155')).toBe(true);
   });
+
+  it('extracts created vs modified way IDs from multi-way OSM diffResult and closes changeset on upload failure', async () => {
+    const multiWayDiff = `
+      <diffResult generator="OpenStreetMap server" version="0.6">
+        <node old_id="-1" new_id="90001" new_version="1"/>
+        <way old_id="444" new_id="444" new_version="7"/>
+        <way old_id="-2" new_id="88888" new_version="1"/>
+      </diffResult>
+    `;
+    expect(
+      extractSyncedWayFromDiffResult(multiWayDiff, { kind: 'new' })
+    ).toEqual({ osmWayId: 88888, osmVersion: 1 });
+    expect(
+      extractSyncedWayFromDiffResult(multiWayDiff, {
+        kind: 'osm-override',
+        sourceOsmWayId: 'osm:way:444',
+      })
+    ).toEqual({ osmWayId: 444, osmVersion: 7 });
+
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method || 'GET'} ${url}`);
+      if (url.endsWith('/changeset/create')) {
+        return new Response('777', { status: 200 });
+      }
+      if (url.endsWith('/changeset/777/upload')) {
+        return new Response('Conflict', { status: 409, statusText: 'Conflict' });
+      }
+      if (url.endsWith('/changeset/777/close')) {
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      pushRoadToOsmApi({
+        road: {
+          id: 'road-err-1',
+          kind: 'new',
+          highwayClass: 'track',
+          coordinates: [
+            [35.2, 31.77],
+            [35.202, 31.772],
+          ],
+          allow4x4: true,
+          allowFoot: true,
+          allowBicycle: true,
+          anchors: [],
+        },
+        osmApiBase: 'https://api.openstreetmap.org',
+        osmToken: 'tok-123',
+        actorUid: 'u1',
+      })
+    ).rejects.toThrow('OSM API 409');
+
+    expect(calls).toEqual([
+      'PUT https://api.openstreetmap.org/api/0.6/changeset/create',
+      'POST https://api.openstreetmap.org/api/0.6/changeset/777/upload',
+      'PUT https://api.openstreetmap.org/api/0.6/changeset/777/close',
+    ]);
+  });
+
+  it('completes browser PKCE OAuth flow and syncs road via OSM API v0.6 + Firestore markRoadOsmSynced', async () => {
+    const createMemoryStorage = (): Storage => {
+      const map = new Map<string, string>();
+      return {
+        get length() {
+          return map.size;
+        },
+        clear: () => map.clear(),
+        getItem: (k: string) => map.get(k) ?? null,
+        key: (i: number) => Array.from(map.keys())[i] ?? null,
+        removeItem: (k: string) => {
+          map.delete(k);
+        },
+        setItem: (k: string, v: string) => {
+          map.set(k, v);
+        },
+      };
+    };
+
+    const sessionStorage = createMemoryStorage();
+    const localStorage = createMemoryStorage();
+    vi.stubGlobal('window', {
+      location: { origin: 'https://navapp.example.com' },
+      sessionStorage,
+      localStorage,
+    });
+
+    const authUrlStr = await buildOsmAuthorizeUrl({
+      clientId: 'client-abc',
+      sandbox: true,
+      returnPath: '/osm-sync',
+      isPopup: true,
+    });
+    const authUrl = new URL(authUrlStr);
+    expect(authUrl.origin).toBe('https://master.apis.dev.openstreetmap.org');
+    expect(authUrl.searchParams.get('redirect_uri')).toBe('https://navapp.example.com/osm-callback');
+    expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256');
+    const state = authUrl.searchParams.get('state')!;
+
+    // Simulate OAuth callback returning in a popup/new tab where sessionStorage is empty
+    // while localStorage retains the state-keyed PKCE entry
+    sessionStorage.clear();
+
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url === 'https://master.apis.dev.openstreetmap.org/oauth2/token') {
+        return new Response(JSON.stringify({ access_token: 'osm-tok-xyz' }), { status: 200 });
+      }
+      if (url === 'https://master.apis.dev.openstreetmap.org/api/0.6/user/details') {
+        return new Response('<osm><user display_name="TrailMapper"/></osm>', { status: 200 });
+      }
+      if (url === 'https://master.apis.dev.openstreetmap.org/api/0.6/changeset/create') {
+        expect(init?.headers && (init.headers as Record<string, string>).Authorization).toBe('Bearer osm-tok-xyz');
+        return new Response('5150', { status: 200 });
+      }
+      if (url === 'https://master.apis.dev.openstreetmap.org/api/0.6/changeset/5150/upload') {
+        return new Response('<diffResult><way old_id="-1" new_id="99123" new_version="1"/></diffResult>', {
+          status: 200,
+        });
+      }
+      if (url === 'https://master.apis.dev.openstreetmap.org/api/0.6/changeset/5150/close') {
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const callbackRes = await completeOsmOAuthCallback(
+      new URLSearchParams({ code: 'auth-code-1', state })
+    );
+    expect(callbackRes.returnPath).toBe('/osm-sync');
+    expect(callbackRes.isPopup).toBe(true);
+    expect(callbackRes.session.osmUser).toBe('TrailMapper');
+    expect(getStoredOsmSession()?.accessToken).toBe('osm-tok-xyz');
+
+    await expect(
+      completeOsmOAuthCallback(new URLSearchParams({ state: 's1' }))
+    ).rejects.toThrow('פרמטר code');
+    await expect(
+      completeOsmOAuthCallback(new URLSearchParams({ code: 'c1', state: 'unknown-state' }))
+    ).rejects.toThrow('PKCE');
+
+    const road: CommunityRoadRecord = {
+      id: 'road-browser-1',
+      schemaVersion: 1,
+      kind: 'new',
+      coordinates: [
+        [35.2, 31.77],
+        [35.202, 31.772],
+      ],
+      bounds: computeRoadBounds([
+        [35.2, 31.77],
+        [35.202, 31.772],
+      ]),
+      highwayClass: 'track',
+      name: 'שביל הבשור',
+      description: '',
+      oneway: 0,
+      allow4x4: true,
+      allowFoot: true,
+      allowBicycle: true,
+      anchors: [],
+      status: 'active',
+      revision: 1,
+      lastHistoryId: '1-init',
+      createdByUid: 'u1',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedByUid: 'u1',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+
+    const items = buildOsmSyncRoadItems([road], []);
+    expect(items).toHaveLength(1);
+    expect(items[0].synced).toBe(false);
+
+    const markSpy = vi
+      .spyOn(communityRoadsCloudService, 'markRoadOsmSynced')
+      .mockResolvedValue({
+        ...road,
+        revision: 2,
+        osmSync: {
+          changesetId: 5150,
+          osmWayId: 99123,
+          osmVersion: 1,
+          syncedRevision: 2,
+          syncedAt: '2026-01-01T00:01:00Z',
+          syncedByUid: 'u1',
+          syncedByName: 'Mapper',
+          osmUsername: 'TrailMapper',
+        },
+      });
+
+    const syncRes = await syncRoadToOsmFromBrowser(items[0], {
+      osmSession: callbackRes.session,
+      user: { uid: 'u1', email: 'mapper@example.com', displayName: 'Mapper', photoURL: null },
+      sandbox: true,
+    });
+
+    expect(syncRes.ok).toBe(true);
+    expect(syncRes.changesetId).toBe(5150);
+    expect(syncRes.osmWayId).toBe(99123);
+    expect(markSpy).toHaveBeenCalledWith({
+      roadId: 'road-browser-1',
+      user: { uid: 'u1', email: 'mapper@example.com', displayName: 'Mapper', photoURL: null },
+      changesetId: 5150,
+      osmWayId: 99123,
+      osmVersion: 1,
+      osmUsername: 'TrailMapper',
+    });
+
+    const confAuthUrl = new URL(
+      await buildOsmAuthorizeUrl({
+        clientId: 'conf-client',
+        sandbox: false,
+        returnPath: '/osm-sync',
+      })
+    );
+    const confState = confAuthUrl.searchParams.get('state')!;
+    vi.stubGlobal('fetch', async () =>
+      new Response(
+        JSON.stringify({
+          error: 'invalid_client',
+          error_description:
+            'Client authentication failed due to unknown client, no client authentication included, or unsupported authentication method.',
+        }),
+        { status: 401 }
+      )
+    );
+    await expect(
+      completeOsmOAuthCallback(new URLSearchParams({ code: 'c-conf', state: confState }))
+    ).rejects.toThrow('Confidential');
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });

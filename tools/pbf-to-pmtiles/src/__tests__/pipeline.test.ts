@@ -1,11 +1,13 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadCountries, resolveCountry } from '../paths.js';
+import { REPO_ROOT, loadCountries, resolveCountry } from '../paths.js';
 import {
   extractActivitiesFromDescription,
   extractHazardFromDescription,
   generateLuaEnrichmentLookup,
 } from '../steps/pbfTagInjector.js';
+import { validatePmtilesAndBuildIndex } from '../steps/pmtilesValidator.js';
 import { toWslPath } from '../steps/tilemakerRunner.js';
 import type { ResolvedEnrichmentBundle } from '../types.js';
 
@@ -77,5 +79,30 @@ describe('pbf-to-pmtiles config & enrichment injector', () => {
 
   it('converts Windows paths to WSL /mnt/<drive> paths', () => {
     expect(toWslPath('C:\\Develop\\github\\NavApp\\tools')).toBe('/mnt/c/Develop/github/NavApp/tools');
+  });
+
+  it('extracts intermittent=yes into numeric intermittent=1 attribute in tilemaker-process.lua for water and waterway', () => {
+    const lua = fs.readFileSync(new URL('../../config/tilemaker-process.lua', import.meta.url), 'utf8');
+    expect(lua).toContain('Find("intermittent")');
+    expect(lua).toContain('intermittent == "yes"');
+    expect(lua).toContain('AttributeNumeric("intermittent", 1)');
+  });
+
+  it('validates PMTiles vector layers using pbf PbfReader without PbfCtor error', async () => {
+    const pmtilesPath = path.join(REPO_ROOT, 'data', 'Israel.osm.pmtiles');
+    if (!fs.existsSync(pmtilesPath)) return;
+    const israel = resolveCountry('israel-and-palestine');
+    const logs: string[] = [];
+    const summary = await validatePmtilesAndBuildIndex(israel, pmtilesPath, {
+      rebuildSearchIndex: false,
+      log: (_lvl, msg) => logs.push(msg),
+    });
+    expect(summary.minZoom).toBe(0);
+    expect(summary.maxZoom).toBe(14);
+    expect(summary.numAddressedTiles).toBeGreaterThan(0);
+    expect(summary.transportationFeatureCount).toBeGreaterThan(0);
+    expect(summary.layersFound).toEqual(
+      expect.arrayContaining(['transportation', 'waterway', 'place', 'poi'])
+    );
   });
 });

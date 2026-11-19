@@ -536,6 +536,71 @@ service cloud.firestore {
         data.updatedAt == request.time;
     }
 
+    function validOsmSyncMetadata(syncData, expectedRevision) {
+      return syncData is map &&
+        syncData.keys().hasOnly([
+          'changesetId',
+          'osmWayId',
+          'osmVersion',
+          'syncedRevision',
+          'syncedAt',
+          'syncedByUid',
+          'syncedByName',
+          'osmUsername'
+        ]) &&
+        syncData.keys().hasAll([
+          'changesetId',
+          'osmWayId',
+          'osmVersion',
+          'syncedRevision',
+          'syncedAt',
+          'syncedByUid',
+          'syncedByName'
+        ]) &&
+        syncData.changesetId is int &&
+        syncData.changesetId > 0 &&
+        syncData.osmWayId is int &&
+        syncData.osmWayId > 0 &&
+        syncData.osmVersion is int &&
+        syncData.osmVersion > 0 &&
+        syncData.syncedRevision is int &&
+        syncData.syncedRevision == expectedRevision &&
+        syncData.syncedAt == request.time &&
+        syncData.syncedByUid == request.auth.uid &&
+        syncData.syncedByName is string &&
+        syncData.syncedByName.size() > 0 &&
+        syncData.syncedByName.size() <= 200 &&
+        (!('osmUsername' in syncData) || (syncData.osmUsername is string && syncData.osmUsername.size() <= 120));
+    }
+
+    function unchangedCommunityRoadContent(next, prev) {
+      return next.kind == prev.kind &&
+        next.get('sourceOsmWayId', '') == prev.get('sourceOsmWayId', '') &&
+        next.coordinates == prev.coordinates &&
+        next.bounds == prev.bounds &&
+        next.highwayClass == prev.highwayClass &&
+        next.get('tracktype', '') == prev.get('tracktype', '') &&
+        next.get('surface', '') == prev.get('surface', '') &&
+        next.name == prev.name &&
+        next.description == prev.description &&
+        next.oneway == prev.oneway &&
+        next.allow4x4 == prev.allow4x4 &&
+        next.allowFoot == prev.allowFoot &&
+        next.allowBicycle == prev.allowBicycle &&
+        next.anchors == prev.anchors &&
+        next.get('trailColor', '') == prev.get('trailColor', '') &&
+        next.get('trailNumber', '') == prev.get('trailNumber', '') &&
+        next.get('trailName', '') == prev.get('trailName', '') &&
+        next.status == 'active' &&
+        prev.status == 'active';
+    }
+
+    function isOsmSyncUpdate(next, prev) {
+      return 'osmSync' in next &&
+        validOsmSyncMetadata(next.osmSync, next.revision) &&
+        unchangedCommunityRoadContent(next, prev);
+    }
+
     function validCommunityRoadHistoryPair(roadId, nextRoad, prevRoad, expectedOp) {
       let historyDoc = getAfter(communityRoadHistoryPath(roadId, nextRoad.lastHistoryId)).data;
       return historyDoc.revision == nextRoad.revision &&
@@ -545,31 +610,36 @@ service cloud.firestore {
         (prevRoad == null ? historyDoc.previous == null : historyDoc.previous is map);
     }
 
+    function validCommunityRoadUpdate(roadId, next, prev) {
+      let isSync = isOsmSyncUpdate(next, prev);
+      let expectedOp = isSync
+        ? 'osm-sync'
+        : next.status == 'deleted'
+          ? 'delete'
+          : prev.status == 'deleted'
+            ? 'restore'
+            : 'edit';
+      return validCommunityRoad(next, roadId) &&
+        next.createdByUid == prev.createdByUid &&
+        next.createdAt == prev.createdAt &&
+        next.revision == prev.revision + 1 &&
+        next.updatedByUid == request.auth.uid &&
+        (isSync || !('osmSync' in next) || next.osmSync == prev.get('osmSync', null)) &&
+        validCommunityRoadHistoryPair(roadId, next, prev, expectedOp);
+    }
+
     match /community_roads/{roadId} {
       allow get, list: if true;
       allow create: if signedIn() &&
         validCommunityRoad(request.resource.data, roadId) &&
+        !('osmSync' in request.resource.data) &&
         request.resource.data.revision == 1 &&
         request.resource.data.createdByUid == request.auth.uid &&
         request.resource.data.updatedByUid == request.auth.uid &&
         request.resource.data.createdAt == request.time &&
         validCommunityRoadHistoryPair(roadId, request.resource.data, null, 'create');
       allow update: if signedIn() &&
-        validCommunityRoad(request.resource.data, roadId) &&
-        request.resource.data.createdByUid == resource.data.createdByUid &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.revision == resource.data.revision + 1 &&
-        request.resource.data.updatedByUid == request.auth.uid &&
-        validCommunityRoadHistoryPair(
-          roadId,
-          request.resource.data,
-          resource.data,
-          request.resource.data.status == 'deleted'
-            ? 'delete'
-            : resource.data.status == 'deleted'
-              ? 'restore'
-              : 'edit'
-        );
+        validCommunityRoadUpdate(roadId, request.resource.data, resource.data);
       allow delete: if false;
 
       match /history/{historyId} {

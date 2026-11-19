@@ -366,12 +366,14 @@ export class CommunityRoadsCloudService {
       const existingSnap = await tx.get(roadRef);
       let prevRecord: CommunityRoadRecord | null = null;
       let rawCreatedAt: unknown = null;
+      let rawOsmSync: unknown = null;
       let operation: CommunityRoadOperation = 'create';
       let revision = 1;
 
       if (existingSnap.exists()) {
         const rawData = existingSnap.data();
         rawCreatedAt = rawData.createdAt ?? null;
+        rawOsmSync = rawData.osmSync ?? null;
         prevRecord = normalizeCommunityRoad(localRecord.id, rawData);
         revision = prevRecord.revision + 1;
         operation =
@@ -405,6 +407,7 @@ export class CommunityRoadsCloudService {
       tx.set(roadRef, {
         schemaVersion: 1,
         ...encodedNext,
+        ...(rawOsmSync ? { osmSync: rawOsmSync } : {}),
         revision,
         lastHistoryId: historyId,
         createdByUid: prevRecord ? prevRecord.createdByUid : user.uid,
@@ -425,6 +428,7 @@ export class CommunityRoadsCloudService {
       updatedByUid: user.uid,
       cloudSyncStatus: 'synced',
       cloudSyncError: undefined,
+      ...(txResult.prevRecord?.osmSync ? { osmSync: txResult.prevRecord.osmSync } : {}),
     };
 
     await db.communityRoads.put(syncedRecord).catch(() => {});
@@ -658,6 +662,101 @@ export class CommunityRoadsCloudService {
     }
 
     return deletedLocal;
+  }
+
+  /**
+   * Records a completed OSM changeset upload on a community road document via an immutable
+   * `osm-sync` history transaction, bumping revision and setting `syncedRevision = revision`.
+   */
+  async markRoadOsmSynced(params: {
+    roadId: string;
+    user: NavUser;
+    changesetId: number;
+    osmWayId: number;
+    osmVersion: number;
+    osmUsername?: string;
+  }): Promise<CommunityRoadRecord> {
+    const firestore = requireFirestore();
+    const roadRef = doc(firestore, COMMUNITY_ROADS_COLLECTION, params.roadId);
+    const actorName = params.user.displayName || params.user.email || params.user.uid;
+    const nowIso = new Date().toISOString();
+
+    const updatedRecord = await runTransaction(firestore, async (tx) => {
+      const existingSnap = await tx.get(roadRef);
+      if (!existingSnap.exists()) {
+        throw new CommunityRoadConflictError('הדרך לא נמצאה ב-Firestore.');
+      }
+      const prevRecord = normalizeCommunityRoad(params.roadId, existingSnap.data());
+      if (prevRecord.status !== 'active') {
+        throw new CommunityRoadConflictError('לא ניתן לסנכרן דרך שנמחקה.');
+      }
+      const nextRevision = prevRecord.revision + 1;
+      const historyId = `${nextRevision}-${randomId()}`;
+      const historyRef = doc(
+        firestore,
+        COMMUNITY_ROADS_COLLECTION,
+        params.roadId,
+        'history',
+        historyId
+      );
+      const encodedSnap = encodeSnapshotForFirestore(toSnapshot(prevRecord));
+      const osmSyncPayload = {
+        changesetId: params.changesetId,
+        osmWayId: params.osmWayId,
+        osmVersion: params.osmVersion,
+        syncedRevision: nextRevision,
+        syncedAt: serverTimestamp(),
+        syncedByUid: params.user.uid,
+        syncedByName: actorName,
+        ...(params.osmUsername ? { osmUsername: params.osmUsername } : {}),
+      };
+
+      tx.set(historyRef, {
+        revision: nextRevision,
+        operation: 'osm-sync',
+        actorUid: params.user.uid,
+        occurredAt: serverTimestamp(),
+        previous: encodedSnap,
+        next: encodedSnap,
+        reason: `סנכרון ל-OSM (changeset #${params.changesetId}, way #${params.osmWayId})`,
+      });
+
+      tx.update(roadRef, {
+        revision: nextRevision,
+        lastHistoryId: historyId,
+        updatedByUid: params.user.uid,
+        updatedAt: serverTimestamp(),
+        osmSync: osmSyncPayload,
+      });
+
+      const nextRecord: CommunityRoadRecord = {
+        ...prevRecord,
+        revision: nextRevision,
+        lastHistoryId: historyId,
+        updatedByUid: params.user.uid,
+        updatedAt: nowIso,
+        cloudSyncStatus: 'synced',
+        cloudSyncError: undefined,
+        osmSync: {
+          changesetId: params.changesetId,
+          osmWayId: params.osmWayId,
+          osmVersion: params.osmVersion,
+          syncedRevision: nextRevision,
+          syncedAt: nowIso,
+          syncedByUid: params.user.uid,
+          syncedByName: actorName,
+          ...(params.osmUsername ? { osmUsername: params.osmUsername } : {}),
+        },
+      };
+      return nextRecord;
+    });
+
+    await db.communityRoads.put(updatedRecord).catch(() => {});
+    this.setMemoryCache([
+      updatedRecord,
+      ...this.memoryCache.filter((r) => r.id !== updatedRecord.id),
+    ]);
+    return updatedRecord;
   }
 
   async loadHistoryPage(roadId: string, afterRevision?: number | null): Promise<CommunityRoadHistoryPage> {

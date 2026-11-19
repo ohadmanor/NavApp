@@ -265,9 +265,42 @@
     "source": "israel-osm",
     "source-layer": "water",
     "filter": [
-      "!=",
-      "intermittent",
-      1
+      "!",
+      [
+        "any",
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          1
+        ],
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          "yes"
+        ],
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          "1"
+        ],
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          true
+        ]
+      ]
     ],
     "paint": {
       "fill-color": "#A6CFEF",
@@ -293,9 +326,39 @@
     "source": "israel-osm",
     "source-layer": "water",
     "filter": [
-      "==",
-      "intermittent",
-      1
+      "any",
+      [
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        1
+      ],
+      [
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        "yes"
+      ],
+      [
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        "1"
+      ],
+      [
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        true
+      ]
     ],
     "paint": {
       "fill-pattern": "intermittent_pattern",
@@ -5189,18 +5252,44 @@
     "source": "israel-osm",
     "source-layer": "waterway",
     "filter": [
-      "all",
+      "any",
       [
         "==",
-        "intermittent",
+        [
+          "get",
+          "intermittent"
+        ],
         1
       ],
       [
-        "!=",
-        "class",
-        "ditch"
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        "yes"
+      ],
+      [
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        "1"
+      ],
+      [
+        "==",
+        [
+          "get",
+          "intermittent"
+        ],
+        true
       ]
     ],
+    "layout": {
+      "line-cap": "butt",
+      "line-join": "round"
+    },
     "paint": {
       "line-color": "#8EBDF0",
       "line-width": {
@@ -5218,7 +5307,7 @@
       },
       "line-dasharray": [
         4,
-        1
+        2
       ]
     }
   },
@@ -5231,16 +5320,41 @@
     "source": "israel-osm",
     "source-layer": "waterway",
     "filter": [
-      "all",
+      "!",
       [
-        "!=",
-        "intermittent",
-        1
-      ],
-      [
-        "!=",
-        "class",
-        "ditch"
+        "any",
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          1
+        ],
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          "yes"
+        ],
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          "1"
+        ],
+        [
+          "==",
+          [
+            "get",
+            "intermittent"
+          ],
+          true
+        ]
       ]
     ],
     "paint": {

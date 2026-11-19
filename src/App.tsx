@@ -27,6 +27,7 @@ import {
   Search,
   FolderTree,
   Radio,
+  UploadCloud,
   X,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
@@ -191,6 +192,12 @@ const CommunityRoadEditor = React.lazy(() =>
     default: m.CommunityRoadEditor,
   }))
 );
+const OsmSyncPanel = React.lazy(() =>
+  import('./components/map/OsmSyncPanel').then((m) => ({
+    default: m.OsmSyncPanel,
+  }))
+);
+import { completeOsmOAuthCallback } from './core/trails/OsmBrowserSyncService';
 import type { CommunityRoadEditDraftInput } from './components/map/CommunityRoadEditor';
 import {
   UserStateSyncService,
@@ -442,6 +449,22 @@ export const App: React.FC = () => {
   const [selectedRoadVertexIndex, setSelectedRoadVertexIndex] = useState<number | null>(null);
   const [roadSnapPreview, setRoadSnapPreview] = useState<RoadSnapCandidate | null>(null);
   const [selectedTrailAnnotationId, setSelectedTrailAnnotationId] = useState<string | null>(null);
+  const [isOsmSyncOpen, setIsOsmSyncOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const p = window.location.pathname;
+    const sp = new URLSearchParams(window.location.search);
+    return p === '/osm-sync' || p === '/osm-callback' || sp.get('osmSync') === '1';
+  });
+  const [isOsmSyncFullPage, setIsOsmSyncFullPage] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const p = window.location.pathname;
+    return p === '/osm-sync' || p === '/osm-callback';
+  });
+  const [isHandlingOsmCallback, setIsHandlingOsmCallback] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.location.pathname === '/osm-callback';
+  });
+  const [osmCallbackError, setOsmCallbackError] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<OutdoorLayerVisibility>(
     () => initialConfig.visibility
   );
@@ -950,12 +973,55 @@ export const App: React.FC = () => {
   );
 
   useEffect(() => {
+    if (typeof window === 'undefined' || window.location.pathname !== '/osm-callback') {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    let cancelled = false;
+    void completeOsmOAuthCallback(params)
+      .then(({ returnPath, isPopup }) => {
+        if (cancelled) return;
+        if (isPopup && typeof window.close === 'function') {
+          window.close();
+        }
+        const target = returnPath.startsWith('/') ? returnPath : '/osm-sync';
+        window.history.replaceState({}, '', target);
+        setIsOsmSyncFullPage(target === '/osm-sync');
+        setIsOsmSyncOpen(true);
+        setOsmCallbackError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        window.history.replaceState({}, '', '/osm-sync');
+        setIsOsmSyncFullPage(true);
+        setIsOsmSyncOpen(true);
+        setOsmCallbackError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setIsHandlingOsmCallback(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const unsub = communityRoadsCloudService.subscribe((roads) => {
       setCommunityRoads(roads);
     });
     void communityRoadsCloudService.loadCommunityRoads();
     return unsub;
   }, []);
+
+  const pendingOsmSyncCount = useMemo(
+    () =>
+      communityRoads.filter(
+        (road) =>
+          road.status === 'active' &&
+          !(road.osmSync && Number(road.osmSync.syncedRevision) >= Number(road.revision))
+      ).length,
+    [communityRoads]
+  );
 
   useEffect(() => {
     if (currentUser && isOnline) {
@@ -7310,6 +7376,18 @@ export const App: React.FC = () => {
                   {tab.label}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOsmSyncFullPage(false);
+                  setIsOsmSyncOpen(true);
+                }}
+                className={`shrink-0 rounded-lg border px-2 py-1.5 text-[11px] font-bold flex items-center gap-1 transition-colors ${t.pillBtn}`}
+                title="סנכרון דרכים קהילתיות ל-OpenStreetMap"
+              >
+                <UploadCloud className="h-3.5 w-3.5 text-sky-500" />
+                <span>OSM{pendingOsmSyncCount > 0 ? ` (${pendingOsmSyncCount})` : ''}</span>
+              </button>
             </div>
           )}
 
@@ -9124,6 +9202,43 @@ export const App: React.FC = () => {
           onNavigateToPeer={handleNavigateToPeer}
           onClose={() => setSelectedLivePeer(null)}
         />
+      )}
+
+      {/* OpenStreetMap Community Roads Sync UI (/osm-sync & /osm-callback & in-app modal) */}
+      {isHandlingOsmCallback ? (
+        <div
+          dir="rtl"
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/90 text-slate-100 text-sm font-semibold"
+        >
+          משלים התחברות ל-OpenStreetMap...
+        </div>
+      ) : (
+        isOsmSyncOpen && (
+          <Suspense fallback={null}>
+            <OsmSyncPanel
+              theme={theme}
+              currentUser={currentUser}
+              firebaseAvailable={AuthService.isAvailable()}
+              isAuthBusy={isAuthBusy}
+              isOnline={isOnline}
+              fullPage={isOsmSyncFullPage}
+              initialCallbackError={osmCallbackError}
+              onSignInGoogle={handleSignInGoogle}
+              onClose={() => {
+                setIsOsmSyncOpen(false);
+                setIsOsmSyncFullPage(false);
+                setOsmCallbackError(null);
+                if (typeof window !== 'undefined') {
+                  const p = window.location.pathname;
+                  const sp = new URLSearchParams(window.location.search);
+                  if (p === '/osm-sync' || p === '/osm-callback' || sp.has('osmSync')) {
+                    window.history.replaceState({}, '', '/');
+                  }
+                }
+              }}
+            />
+          </Suspense>
+        )
       )}
     </div>
   );

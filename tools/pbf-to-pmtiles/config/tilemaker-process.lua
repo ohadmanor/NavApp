@@ -223,15 +223,19 @@ function way_function()
   end
 
   -- 4. Water & Waterways
+  local intermittent = string.lower(Find("intermittent"))
+  local isIntermittent = (intermittent == "yes" or intermittent == "1" or intermittent == "true")
   if natural == "water" or waterway == "riverbank" then
     if IsClosed() then
       Layer("water", true)
       Attribute("class", Find("water") ~= "" and Find("water") or "lake")
+      if isIntermittent then AttributeNumeric("intermittent", 1) end
       MinZoom(6)
     end
   elseif waterway ~= "" then
     Layer("waterway", false)
     Attribute("class", waterway)
+    if isIntermittent then AttributeNumeric("intermittent", 1) end
     setNameAttrs()
     MinZoom(waterway == "river" and 8 or 12)
   end

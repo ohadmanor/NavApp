@@ -691,6 +691,77 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(matches('path-cycleway', footwayLine)).toBe(false);
   });
 
+  it('renders all waterways with intermittent=yes (or 1/true) as dashed lines across IHM, NMS, and GovMap styles', () => {
+    const require = createRequire(import.meta.url);
+    const styleSpec = require('@maplibre/maplibre-gl-style-spec');
+
+    for (const mapStyle of ['ihm', 'nms', 'govmap'] as const) {
+      for (const theme of ['topo-day', 'topo-dark'] as const) {
+        const style = buildIsraelOutdoorStyle({
+          osmProtocolUrl: 'pmtiles://israel-osm',
+          demProtocolUrl: 'pmtiles://israel-dem',
+          contourProtocolUrl: 'dem-contour://{z}/{x}/{y}',
+          visibility: DEFAULT_LAYER_VISIBILITY,
+          theme,
+          mapStyle,
+        });
+
+        expect(styleSpec.validateStyleMin(style)).toEqual([]);
+
+        const intermittentLine = style.layers.find((l) => l.id === 'water-line-intermittent') as any;
+        const solidLine = style.layers.find((l) => l.id === 'water-line') as any;
+        const intermittentArea = style.layers.find((l) => l.id === 'water-area-intermittent') as any;
+        const solidArea = style.layers.find((l) => l.id === 'water-area') as any;
+
+        expect(intermittentLine).toBeDefined();
+        expect(solidLine).toBeDefined();
+        expect(Array.isArray(intermittentLine.paint?.['line-dasharray'])).toBe(true);
+        expect(intermittentLine.paint['line-dasharray'].length).toBeGreaterThanOrEqual(2);
+        expect(intermittentLine.layout?.['line-cap']).toBe('butt');
+        expect(solidLine.paint?.['line-dasharray']).toBeUndefined();
+
+        const matchDashed = styleSpec.featureFilter(intermittentLine.filter);
+        const matchSolid = styleSpec.featureFilter(solidLine.filter);
+        const matchDashedArea = styleSpec.featureFilter(intermittentArea.filter);
+        const matchSolidArea = styleSpec.featureFilter(solidArea.filter);
+
+        for (const cls of ['stream', 'river', 'canal', 'drain', 'ditch', 'drystream']) {
+          for (const intermittentVal of ['yes', 1, '1', true]) {
+            const feat = { type: 2, properties: { class: cls, intermittent: intermittentVal } };
+            expect(
+              matchDashed.filter({ zoom: 14 }, feat),
+              `Expected ${mapStyle}/${theme} ${cls} intermittent=${String(intermittentVal)} to match water-line-intermittent`
+            ).toBe(true);
+            expect(
+              matchSolid.filter({ zoom: 14 }, feat),
+              `Expected ${mapStyle}/${theme} ${cls} intermittent=${String(intermittentVal)} NOT to match solid water-line`
+            ).toBe(false);
+          }
+
+          for (const nonIntermittentProps of [
+            { class: cls },
+            { class: cls, intermittent: 'no' },
+            { class: cls, intermittent: 0 },
+            { class: cls, intermittent: false },
+          ]) {
+            const feat = { type: 2, properties: nonIntermittentProps };
+            expect(matchDashed.filter({ zoom: 14 }, feat)).toBe(false);
+            expect(matchSolid.filter({ zoom: 14 }, feat)).toBe(true);
+          }
+        }
+
+        for (const intermittentVal of ['yes', 1, '1', true]) {
+          const areaFeat = { type: 3, properties: { class: 'lake', intermittent: intermittentVal } };
+          expect(matchDashedArea.filter({ zoom: 12 }, areaFeat)).toBe(true);
+          expect(matchSolidArea.filter({ zoom: 12 }, areaFeat)).toBe(false);
+        }
+        const perennialArea = { type: 3, properties: { class: 'lake' } };
+        expect(matchDashedArea.filter({ zoom: 12 }, perennialArea)).toBe(false);
+        expect(matchSolidArea.filter({ zoom: 12 }, perennialArea)).toBe(true);
+      }
+    }
+  });
+
   it('isolates contour ArrayBuffers against worker transfer detachment and provides valid empty Terrarium PNGs', async () => {
     const sharedPayload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
     const fakeManager: any = {

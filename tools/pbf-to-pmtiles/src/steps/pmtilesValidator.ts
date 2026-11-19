@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { VectorTile } from '@mapbox/vector-tile';
-import * as PbfModule from 'pbf';
+import { PbfReader } from 'pbf';
 import { PMTiles, type RangeResponse, type Source } from 'pmtiles';
 import { REPO_ROOT, formatBytes } from '../paths.js';
 import type { CountrySpec, LogLevel, ValidationSummary } from '../types.js';
@@ -86,8 +86,7 @@ export async function validatePmtilesAndBuildIndex(
         if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
           bytes = zlib.gunzipSync(bytes);
         }
-        const PbfCtor = (PbfModule as unknown as { default: new (buf: Uint8Array) => unknown }).default || (PbfModule as unknown as new (buf: Uint8Array) => unknown);
-        const vt = new VectorTile(new PbfCtor(bytes) as ConstructorParameters<typeof VectorTile>[0]);
+        const vt = new VectorTile(new PbfReader(bytes));
         for (const [name, layer] of Object.entries(vt.layers)) {
           layersSet.add(name);
           if (name === 'park') parkFeatureCount += layer.length;
