@@ -19,6 +19,7 @@
   - [`poi-refactoring-prds.md`](./poi-refactoring-prds.md) — Product Requirements Documents (PRDs) for strict 6-category POI taxonomy, text-integrated classifier, POI edit/delete lifecycle, and Private/Shared POIs & Global Promotion (PRD-4).
   - [`poi-refactoring-implementation-plan.md`](./poi-refactoring-implementation-plan.md) — Implementation plan for POI refactoring across Web, Search, Cloud Sync, Android Auto, and Phase 6 Private/Shared POIs.
   - [`architecture-diagram.html`](./architecture-diagram.html) — Interactive 5-layer system architecture & offline data-flow diagram.
+  - [`data-workflow-diagram.html`](./data-workflow-diagram.html) — Per-file online &amp; offline data workflow diagram (Firebase Storage DEM, Firebase Hosting data, OPFS/Native, Cache API, and DevOps scripts).
   - [`poi-workflow-diagram.html`](./poi-workflow-diagram.html) — POI lifecycle diagram covering Display, Add/Update, Edit, and Delete across Hosting, Firestore, IndexedDB, and MapLibre.
   - [`navapp-ui-mockup.html`](./navapp-ui-mockup.html) — Interactive Web Desktop & Mobile UI/UX mockup synced to the shipped application.
   - [`osm-zoom-levels.md`](./osm-zoom-levels.md) — Vector tile & contour zoom-level specification.

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { Suspense, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import * as turf from '@turf/turf';
@@ -115,12 +115,28 @@ import {
 } from './core/pois/poiPermissions';
 import { PoiInspectorSheet } from './components/pois/PoiInspectorSheet';
 import { AddPoiPanel } from './components/pois/AddPoiPanel';
-import { SharePoiModal } from './components/pois/SharePoiModal';
 import { PoiCategoryIcon } from './components/pois/PoiCategoryIcon';
-import { MapStorageModal } from './components/maps-manager/MapStorageModal';
-import { ElevationProfileDrawer } from './components/navigation/ElevationProfileDrawer';
-import { PlanningTrailDbDrawer } from './components/navigation/PlanningTrailDbDrawer';
-import { SendToPlanningDbModal } from './components/navigation/SendToPlanningDbModal';
+const SharePoiModal = React.lazy(() =>
+  import('./components/pois/SharePoiModal').then((m) => ({ default: m.SharePoiModal }))
+);
+const MapStorageModal = React.lazy(() =>
+  import('./components/maps-manager/MapStorageModal').then((m) => ({ default: m.MapStorageModal }))
+);
+const ElevationProfileDrawer = React.lazy(() =>
+  import('./components/navigation/ElevationProfileDrawer').then((m) => ({
+    default: m.ElevationProfileDrawer,
+  }))
+);
+const PlanningTrailDbDrawer = React.lazy(() =>
+  import('./components/navigation/PlanningTrailDbDrawer').then((m) => ({
+    default: m.PlanningTrailDbDrawer,
+  }))
+);
+const SendToPlanningDbModal = React.lazy(() =>
+  import('./components/navigation/SendToPlanningDbModal').then((m) => ({
+    default: m.SendToPlanningDbModal,
+  }))
+);
 import { PlanningTrailManager } from './core/navigation/PlanningTrailManager';
 import {
   ensureZofimRoutesSeeded,
@@ -134,8 +150,14 @@ import type {
   PlanningFolderRecord,
   PlanningTrailRecord,
 } from './core/db/NavDatabase';
-import { ShareRouteModal } from './components/navigation/ShareRouteModal';
-import { ShareLocationModal } from './components/sharing/ShareLocationModal';
+const ShareRouteModal = React.lazy(() =>
+  import('./components/navigation/ShareRouteModal').then((m) => ({ default: m.ShareRouteModal }))
+);
+const ShareLocationModal = React.lazy(() =>
+  import('./components/sharing/ShareLocationModal').then((m) => ({
+    default: m.ShareLocationModal,
+  }))
+);
 import { PeerLocationInspector } from './components/sharing/PeerLocationInspector';
 import {
   LiveLocationCloudService,
@@ -158,7 +180,11 @@ import {
 } from './components/map/UserIconPickerSheet';
 import { SearchBar } from './components/search/SearchBar';
 import { GoogleAccountButton } from './components/auth/GoogleAccountButton';
-import { TrailAnnotationsPanel } from './components/map/TrailAnnotationsPanel';
+const TrailAnnotationsPanel = React.lazy(() =>
+  import('./components/map/TrailAnnotationsPanel').then((m) => ({
+    default: m.TrailAnnotationsPanel,
+  }))
+);
 import {
   UserStateSyncService,
   type MergeUserStateResult,
@@ -3642,21 +3668,31 @@ export const App: React.FC = () => {
     });
   }, [activeRoute, routes, pois, isNavigatingRoute, isFreeNavigation, theme, visibility]);
 
-  // Initialize unified PMTiles full-map search index & keep synced with active OSM archive
+  // Initialize unified PMTiles full-map search index lazily (on search focus or after map settles)
   useEffect(() => {
     const unsubStatus = pmtilesSearchService.subscribeStatus((st) => {
       setSearchStatus(st);
     });
-    void pmtilesSearchService.ensureInitialized();
     return () => {
       unsubStatus();
     };
   }, []);
 
   useEffect(() => {
-    if (!osmInfo) return;
-    void pmtilesSearchService.syncWithOsmArchive(osmInfo);
-  }, [osmInfo]);
+    if (isSearchFocused || isNavSearchOpen) {
+      void pmtilesSearchService.ensureInitialized().then(() => {
+        if (osmInfo) void pmtilesSearchService.syncWithOsmArchive(osmInfo);
+      });
+      return;
+    }
+    if (!isMapReady) return;
+    const timer = window.setTimeout(() => {
+      void pmtilesSearchService.ensureInitialized().then(() => {
+        if (osmInfo) void pmtilesSearchService.syncWithOsmArchive(osmInfo);
+      });
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [isSearchFocused, isNavSearchOpen, isMapReady, osmInfo]);
 
   // Close search dropdown when tapping outside the search bar & panel
   useEffect(() => {
@@ -6299,30 +6335,32 @@ export const App: React.FC = () => {
             isMobile ? 'bottom-20 left-2 right-2' : 'top-16 right-3 w-[380px] max-w-[calc(100vw-24px)]'
           }`}
         >
-          <TrailAnnotationsPanel
-            isMarkingMode={isTrailMarkingMode}
-            theme={theme}
-            currentUser={currentUser}
-            firebaseAvailable={AuthService.isAvailable()}
-            isOnline={isOnline}
-            releaseId={getTrailMapReleaseId(osmInfo)}
-            showTrailOverlay={showTrailOverlay}
-            onToggleTrailOverlay={() => setShowTrailOverlay((value) => !value)}
-            wayCandidates={trailWayCandidates}
-            onResolveCandidate={(candidate) => void resolveTrailCandidate(candidate)}
-            selectedMapWay={selectedTrailWay}
-            onConsumeSelectedWay={consumeSelectedTrailWay}
-            selectedAnnotationId={selectedTrailAnnotationId}
-            onConsumeSelectedAnnotation={consumeSelectedTrailAnnotation}
-            onAddWaysModeChange={handleTrailAddWaysModeChange}
-            onGeoJSONChange={setTrailOverlayGeoJSON}
-            onSearchItemsChange={setTrailSearchItems}
-            onNotify={showToast}
-            onClose={() => {
-              setSelectedTrailWay(null);
-              setTrailWayCandidates([]);
-            }}
-          />
+          <Suspense fallback={null}>
+            <TrailAnnotationsPanel
+              isMarkingMode={isTrailMarkingMode}
+              theme={theme}
+              currentUser={currentUser}
+              firebaseAvailable={AuthService.isAvailable()}
+              isOnline={isOnline}
+              releaseId={getTrailMapReleaseId(osmInfo)}
+              showTrailOverlay={showTrailOverlay}
+              onToggleTrailOverlay={() => setShowTrailOverlay((value) => !value)}
+              wayCandidates={trailWayCandidates}
+              onResolveCandidate={(candidate) => void resolveTrailCandidate(candidate)}
+              selectedMapWay={selectedTrailWay}
+              onConsumeSelectedWay={consumeSelectedTrailWay}
+              selectedAnnotationId={selectedTrailAnnotationId}
+              onConsumeSelectedAnnotation={consumeSelectedTrailAnnotation}
+              onAddWaysModeChange={handleTrailAddWaysModeChange}
+              onGeoJSONChange={setTrailOverlayGeoJSON}
+              onSearchItemsChange={setTrailSearchItems}
+              onNotify={showToast}
+              onClose={() => {
+                setSelectedTrailWay(null);
+                setTrailWayCandidates([]);
+              }}
+            />
+          </Suspense>
         </div>
 
         {/* ================= DESKTOP / WEB FLOATING CHROME ================= */}
@@ -6412,24 +6450,27 @@ export const App: React.FC = () => {
                   )}
 
                   {desktopDrawer === 'planning-db' && currentUser && (
-                    <PlanningTrailDbDrawer
-                      theme={theme}
-                      folders={planningFolders}
-                      trails={planningTrails}
-                      selectedTrailId={selectedPlanningTrailId}
-                      onSelectTrail={handleSelectPlanningTrail}
-                      onCreateFolder={handleCreatePlanningFolder}
-                      onRenameFolder={handleRenamePlanningFolder}
-                      onDeleteFolder={handleDeletePlanningFolder}
-                      onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
-                      onEditTrailOnMap={handleEditPlanningTrailOnMap}
-                      onDeleteTrail={handleDeletePlanningTrail}
-                      onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
-                    />
+                    <Suspense fallback={null}>
+                      <PlanningTrailDbDrawer
+                        theme={theme}
+                        folders={planningFolders}
+                        trails={planningTrails}
+                        selectedTrailId={selectedPlanningTrailId}
+                        onSelectTrail={handleSelectPlanningTrail}
+                        onCreateFolder={handleCreatePlanningFolder}
+                        onRenameFolder={handleRenamePlanningFolder}
+                        onDeleteFolder={handleDeletePlanningFolder}
+                        onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                        onEditTrailOnMap={handleEditPlanningTrailOnMap}
+                        onDeleteTrail={handleDeletePlanningTrail}
+                        onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
+                      />
+                    </Suspense>
                   )}
 
                   {desktopDrawer === 'routes' && (
-                    <ElevationProfileDrawer
+                    <Suspense fallback={null}>
+                      <ElevationProfileDrawer
                       route={activeRoute}
                       routes={routes}
                       pois={pois}
@@ -6475,6 +6516,7 @@ export const App: React.FC = () => {
                         fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
                       }}
                     />
+                    </Suspense>
                   )}
 
                   {desktopDrawer === 'plan-route' && (
@@ -7456,26 +7498,29 @@ export const App: React.FC = () => {
               )
             ) : mobileTab === 'planning-db' && currentUser ? (
               <div className="max-h-[65vh] overflow-y-auto">
-                <PlanningTrailDbDrawer
-                  theme={theme}
-                  isMobile
-                  folders={planningFolders}
-                  trails={planningTrails}
-                  selectedTrailId={selectedPlanningTrailId}
-                  onSelectTrail={handleSelectPlanningTrail}
-                  onCreateFolder={handleCreatePlanningFolder}
-                  onRenameFolder={handleRenamePlanningFolder}
-                  onDeleteFolder={handleDeletePlanningFolder}
-                  onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
-                  onEditTrailOnMap={handleEditPlanningTrailOnMap}
-                  onDeleteTrail={handleDeletePlanningTrail}
-                  onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
-                  onClose={() => setMobileTab('explore')}
-                />
+                <Suspense fallback={null}>
+                  <PlanningTrailDbDrawer
+                    theme={theme}
+                    isMobile
+                    folders={planningFolders}
+                    trails={planningTrails}
+                    selectedTrailId={selectedPlanningTrailId}
+                    onSelectTrail={handleSelectPlanningTrail}
+                    onCreateFolder={handleCreatePlanningFolder}
+                    onRenameFolder={handleRenamePlanningFolder}
+                    onDeleteFolder={handleDeletePlanningFolder}
+                    onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                    onEditTrailOnMap={handleEditPlanningTrailOnMap}
+                    onDeleteTrail={handleDeletePlanningTrail}
+                    onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
+                    onClose={() => setMobileTab('explore')}
+                  />
+                </Suspense>
               </div>
             ) : mobileTab === 'routes' ? (
               <div className="max-h-[60vh] overflow-y-auto">
-                <ElevationProfileDrawer
+                <Suspense fallback={null}>
+                  <ElevationProfileDrawer
                   route={activeRoute}
                   routes={routes}
                   pois={pois}
@@ -7528,6 +7573,7 @@ export const App: React.FC = () => {
                     fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
                   }}
                 />
+                </Suspense>
               </div>
             ) : mobileTab === 'record' ? (
               <div className="max-h-[60vh] overflow-y-auto">
@@ -7549,23 +7595,25 @@ export const App: React.FC = () => {
                 />
               </div>
             ) : mobileTab === 'offline' ? (
-              <MapStorageModal
-                isOpen
-                embedded
-                theme={theme}
-                currentUser={currentUser}
-                onClose={() => setMobileTab('explore')}
-                demInfo={demInfo}
-                osmInfo={osmInfo}
-                onArchivesUpdated={(nextDem, nextOsm) => {
-                  setDemInfo(nextDem);
-                  setOsmInfo(nextOsm);
-                }}
-                onDataBundleUpdated={() => {
-                  void refreshOfflineDataConsumers('all');
-                }}
-                onPoisAndRoutesImported={handleImportedData}
-              />
+              <Suspense fallback={null}>
+                <MapStorageModal
+                  isOpen
+                  embedded
+                  theme={theme}
+                  currentUser={currentUser}
+                  onClose={() => setMobileTab('explore')}
+                  demInfo={demInfo}
+                  osmInfo={osmInfo}
+                  onArchivesUpdated={(nextDem, nextOsm) => {
+                    setDemInfo(nextDem);
+                    setOsmInfo(nextOsm);
+                  }}
+                  onDataBundleUpdated={() => {
+                    void refreshOfflineDataConsumers('all');
+                  }}
+                  onPoisAndRoutesImported={handleImportedData}
+                />
+              </Suspense>
             ) : (
               /* Explore Peek Sheet: Quick Nearby POIs + 1-Tap Route Planner & Navigating Mode */
               <div className="px-4 pb-3 space-y-2">
@@ -7898,71 +7946,82 @@ export const App: React.FC = () => {
       )}
 
       {/* Desktop Modal: Offline Maps Manager & KML/GPX Importer */}
-      <MapStorageModal
-        isOpen={!isMobile && isStorageOpen}
-        onClose={() => setIsStorageOpen(false)}
-        theme={theme}
-        currentUser={currentUser}
-        demInfo={demInfo}
-        osmInfo={osmInfo}
-        onArchivesUpdated={(nextDem, nextOsm) => {
-          setDemInfo(nextDem);
-          setOsmInfo(nextOsm);
-        }}
-        onDataBundleUpdated={() => {
-          void refreshOfflineDataConsumers('all');
-        }}
-        onPoisAndRoutesImported={handleImportedData}
-      />
+      {!isMobile && isStorageOpen && (
+        <Suspense fallback={null}>
+          <MapStorageModal
+            isOpen
+            onClose={() => setIsStorageOpen(false)}
+            theme={theme}
+            currentUser={currentUser}
+            demInfo={demInfo}
+            osmInfo={osmInfo}
+            onArchivesUpdated={(nextDem, nextOsm) => {
+              setDemInfo(nextDem);
+              setOsmInfo(nextOsm);
+            }}
+            onDataBundleUpdated={() => {
+              void refreshOfflineDataConsumers('all');
+            }}
+            onPoisAndRoutesImported={handleImportedData}
+          />
+        </Suspense>
+      )}
 
       {/* Route Sharing Modal (Gmail / Registered Users) */}
       {shareModalRoute && (
-        <ShareRouteModal
-          route={shareModalRoute}
-          theme={theme}
-          currentUser={currentUser}
-          isOnline={isOnline}
-          firebaseAvailable={AuthService.isAvailable()}
-          isAuthBusy={isAuthBusy}
-          onSignInGoogle={handleSignInGoogle}
-          onUpdateRecipients={handleUpdateRouteSharing}
-          onClose={() => setShareModalRouteId(null)}
-        />
+        <Suspense fallback={null}>
+          <ShareRouteModal
+            route={shareModalRoute}
+            theme={theme}
+            currentUser={currentUser}
+            isOnline={isOnline}
+            firebaseAvailable={AuthService.isAvailable()}
+            isAuthBusy={isAuthBusy}
+            onSignInGoogle={handleSignInGoogle}
+            onUpdateRecipients={handleUpdateRouteSharing}
+            onClose={() => setShareModalRouteId(null)}
+          />
+        </Suspense>
       )}
 
       {/* Send Active Route to Planning Trail DB Modal (Logged-in users only) */}
-      {currentUser && (
-        <SendToPlanningDbModal
-          isOpen={Boolean(sendToPlanningRouteTarget)}
-          theme={theme}
-          route={sendToPlanningRouteTarget}
-          folders={planningFolders}
-          onClose={() => setSendToPlanningRouteTarget(null)}
-          onCreateFolder={(name, parentId) =>
-            handleCreatePlanningFolder({ name, parentId })
-          }
-          onConfirm={handleConfirmSendRouteToPlanningDb}
-        />
+      {currentUser && Boolean(sendToPlanningRouteTarget) && (
+        <Suspense fallback={null}>
+          <SendToPlanningDbModal
+            isOpen
+            theme={theme}
+            route={sendToPlanningRouteTarget}
+            folders={planningFolders}
+            onClose={() => setSendToPlanningRouteTarget(null)}
+            onCreateFolder={(name, parentId) =>
+              handleCreatePlanningFolder({ name, parentId })
+            }
+            onConfirm={handleConfirmSendRouteToPlanningDb}
+          />
+        </Suspense>
       )}
 
       {/* Private POI Sharing Modal (Gmail / Registered Users) */}
       {shareModalPoi && (
-        <SharePoiModal
-          poi={shareModalPoi}
-          theme={theme}
-          currentUser={currentUser}
-          isOnline={isOnline}
-          firebaseAvailable={AuthService.isAvailable()}
-          isAuthBusy={isAuthBusy}
-          onSignInGoogle={handleSignInGoogle}
-          onUpdateRecipients={handleUpdatePoiSharing}
-          onClose={() => setShareModalPoiId(null)}
-        />
+        <Suspense fallback={null}>
+          <SharePoiModal
+            poi={shareModalPoi}
+            theme={theme}
+            currentUser={currentUser}
+            isOnline={isOnline}
+            firebaseAvailable={AuthService.isAvailable()}
+            isAuthBusy={isAuthBusy}
+            onSignInGoogle={handleSignInGoogle}
+            onUpdateRecipients={handleUpdatePoiSharing}
+            onClose={() => setShareModalPoiId(null)}
+          />
+        </Suspense>
       )}
 
       {/* Live Location Sharing Modal */}
       {isShareLocationModalOpen && (
-        <ShareLocationModal
+        <Suspense fallback={null}>
+          <ShareLocationModal
           theme={theme}
           currentUser={currentUser}
           isOnline={isOnline}
@@ -7989,6 +8048,7 @@ export const App: React.FC = () => {
           }}
           onClose={() => setIsShareLocationModalOpen(false)}
         />
+        </Suspense>
       )}
 
       {/* Peer Live Location Inspector */}

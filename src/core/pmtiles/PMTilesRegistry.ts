@@ -185,7 +185,7 @@ export class PMTilesRegistry {
       defaultOsmUrl.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
       defaultOsmUrl.startsWith('https://');
     const defaultOsmSource = osmIsRemote
-      ? new CachedFetchSource(defaultOsmUrl)
+      ? new CachedFetchSource(defaultOsmUrl, { immutable: false })
       : new FetchSource(defaultOsmUrl);
     const defaultOsmPmtiles = new PMTiles(defaultOsmSource);
     this.attachInMemoryTileCache(defaultOsmPmtiles, 400);
@@ -201,7 +201,7 @@ export class PMTilesRegistry {
       defaultDemUrl.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
       defaultDemUrl.startsWith('https://');
     const defaultDemSource = demIsRemote
-      ? new CachedFetchSource(defaultDemUrl)
+      ? new CachedFetchSource(defaultDemUrl, { immutable: true })
       : new FetchSource(defaultDemUrl);
     const defaultDemPmtiles = new PMTiles(defaultDemSource);
     this.attachInMemoryTileCache(defaultDemPmtiles, 500);
@@ -532,7 +532,7 @@ export class PMTilesRegistry {
       url.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
       (url.startsWith('https://') &&
         (typeof window === 'undefined' || !url.startsWith(window.location?.origin || 'https://__none__')));
-    const source = isRemote ? new CachedFetchSource(url) : new FetchSource(url);
+    const source = isRemote ? new CachedFetchSource(url, { immutable: isConstant }) : new FetchSource(url);
     return this.registerArchiveSource(
       id,
       fileName,

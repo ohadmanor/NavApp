@@ -14,6 +14,22 @@ export const SYNC_META_PATH = path.join(DATA_DIR, '.firebase-sync-meta.json');
 
 export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo-data.web.app';
 export const REMOTE_DATA_FALLBACK_ORIGIN = 'https://navapp-israel-topo.web.app';
+export const DEFAULT_DEM_STORAGE_URL =
+  'https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media';
+
+export function getCustomDemUrlFromEnv() {
+  if (process.env.VITE_DEM_PMTILES_URL) return process.env.VITE_DEM_PMTILES_URL.trim();
+  try {
+    const envPath = path.join(ROOT_DIR, '.env');
+    if (fs.existsSync(envPath)) {
+      const match = /^VITE_DEM_PMTILES_URL=(.+)$/m.exec(fs.readFileSync(envPath, 'utf8'));
+      if (match?.[1]) return match[1].trim();
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_DEM_STORAGE_URL;
+}
 
 export const MAP_DATA_FILES = [
   {
@@ -144,9 +160,16 @@ function requestHeadersOnce(urlStr, method, headers = {}, timeoutMs = 12000) {
 }
 
 export async function probeRemoteDataFile(fileName) {
-  const origins = [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN];
-  for (const origin of origins) {
-    const url = `${origin}/data/${encodeURIComponent(fileName)}`;
+  const candidateUrls = [];
+  if (fileName === 'Israel.dem.pmtiles') {
+    const customDem = getCustomDemUrlFromEnv();
+    if (customDem) candidateUrls.push(customDem);
+  }
+  for (const origin of [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN]) {
+    candidateUrls.push(`${origin}/data/${encodeURIComponent(fileName)}`);
+  }
+
+  for (const url of candidateUrls) {
     const head = await requestHeadersOnce(url, 'HEAD', {
       'Accept-Encoding': 'identity',
       'Cache-Control': 'no-cache',

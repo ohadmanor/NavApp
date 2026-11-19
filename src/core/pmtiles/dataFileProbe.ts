@@ -1,4 +1,6 @@
 import {
+  getCustomDataOrigin,
+  getCustomDemPmtilesUrl,
   isLocalDevServer,
   REMOTE_DATA_FALLBACK_ORIGIN,
   REMOTE_DATA_ORIGIN,
@@ -88,7 +90,7 @@ async function tryHeadProbe(targetUrl: string): Promise<RemoteDataProbe | null> 
   const res = await fetch(targetUrl, {
     method: 'HEAD',
     cache: 'no-store',
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) return null;
   const contentType = res.headers.get('content-type') || '';
@@ -108,7 +110,7 @@ async function tryRangeProbe(targetUrl: string): Promise<RemoteDataProbe | null>
   const res = await fetch(targetUrl, {
     headers: { Range: 'bytes=0-0' },
     cache: 'no-store',
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) return null;
   const contentType = res.headers.get('content-type') || '';
@@ -135,19 +137,33 @@ export async function probeRemoteDataFile(
   options: { preferHead?: boolean } = {}
 ): Promise<RemoteDataProbe | null> {
   if (typeof fetch !== 'function') return null;
-  const preferHead = options.preferHead ?? !fileName.toLowerCase().endsWith('.pmtiles');
-  const candidateOrigins = [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN];
+  const isPmtiles = fileName.toLowerCase().endsWith('.pmtiles');
+  const preferHead = options.preferHead ?? !isPmtiles;
 
-  for (const origin of candidateOrigins) {
-    if (!origin) continue;
-    const targetUrl = `${origin}/data/${fileName}`;
+  const candidateUrls: string[] = [];
+  if (fileName === 'Israel.dem.pmtiles') {
+    const customDemUrl = getCustomDemPmtilesUrl();
+    if (customDemUrl) candidateUrls.push(customDemUrl);
+  }
+  const customOrigin = getCustomDataOrigin();
+  const origins = customOrigin
+    ? [customOrigin]
+    : [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN];
+  for (const origin of origins) {
+    if (origin) candidateUrls.push(`${origin}/data/${fileName}`);
+  }
+
+  for (const targetUrl of candidateUrls) {
     try {
       const first = preferHead ? await tryHeadProbe(targetUrl) : await tryRangeProbe(targetUrl);
       if (first) return first;
-      const second = preferHead ? await tryRangeProbe(targetUrl) : await tryHeadProbe(targetUrl);
-      if (second) return second;
+      // Avoid falling back to HEAD on large .pmtiles files if Range already failed/returned non-OK
+      if (!isPmtiles) {
+        const second = await tryRangeProbe(targetUrl);
+        if (second) return second;
+      }
     } catch {
-      // try next candidate origin
+      // try next candidate URL
     }
   }
   return null;

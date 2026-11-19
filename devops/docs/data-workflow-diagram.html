@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NavApp — Data Files Workflow (Online &amp; Offline)</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #111a2e;
+      --card-2: #16233d;
+      --border: #253659;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --purple: #a78bfa;
+      --rose: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px 20px 48px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    .container { max-width: 1180px; margin: 0 auto; }
+    h1 { margin: 0 0 6px; font-size: 1.65rem; color: #f8fafc; }
+    .subtitle { color: var(--muted); margin: 0 0 24px; font-size: 0.95rem; }
+    h2 {
+      font-size: 1.15rem;
+      margin: 28px 0 12px;
+      color: #f1f5f9;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .file-name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
+    .b-storage { background: rgba(251, 191, 36, 0.16); color: var(--amber); border: 1px solid rgba(251, 191, 36, 0.35); }
+    .b-hosting { background: rgba(56, 189, 248, 0.15); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.35); }
+    .b-pipeline { background: rgba(167, 139, 250, 0.16); color: var(--purple); border: 1px solid rgba(167, 139, 250, 0.35); }
+    .meta { font-size: 0.82rem; color: var(--muted); margin-bottom: 12px; }
+    .flow-row {
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-top: 8px;
+      font-size: 0.86rem;
+    }
+    .flow-label {
+      font-weight: 700;
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+      display: block;
+    }
+    .lbl-online { color: var(--accent); }
+    .lbl-offline { color: var(--green); }
+    .lbl-devops { color: var(--purple); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.82em;
+      background: rgba(15, 23, 42, 0.75);
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: #cbd5e1;
+    }
+    .pipeline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .step {
+      flex: 1 1 170px;
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.84rem;
+    }
+    .step strong { display: block; color: #f8fafc; margin-bottom: 3px; }
+    .arrow { color: var(--muted); font-weight: 700; font-size: 1.1rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      font-size: 0.86rem;
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { background: var(--card-2); color: #f8fafc; font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    .warn { color: var(--rose); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>NavApp — Data Files Workflow (Online &amp; Offline)</h1>
+    <p class="subtitle">
+      How each dataset in <code>data/</code> is hosted, streamed online, cached/stored offline, and deployed across Web PWA, Android/iOS, and DevOps scripts.
+    </p>
+
+    <h2>1. Resolution Priority on App Startup (All Runtime Files)</h2>
+    <div class="pipeline">
+      <div class="step">
+        <strong>1. Android Native Storage</strong>
+        <code>filesDir/maps/{file}</code><br />
+        Shared by WebView &amp; Android Auto (zero network).
+      </div>
+      <div class="arrow">→</div>
+      <div class="step">
+        <strong>2. Browser OPFS</strong>
+        <code>maps/{file}</code><br />
+        Full local copy on Web when downloaded for offline use.
+      </div>
+      <div class="arrow">→</div>
+      <div class="step">
+        <strong>3. Local Dev Server</strong>
+        <code>/data/{file}</code><br />
+        On <code>localhost</code> only (Vite HTTP 206 middleware).
+      </div>
+      <div class="arrow">→</div>
+      <div class="step">
+        <strong>4. Cloud Origin + Cache</strong>
+        Firebase Storage (DEM) or Firebase Hosting <code>hosting:data</code>, backed by Cache API &amp; IndexedDB.
+      </div>
+    </div>
+
+    <h2>2. Per-File Online &amp; Offline Workflow</h2>
+    <div class="grid">
+      <!-- DEM -->
+      <div class="card">
+        <div class="card-header">
+          <span class="file-name">Israel.dem.pmtiles</span>
+          <span class="badge b-storage">Firebase Storage · 1.31 GiB</span>
+        </div>
+        <div class="meta">Immutable Terrarium 256px PNG elevation pyramid (z0–z14). Powers Hillshade, 3D Terrain, 10m/50m Contours (<code>maplibre-contour</code>), and <code>ElevationService</code>.</div>
+        <div class="flow-row">
+          <span class="flow-label lbl-online">Online Mode</span>
+          Streamed via <code>VITE_DEM_PMTILES_URL</code> from Firebase Storage (<code>map_data/Israel.dem.pmtiles</code>) using HTTP <code>206 Partial Content</code> byte-range requests + CORS. <code>CachedFetchSource</code> (<code>pmtiles-range-cache-v3</code>, <code>immutable: true</code>) caches every fetched range on disk with an 8s timeout.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-offline">Offline Mode</span>
+          <ul>
+            <li><strong>Partial offline:</strong> Previously viewed tiles &amp; headers load from <code>pmtiles-range-cache-v3</code> with zero revalidation.</li>
+            <li><strong>Full offline:</strong> User downloads full archive in <em>Offline Maps</em> into OPFS (Web) or <code>filesDir/maps/</code> (Android).</li>
+          </ul>
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-devops">DevOps</span>
+          Excluded from <code>hosting:data</code> (too large for Hosting CDN). Upload to Firebase Storage bucket <code>map_data/</code>; <code>download-map-data.bat</code> pulls from Storage.
+        </div>
+      </div>
+
+      <!-- OSM -->
+      <div class="card">
+        <div class="card-header">
+          <span class="file-name">Israel.osm.pmtiles</span>
+          <span class="badge b-hosting">Hosting Data · ~110 MB</span>
+        </div>
+        <div class="meta">Updatable OpenMapTiles 19-layer vector archive (z0–z14) with trail colors. Powers base map, roads, trails, water, and runtime search rebuilds.</div>
+        <div class="flow-row">
+          <span class="flow-label lbl-online">Online Mode</span>
+          Streamed via HTTP <code>206</code> from <code>navapp-israel-topo-data.web.app/data/Israel.osm.pmtiles</code>. <code>CachedFetchSource</code> revalidates header (<code>offset=0</code>) when online and clears range cache automatically if ETag changes.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-offline">Offline Mode</span>
+          Stored in OPFS or Android <code>filesDir/maps/</code> via <em>Offline Maps</em>. On startup when online, checks size/ETag in background and hot-swaps if updated.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-devops">DevOps</span>
+          Uploaded to <code>hosting:data</code> via <code>devops/upload-map-data.bat</code>.
+        </div>
+      </div>
+
+      <!-- POIS -->
+      <div class="card">
+        <div class="card-header">
+          <span class="file-name">Israel.pois.geojson</span>
+          <span class="badge b-hosting">Hosting Data · ~27 MB (3 MB gz)</span>
+        </div>
+        <div class="meta">68,965 POIs (6,732 OSM + 62,233 Off-Road community POIs). Hydrated by <code>PoiManager.initializePois()</code> with periodic event-loop yields.</div>
+        <div class="flow-row">
+          <span class="flow-label lbl-online">Online Mode</span>
+          Fetched gzipped from <code>navapp-israel-topo-data.web.app/data/Israel.pois.geojson</code> (Service Worker <code>navapp-offline-v13</code> uses network-first with cache fallback). Saved to OPFS/Native + OSM POIs synced into IndexedDB (<code>db.pois</code>).
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-offline">Offline Mode</span>
+          Loads from OPFS / Native storage (or Service Worker cache if OPFS unavailable), falling back to IndexedDB <code>db.pois</code>. Background ETag/size check updates silently when online.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-devops">DevOps</span>
+          Uploaded to <code>hosting:data</code> via <code>devops/upload-map-data.bat</code>.
+        </div>
+      </div>
+
+      <!-- SEARCH -->
+      <div class="card">
+        <div class="card-header">
+          <span class="file-name">Israel.search.idx</span>
+          <span class="badge b-hosting">Hosting Data · ~1.7 MB</span>
+        </div>
+        <div class="meta">Pre-built gzipped full-map search index (cities, peaks, rivers, 4x4 tracks, highways) paired with <code>Israel.osm.pmtiles</code> fingerprint.</div>
+        <div class="flow-row">
+          <span class="flow-label lbl-online">Online Mode</span>
+          <strong>Lazy-loaded</strong> when search bar is focused or 4s after map ready. Fetched from <code>navapp-israel-topo-data.web.app/data/Israel.search.idx</code> (network-first in SW) and saved to OPFS/Native.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-offline">Offline Mode</span>
+          Loads from OPFS / Native storage (or SW cache / IndexedDB <code>searchIndexCache</code>). If user imports a custom local <code>.pmtiles</code>, rebuilds in-browser and caches in IndexedDB.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-devops">DevOps</span>
+          Auto-rebuilt by <code>upload-map-data.mjs</code> when <code>Israel.osm.pmtiles</code> is newer, then deployed to <code>hosting:data</code>.
+        </div>
+      </div>
+
+      <!-- TRAILS -->
+      <div class="card">
+        <div class="card-header">
+          <span class="file-name">Israel.trails.json</span>
+          <span class="badge b-pipeline">Pipeline / Enrichment · ~818 KB</span>
+        </div>
+        <div class="meta">Trail enrichment directory used by the PBF → PMTiles build pipeline and trail annotation tooling.</div>
+        <div class="flow-row">
+          <span class="flow-label lbl-online">Online / Hosting</span>
+          Deployed to <code>hosting:data</code> alongside OSM/POIs/Search via <code>upload-map-data.bat</code>. Not fetched during normal map boot.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-offline">Offline / Pipeline</span>
+          Synced to local <code>data/</code> via <code>download-map-data.bat</code> for offline Tilemaker builds.
+        </div>
+      </div>
+
+      <!-- APP SHELL -->
+      <div class="card">
+        <div class="card-header">
+          <span class="file-name">App Shell (dist/ + sw.js)</span>
+          <span class="badge b-hosting">Hosting App · navapp-israel-topo.web.app</span>
+        </div>
+        <div class="meta">Code-split Vite PWA (<code>index</code>, <code>maplibre</code>, <code>firebase</code>, <code>vendor</code>, lazy modals/drawers) + Service Worker <code>navapp-offline-v13</code>.</div>
+        <div class="flow-row">
+          <span class="flow-label lbl-online">Online Mode</span>
+          <code>sw.js</code> pre-caches icons, sprites, POI SVGs, and RTL plugin on install, and caches visited JS/CSS chunks. Range requests &amp; cross-origin Storage/tile requests bypass SW.
+        </div>
+        <div class="flow-row">
+          <span class="flow-label lbl-offline">Offline Mode</span>
+          All app shell assets, glyphs (<code>offline-glyphs://</code>), sprites, and chunks load from <code>navapp-offline-v13</code> cache. User routes/POIs/drafts persist in IndexedDB (<code>NavAppOutdoorDB</code>).
+        </div>
+      </div>
+    </div>
+
+    <h2>3. Deployment &amp; Sync Matrix</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Script / Command</th>
+          <th>Target</th>
+          <th>Files Covered</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>devops/deploy-firebase.bat</code></td>
+          <td><code>firestore, storage, hosting:app</code></td>
+          <td><code>dist/</code>, Firestore rules/indexes, <code>storage.rules</code></td>
+          <td>Requires <code>VITE_DEM_PMTILES_URL</code> in <code>.env</code> at build time.</td>
+        </tr>
+        <tr>
+          <td><code>devops/upload-map-data.bat</code></td>
+          <td><code>hosting:data</code> (<code>navapp-israel-topo-data.web.app</code>)</td>
+          <td><code>Israel.osm.pmtiles</code>, <code>Israel.pois.geojson</code>, <code>Israel.search.idx</code>, <code>Israel.trails.json</code></td>
+          <td><span class="warn">Excludes</span> <code>Israel.dem.pmtiles</code> automatically.</td>
+        </tr>
+        <tr>
+          <td>Firebase Console / <code>gcloud storage cp</code></td>
+          <td>Firebase Storage (<code>gs://navapp-israel-topo.firebasestorage.app/map_data/</code>)</td>
+          <td><code>Israel.dem.pmtiles</code></td>
+          <td>Bucket CORS must allow <code>GET, HEAD, OPTIONS</code> + <code>Range</code> header.</td>
+        </tr>
+        <tr>
+          <td><code>devops/download-map-data.bat</code></td>
+          <td>Local <code>data/</code></td>
+          <td>All 5 files (DEM from Storage; others from <code>hosting:data</code>)</td>
+          <td>Syncs local dev workspace with cloud source of truth.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

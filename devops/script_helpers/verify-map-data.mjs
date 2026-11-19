@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DATA_DIR, MAP_DATA_FILES } from './map-data-common.mjs';
+import { DATA_DIR, MAP_DATA_FILES, isValidLocalDataFile } from './map-data-common.mjs';
 
 const wantHash = process.argv.includes('--sha256');
 let failed = false;
@@ -22,14 +22,7 @@ for (const f of MAP_DATA_FILES) {
   }
   const st = fs.statSync(p);
   stats[f.key] = st;
-  const fd = fs.openSync(p, 'r');
-  const buf = Buffer.alloc(8);
-  fs.readSync(fd, buf, 0, 8, 0);
-  fs.closeSync(fd);
-  const magicOk = f.kind === 'pmtiles' ? buf.subarray(0, 2).toString() === 'PM'
-    : f.fileName.endsWith('.idx') ? (buf[0] === 0x1f && buf[1] === 0x8b) || buf[0] === 0x7b
-    : buf[0] === 0x7b;
-  if (!magicOk) fail(`${f.fileName} has unexpected header bytes`);
+  if (!isValidLocalDataFile(p, f.fileName)) fail(`${f.fileName} has unexpected header bytes`);
   else ok(`${f.fileName} ${(st.size / 1048576).toFixed(1)} MB`);
   if (wantHash) {
     const h = crypto.createHash('sha256');

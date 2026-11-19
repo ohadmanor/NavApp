@@ -1,6 +1,6 @@
 import type { StyleSpecification, LayerSpecification, SkySpecification } from 'maplibre-gl';
 import navappLayersRaw from './navappLayer.json';
-import { REMOTE_DATA_ORIGIN } from '../dataUrls';
+import { pmtilesUrl } from '../dataUrls';
 import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
 import type { PoiCategory } from '../db/NavDatabase';
 import { POI_CATEGORY_ZOOM_RULES } from '../pois/poiTaxonomy';
@@ -1435,8 +1435,8 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       ? window.location.origin
       : 'http://localhost:5173';
 
-  const defaultOsmUrl = `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.osm.pmtiles`;
-  const defaultDemUrl = `pmtiles://${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`;
+  const defaultOsmUrl = `pmtiles://${pmtilesUrl('Israel.osm.pmtiles')}`;
+  const defaultDemUrl = `pmtiles://${pmtilesUrl('Israel.dem.pmtiles')}`;
   const effectiveOsmUrl = osmProtocolUrl || defaultOsmUrl;
   const effectiveDemUrl = demProtocolUrl || defaultDemUrl;
 

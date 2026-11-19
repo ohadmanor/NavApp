@@ -609,6 +609,10 @@ export class PoiManager {
                 priority: rec.priority,
               });
               parsedOffroad.push(rec);
+              // Yield periodically so hydrating ~62k off-road POIs never freezes map rendering
+              if (i > 0 && i % 5000 === 0) {
+                await new Promise<void>((resolve) => setTimeout(resolve, 0));
+              }
             }
             PoiManager.offroadPoisCache = parsedOffroad;
           }

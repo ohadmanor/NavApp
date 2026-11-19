@@ -58,6 +58,8 @@ public final class NativeMapStore {
     private static final String FILE_COMPACT_POIS_GEOJSON = "compact_pois.geojson";
 
     private static final String REMOTE_DATA_ORIGIN = "https://navapp-israel-topo-data.web.app";
+    private static final String REMOTE_DEM_STORAGE_URL =
+        "https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media";
 
     public interface CarStateListener {
         void onCarStateUpdated();
@@ -376,7 +378,7 @@ public final class NativeMapStore {
         if (local != null) {
             return "pmtiles://file://" + local.getAbsolutePath();
         }
-        return "pmtiles://" + REMOTE_DATA_ORIGIN + "/data/" + FILE_DEM_PMTILES;
+        return "pmtiles://" + REMOTE_DEM_STORAGE_URL;
     }
 
     public boolean hasOfflineOsm() {

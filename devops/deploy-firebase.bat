@@ -20,8 +20,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/3] Deploying Firestore Rules/Indexes + Web App to Firebase Hosting...
-call npx.cmd firebase-tools deploy --only firestore,hosting:app
+echo [3/3] Deploying Firestore/Storage Rules + Web App to Firebase Hosting...
+call npx.cmd firebase-tools deploy --only firestore,storage,hosting:app
 if errorlevel 1 (
     echo.
     echo [INFO] If you are not logged into Firebase CLI yet, run:

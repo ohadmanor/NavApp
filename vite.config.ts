@@ -136,11 +136,33 @@ function pmtilesDataRangePlugin(): Plugin {
   };
 }
 
+function cleanStaleBuildAssetsPlugin(): Plugin {
+  return {
+    name: 'clean-stale-build-assets',
+    apply: 'build',
+    buildStart() {
+      const assetsDir = path.resolve(__dirname, 'dist', 'assets');
+      if (!fs.existsSync(assetsDir)) return;
+      for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (entry.name === 'rtl-text-plugin.js') continue;
+        if (entry.name.endsWith('.js') || entry.name.endsWith('.css') || entry.name.endsWith('.map')) {
+          try {
+            fs.unlinkSync(path.join(assetsDir, entry.name));
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    },
+  };
+}
+
 export default defineConfig({
   root: path.resolve(__dirname, 'src'),
   publicDir: path.resolve(__dirname, 'src', 'public'),
   envDir: __dirname,
-  plugins: [react(), tailwindcss(), pmtilesDataRangePlugin()],
+  plugins: [react(), tailwindcss(), pmtilesDataRangePlugin(), cleanStaleBuildAssetsPlugin()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
@@ -157,5 +179,26 @@ export default defineConfig({
     emptyOutDir: false, // Never wipe dist/ so large PMTiles files are preserved across builds
     sourcemap: false,
     chunkSizeWarningLimit: 2000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('maplibre-gl')) return 'maplibre';
+          if (id.includes('firebase') || id.includes('@firebase')) return 'firebase';
+          if (id.includes('@turf')) return 'turf';
+          if (id.includes('lucide-react')) return 'icons';
+          if (
+            id.includes('/react/') ||
+            id.includes('\\react\\') ||
+            id.includes('react-dom') ||
+            id.includes('dexie') ||
+            id.includes('pmtiles') ||
+            id.includes('maplibre-contour')
+          ) {
+            return 'vendor';
+          }
+        },
+      },
+    },
   },
 });

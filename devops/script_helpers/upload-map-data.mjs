@@ -99,14 +99,11 @@ async function main() {
       console.error(`[Upload] File failed integrity check: ${resolved}`);
       process.exit(1);
     }
-    if (spec.constant && !allowReplaceDem) {
-      const remoteDem = await probeRemoteDataFile(spec.fileName);
-      if (remoteDem) {
-        console.error(
-          `[Upload] ${spec.fileName} already exists on Firebase and is static/immutable. Refusing to replace it (pass --replace-dem to override).`
-        );
-        process.exit(1);
-      }
+    if (spec.constant) {
+      console.error(
+        `[Upload] ${spec.fileName} is hosted on Firebase Storage (gs://navapp-israel-topo.firebasestorage.app/map_data/${spec.fileName}), NOT Firebase Hosting (hosting:data). Upload it via Firebase Console / gcloud storage.`
+      );
+      process.exit(1);
     }
     const dataTarget = path.join(DATA_DIR, spec.fileName);
     const deployTarget = path.join(DEPLOY_DATA_DIR, spec.fileName);
@@ -117,11 +114,20 @@ async function main() {
     console.log(`  [INPUT] Staged ${spec.fileName} (${formatBytes(fs.statSync(deployTarget).size)})`);
   }
 
-  // 2. Sync all valid local files from data/ -> deploy_data/data/
+  // 2. Sync all valid local non-DEM files from data/ -> deploy_data/data/
+  //    (Israel.dem.pmtiles is hosted on Firebase Storage, never on hosting:data)
   console.log('[1/4] Checking local data/ and deploy_data/data/...');
   for (const spec of MAP_DATA_FILES) {
     const dataFile = path.join(DATA_DIR, spec.fileName);
     const deployFile = path.join(DEPLOY_DATA_DIR, spec.fileName);
+
+    if (spec.constant) {
+      if (fs.existsSync(deployFile)) {
+        fs.unlinkSync(deployFile);
+      }
+      console.log(`  [STORAGE] ${spec.fileName} is hosted on Firebase Storage (excluded from hosting:data).`);
+      continue;
+    }
 
     if (isValidLocalDataFile(dataFile, spec.fileName)) {
       const copied = copyIfNewerOrMissing(dataFile, deployFile);
@@ -162,9 +168,10 @@ async function main() {
     console.log('[2/4] Skipping search index rebuild (Israel.osm.pmtiles not staged locally).');
   }
 
-  // 4. Preserve existing remote Firebase files missing locally so deploy doesn't delete them
+  // 4. Preserve existing remote Firebase Hosting files missing locally so deploy doesn't delete them
   console.log('[3/4] Checking Firebase Hosting (hosting:data) to preserve remote files...');
   for (const spec of MAP_DATA_FILES) {
+    if (spec.constant) continue;
     const deployFile = path.join(DEPLOY_DATA_DIR, spec.fileName);
     if (isValidLocalDataFile(deployFile, spec.fileName)) continue;
 

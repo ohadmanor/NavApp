@@ -2,6 +2,28 @@ import { FetchSource, type Source, type RangeResponse } from 'pmtiles';
 
 const CACHE_NAME = 'pmtiles-range-cache-v3';
 const MAX_CACHED_RANGE_BYTES = 2 * 1024 * 1024;
+const REMOTE_FETCH_TIMEOUT_MS = 8000;
+
+function createTimeoutSignal(parentSignal?: AbortSignal, timeoutMs = REMOTE_FETCH_TIMEOUT_MS): AbortSignal {
+  const timeoutSignal =
+    typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined;
+  if (!parentSignal) return timeoutSignal as AbortSignal;
+  if (!timeoutSignal) return parentSignal;
+  if (typeof (AbortSignal as any).any === 'function') {
+    return (AbortSignal as any).any([parentSignal, timeoutSignal]);
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(parentSignal.reason || timeoutSignal.reason);
+  if (parentSignal.aborted || timeoutSignal.aborted) {
+    onAbort();
+  } else {
+    parentSignal.addEventListener('abort', onAbort, { once: true });
+    timeoutSignal.addEventListener('abort', onAbort, { once: true });
+  }
+  return controller.signal;
+}
 
 // Cleanup legacy range caches so obsolete PMTiles archives (e.g. without trail colors) are never served
 if (typeof caches !== 'undefined') {
@@ -16,13 +38,20 @@ if (typeof caches !== 'undefined') {
  *  - Identical concurrent range requests are de-duplicated.
  * Falls back to plain streaming if Cache Storage is unavailable.
  */
+export interface CachedFetchSourceOptions {
+  /** Immutable archives (e.g. Israel.dem.pmtiles) skip online header revalidation when already cached. */
+  immutable?: boolean;
+}
+
 export class CachedFetchSource implements Source {
   private inner: FetchSource;
   private inFlight = new Map<string, Promise<RangeResponse>>();
   private cachePromise: Promise<Cache | null> | null = null;
+  private immutable: boolean;
 
-  constructor(private url: string) {
+  constructor(private url: string, options: CachedFetchSourceOptions = {}) {
     this.inner = new FetchSource(url);
+    this.immutable = Boolean(options.immutable);
   }
 
   getKey(): string {
@@ -71,12 +100,19 @@ export class CachedFetchSource implements Source {
         }
       }
 
-      // For offset 0 (header lookup, where pmtiles passes etag=undefined), always revalidate
-      // with the server when online so stale cached archives are never served forever.
-      if (offset === 0 && !etag && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+      // For immutable archives, serve cached header immediately if present.
+      // For mutable archives, revalidate offset 0 (header) with a short timeout when online.
+      const shouldRevalidateHeader =
+        offset === 0 &&
+        !etag &&
+        (!this.immutable || !cachedHit) &&
+        (typeof navigator === 'undefined' || navigator.onLine !== false);
+
+      if (shouldRevalidateHeader) {
+        const reqSignal = createTimeoutSignal(signal);
         try {
           const freshResp = await fetch(this.url, {
-            signal,
+            signal: reqSignal,
             cache: 'no-cache',
             headers: { range: `bytes=0-${length - 1}` },
           });
@@ -117,14 +153,17 @@ export class CachedFetchSource implements Source {
             }
             return { data, etag: newEtag };
           }
+          if (freshResp.status >= 500) {
+            throw new Error(`HTTP ${freshResp.status} from ${this.url}`);
+          }
         } catch (err: any) {
-          // If aborted by caller or explicit magic-byte HTML error when no cache exists, handle cleanly
-          if (err?.name === 'AbortError') throw err;
+          if (err?.name === 'AbortError' && signal?.aborted) throw err;
           if (cachedHit) {
             const hitEtag = cachedHit.headers.get('x-etag') || undefined;
             return { data: await cachedHit.arrayBuffer(), etag: hitEtag };
           }
-          // Fall through to inner FetchSource if fetch failed without cache
+          // Do not double-retry a timed-out or 5xx offset-0 header fetch via inner.getBytes
+          throw err;
         }
       }
 
@@ -135,7 +174,8 @@ export class CachedFetchSource implements Source {
         }
       }
 
-      const res = await this.inner.getBytes(offset, length, signal, etag);
+      const rangeSignal = createTimeoutSignal(signal);
+      const res = await this.inner.getBytes(offset, length, rangeSignal, etag);
 
       // Validate header magic bytes (PM) at offset 0 so HTML error pages are never parsed or cached
       if (offset === 0 && res.data && res.data.byteLength >= 2) {

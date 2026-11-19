@@ -12,6 +12,36 @@
 export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo-data.web.app';
 export const REMOTE_DATA_FALLBACK_ORIGIN = 'https://navapp-israel-topo.web.app';
 
+export function getCustomDataOrigin(): string {
+  try {
+    // Must reference import.meta.env.VITE_DATA_ORIGIN directly so Vite statically inlines it
+    const raw = import.meta.env.VITE_DATA_ORIGIN;
+    if (typeof raw !== 'string') return '';
+    const trimmed = raw.trim().replace(/\/+$/, '');
+    if (!trimmed) return '';
+    if (trimmed === 'same-origin' && typeof window !== 'undefined' && window.location?.origin) {
+      return window.location.origin;
+    }
+    return trimmed;
+  } catch {
+    return '';
+  }
+}
+
+export function getEffectiveRemoteDataOrigin(): string {
+  return getCustomDataOrigin() || REMOTE_DATA_ORIGIN;
+}
+
+export function getCustomDemPmtilesUrl(): string {
+  try {
+    // Must reference import.meta.env.VITE_DEM_PMTILES_URL directly so Vite statically inlines it in production builds
+    const raw = import.meta.env.VITE_DEM_PMTILES_URL;
+    return typeof raw === 'string' ? raw.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
 export function isNativePlatform(): boolean {
   const cap = (typeof window !== 'undefined' ? (window as any).Capacitor : undefined) as
     | { isNativePlatform?: () => boolean }
@@ -35,13 +65,17 @@ export function remoteDataUrl(fileName: string): string {
   if (isLocalDevServer()) {
     return `${window.location.origin}/data/${fileName}`;
   }
-  return `${REMOTE_DATA_ORIGIN}/data/${fileName}`;
+  return `${getEffectiveRemoteDataOrigin()}/data/${fileName}`;
 }
 
 /**
  * Large PMTiles archives: served from the dedicated Firebase data site (HTTP 206 Byte-Range streaming).
  */
 export function pmtilesUrl(fileName: string): string {
+  if (!isLocalDevServer() && fileName === 'Israel.dem.pmtiles') {
+    const customDemUrl = getCustomDemPmtilesUrl();
+    if (customDemUrl) return customDemUrl;
+  }
   return remoteDataUrl(fileName);
 }
 
