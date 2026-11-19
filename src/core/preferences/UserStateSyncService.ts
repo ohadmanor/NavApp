@@ -133,7 +133,7 @@ export function sanitizeCamera(raw: unknown): SavedMapCamera | null {
   ) {
     return null;
   }
-  if (c.lon < -180 || c.lon > 180 || c.lat < -85 || c.lat > 85 || c.zoom < 0 || c.zoom > 22) {
+  if (c.lon < -180 || c.lon > 180 || c.lat < -85.1 || c.lat > 85.1 || c.zoom < 0 || c.zoom > 22) {
     return null;
   }
   const bearing =

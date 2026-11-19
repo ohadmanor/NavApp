@@ -49,9 +49,11 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "firebase-tools": "^13.35.1",
+    "geojson-vt": "^5.0.4",
     "typescript": "^5.7.2",
     "vite": "^6.1.0",
     "vite-plugin-pwa": "^0.21.1",
-    "vitest": "^3.0.5"
+    "vitest": "^3.0.5",
+    "vt-pbf": "^3.1.3"
   }
 }

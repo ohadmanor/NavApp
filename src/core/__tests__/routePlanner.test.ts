@@ -360,7 +360,13 @@ describe('Client-Side Route Planner (4x4, Foot, Bicycle) & Firebase planing_trac
       expect(jerBikeGraph.edges.length).toBeGreaterThan(200);
 
       const bikeStartEdge = jerBikeGraph.edges.find(
-        (e) => !e.id.startsWith('ramp-') && e.forwardAllowed && (jerBikeGraph.adjacency.get(e.toNode)?.length || 0) >= 2
+        (e) =>
+          !e.id.startsWith('ramp-') &&
+          e.forwardAllowed &&
+          (jerBikeGraph.adjacency
+            .get(e.toNode)
+            ?.some((a) => a.edge.id !== e.id && !a.edge.id.startsWith('ramp-')) ??
+            false)
       );
       const bikeNextStep = bikeStartEdge
         ? jerBikeGraph.adjacency

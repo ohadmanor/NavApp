@@ -1,4 +1,9 @@
-import type { StyleSpecification, LayerSpecification, SkySpecification } from 'maplibre-gl';
+import type {
+  StyleSpecification,
+  LayerSpecification,
+  SkySpecification,
+  ProjectionSpecification,
+} from 'maplibre-gl';
 import navappLayersRaw from './navappLayer.json';
 import { pmtilesUrl } from '../dataUrls';
 import { SHVIL_ISRAEL_LOWZOOM_LINES } from './shvilIsraelLowZoom';
@@ -12,9 +17,46 @@ import {
   buildRegionalTrailNameLayer,
   buildRegionalTrailsSource,
 } from './regionalTrails';
+import {
+  WORLD_BASEMAP_SOURCE_ID,
+  WORLD_GLOBE_LAYER_IDS,
+  buildWorldBasemapSource,
+  buildWorldGlobeBaseLayers,
+  buildWorldGlobeLabelLayers,
+} from './worldGlobeStyle';
 
 export type { MapStyleId };
 export const DEFAULT_MAP_STYLE: MapStyleId = 'nms';
+export type MapProjectionMode = 'vertical-perspective' | 'globe' | 'mercator';
+
+/** Exact WGS84 bounding box covered by `Israel.dem.pmtiles` (`[west, south, east, north]`). */
+export const ISRAEL_DEM_BOUNDS: [number, number, number, number] = [
+  34.1166, 29.4193, 36.0065, 33.3848,
+];
+
+const RTT_DRAPED_LAYER_TYPES = new Set([
+  'background',
+  'fill',
+  'line',
+  'raster',
+  'hillshade',
+  'color-relief',
+  'heatmap',
+]);
+
+/**
+ * Returns the ID of the first non-RTT layer (`symbol`/`circle`/`fill-extrusion`) so ground
+ * line/fill overlays can be inserted before it, keeping 3D `RenderToTexture` in one stack.
+ */
+export function findFirstNonRttOverlayLayerId(
+  map: { getStyle?: () => { layers?: Array<{ id?: string; type?: string }> } | undefined } | null | undefined
+): string | undefined {
+  const layers = map?.getStyle?.()?.layers;
+  if (!Array.isArray(layers)) return undefined;
+  return layers.find(
+    (layer) => Boolean(layer.id) && Boolean(layer.type) && !RTT_DRAPED_LAYER_TYPES.has(layer.type!)
+  )?.id;
+}
 
 export interface OutdoorLayerVisibility {
   googleSatellite: boolean;
@@ -204,10 +246,23 @@ export interface BuildIsraelStyleParams {
   demProtocolUrl?: string | null;
   contourProtocolUrl?: string | null;
   tacticalGridProtocolUrl?: string | null;
+  worldProtocolUrl?: string | null;
   visibility: OutdoorLayerVisibility;
   theme?: 'topo-day' | 'topo-dark';
   mapStyle?: MapStyleId;
+  projection?: MapProjectionMode;
+  includeWorldGlobe?: boolean;
 }
+
+const ISRAEL_GLOBE_HIDE_BOX_IDS = new Set([
+  'Terrain',
+  'boundary-country-line',
+  'boundary-country-Green_line',
+  'boundary-country-Golan',
+  'boundary-area-AB',
+  'area-A',
+  'area-AB',
+]);
 
 const DEFAULT_TRAIL_BROWN = '#AA8166';
 const DEFAULT_STEPS_BROWN = '#8E5632';
@@ -1267,6 +1322,10 @@ function getVisibilityForIhmLayer(
 
   const aerialActive = isAerialOverlayActive(visibility);
 
+  if (WORLD_GLOBE_LAYER_IDS.has(layerId)) {
+    return !aerialActive;
+  }
+
   if (
     layerId === 'tactical-grid-minor' ||
     layerId === 'tactical-grid-major' ||
@@ -1429,9 +1488,12 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     demProtocolUrl,
     contourProtocolUrl,
     tacticalGridProtocolUrl = 'tactical-grid://{z}/{x}/{y}',
+    worldProtocolUrl,
     visibility,
     theme = 'topo-day',
     mapStyle = DEFAULT_MAP_STYLE,
+    projection = 'globe',
+    includeWorldGlobe = projection !== 'mercator',
   } = params;
 
   const isDark = theme === 'topo-dark';
@@ -1515,6 +1577,14 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     };
   }
 
+  // Restrict DEM, hillshade, and contour sources to Israel's archive extent so 3D globe
+  // and border views never dispatch futile out-of-bounds range requests to remote storage.
+  for (const demSourceId of ['israel-dem', 'israel-dem-hillshade', 'israel-contours']) {
+    if (sources[demSourceId]) {
+      (sources[demSourceId] as any).bounds = ISRAEL_DEM_BOUNDS;
+    }
+  }
+
   if (tacticalGridProtocolUrl) {
     sources['tactical-grid'] = {
       type: 'vector',
@@ -1522,6 +1592,10 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       minzoom: 7,
       maxzoom: 16,
     };
+  }
+
+  if (includeWorldGlobe) {
+    sources[WORLD_BASEMAP_SOURCE_ID] = buildWorldBasemapSource(worldProtocolUrl || origin);
   }
 
   const baseLayers = structuredClone(navappLayersRaw) as LayerSpecification[];
@@ -1567,6 +1641,15 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
           visibility: visibility.govmapOrtho ? 'visible' : 'none',
         },
       });
+      if (includeWorldGlobe) {
+        layers.push(
+          ...buildWorldGlobeBaseLayers({
+            mapStyle,
+            isDark,
+            visible: !isAerialOverlayActive(visibility),
+          })
+        );
+      }
       continue;
     }
 
@@ -1640,6 +1723,12 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
       } else {
         delete (layer as any).filter;
       }
+    }
+
+    if (includeWorldGlobe && ISRAEL_GLOBE_HIDE_BOX_IDS.has(layer.id)) {
+      const floorZoom =
+        layer.id === 'Terrain' ? 8 : layer.id === 'boundary-country-line' ? 5.5 : 7;
+      (layer as any).minzoom = Math.max((layer as any).minzoom ?? 0, floorZoom);
     }
 
     layers.push(layer);
@@ -1738,13 +1827,21 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
         },
       },
     ];
-    const labelInsertIdx = layers.findIndex(
-      (l) =>
-        l.id === 'contour-label' ||
-        l.id === 'name-building' ||
-        l.id === 'name-water-line' ||
-        l.id === 'place-farm'
+    // Insert before the first non-RTT layer so ground tactical grid lines stay inside the single
+    // RenderToTexture stack (avoiding 30-slot FBO pool thrashing in 3D) while symbols stay below labels.
+    const firstNonRttIdx = layers.findIndex(
+      (l) => !RTT_DRAPED_LAYER_TYPES.has(l.type)
     );
+    const labelInsertIdx =
+      firstNonRttIdx !== -1
+        ? firstNonRttIdx
+        : layers.findIndex(
+            (l) =>
+              l.id === 'contour-label' ||
+              l.id === 'name-building' ||
+              l.id === 'name-water-line' ||
+              l.id === 'place-farm'
+          );
     if (labelInsertIdx !== -1) {
       layers.splice(labelInsertIdx, 0, ...gridLayers);
     } else {
@@ -1758,6 +1855,45 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     applyGovmapStyleEnhancements(layers, theme, visibility);
   }
 
+  // Insert world sea/continent/country labels in the symbol stack below place-city
+  // so Israel's city and trail labels keep collision priority while keeping all symbol
+  // layers above roads/trails.
+  if (includeWorldGlobe) {
+    const worldLabels = buildWorldGlobeLabelLayers({
+      mapStyle,
+      isDark,
+      visible: !isAerialOverlayActive(visibility),
+    });
+    const placeCityIdx = layers.findIndex((l) => l.id === 'place-city');
+    if (placeCityIdx !== -1) {
+      layers.splice(placeCityIdx, 0, ...worldLabels);
+    } else {
+      layers.push(...worldLabels);
+    }
+  }
+
+  // MapLibre's raw 'vertical-perspective' string instantiates VerticalPerspectiveTransform whose
+  // getProjectionData breaks RenderToTexture for 3D terrain, and sphere coordinates overflow float32
+  // precision with terrain3d at trail zooms (>=13). Default 'globe' (and 'vertical-perspective' via
+  // a 11..12 transition) uses GlobeTransform: full spherical globe up to regional zoom, blending
+  // smoothly into flat Mercator by z12 where curvature is sub-pixel.
+  const projectionSpec: ProjectionSpecification | undefined =
+    projection === 'mercator'
+      ? undefined
+      : projection === 'vertical-perspective'
+        ? {
+            type: [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              11,
+              'vertical-perspective',
+              12,
+              'mercator',
+            ] as any,
+          }
+        : { type: projection };
+
   const style: StyleSpecification = {
     version: 8,
     name:
@@ -1768,6 +1904,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
           : 'Israel Hiking Map (Official IHM Vector Style + 10m Contours + Offline Sprites)',
     sprite: `${origin}/assets/sprites/sprite`,
     sky: buildOutdoorSkySpec(theme),
+    ...(projectionSpec ? { projection: projectionSpec } : {}),
     sources,
     layers,
   };

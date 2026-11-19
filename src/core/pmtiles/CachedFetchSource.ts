@@ -45,7 +45,10 @@ export interface CachedFetchSourceOptions {
 
 export class CachedFetchSource implements Source {
   private inner: FetchSource;
-  private inFlight = new Map<string, Promise<RangeResponse>>();
+  private inFlight = new Map<
+    string,
+    { promise: Promise<RangeResponse>; controller: AbortController; refs: number }
+  >();
   private cachePromise: Promise<Cache | null> | null = null;
   private immutable: boolean;
 
@@ -74,19 +77,68 @@ export class CachedFetchSource implements Source {
     );
   }
 
+  private awaitEntryForCaller(
+    key: string,
+    entry: { promise: Promise<RangeResponse>; controller: AbortController; refs: number },
+    signal?: AbortSignal
+  ): Promise<RangeResponse> {
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    }
+    entry.refs++;
+
+    return new Promise<RangeResponse>((resolve, reject) => {
+      let settled = false;
+      const onCallerAbort = () => {
+        if (settled) return;
+        settled = true;
+        entry.refs--;
+        if (entry.refs <= 0 && this.inFlight.get(key) === entry) {
+          entry.controller.abort();
+        }
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+      if (signal) {
+        signal.addEventListener('abort', onCallerAbort, { once: true });
+      }
+      entry.promise.then(
+        (res) => {
+          if (signal) signal.removeEventListener('abort', onCallerAbort);
+          if (settled) return;
+          settled = true;
+          entry.refs--;
+          resolve({ ...res, data: res.data.slice(0) });
+        },
+        (err) => {
+          if (signal) signal.removeEventListener('abort', onCallerAbort);
+          if (settled) return;
+          settled = true;
+          entry.refs--;
+          reject(err);
+        }
+      );
+    });
+  }
+
   async getBytes(
     offset: number,
     length: number,
     signal?: AbortSignal,
     etag?: string
   ): Promise<RangeResponse> {
+    if (signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
     const key = `${offset}-${length}-${etag || ''}`;
-    const pending = this.inFlight.get(key);
-    if (pending) {
-      return pending.then((r) => ({ ...r, data: r.data.slice(0) }));
+    const existing = this.inFlight.get(key);
+    if (existing) {
+      return this.awaitEntryForCaller(key, existing, signal);
     }
 
-    const task = (async (): Promise<RangeResponse> => {
+    const sharedController = new AbortController();
+    const sharedSignal = sharedController.signal;
+
+    const promise = (async (): Promise<RangeResponse> => {
       const cacheable = length <= MAX_CACHED_RANGE_BYTES;
       let cache = cacheable ? await this.getCache() : null;
       const req = this.cacheRequest(offset, length);
@@ -109,7 +161,7 @@ export class CachedFetchSource implements Source {
         (typeof navigator === 'undefined' || navigator.onLine !== false);
 
       if (shouldRevalidateHeader) {
-        const reqSignal = createTimeoutSignal(signal);
+        const reqSignal = createTimeoutSignal(sharedSignal);
         try {
           const freshResp = await fetch(this.url, {
             signal: reqSignal,
@@ -157,7 +209,7 @@ export class CachedFetchSource implements Source {
             throw new Error(`HTTP ${freshResp.status} from ${this.url}`);
           }
         } catch (err: any) {
-          if (err?.name === 'AbortError' && signal?.aborted) throw err;
+          if (err?.name === 'AbortError' && sharedSignal.aborted) throw err;
           if (cachedHit) {
             const hitEtag = cachedHit.headers.get('x-etag') || undefined;
             return { data: await cachedHit.arrayBuffer(), etag: hitEtag };
@@ -174,7 +226,7 @@ export class CachedFetchSource implements Source {
         }
       }
 
-      const rangeSignal = createTimeoutSignal(signal);
+      const rangeSignal = createTimeoutSignal(sharedSignal);
       const res = await this.inner.getBytes(offset, length, rangeSignal, etag);
 
       // Validate header magic bytes (PM) at offset 0 so HTML error pages are never parsed or cached
@@ -200,8 +252,9 @@ export class CachedFetchSource implements Source {
       return res;
     })().finally(() => this.inFlight.delete(key));
 
-    this.inFlight.set(key, task);
-    return task.then((r) => ({ ...r, data: r.data.slice(0) }));
+    const entry = { promise, controller: sharedController, refs: 0 };
+    this.inFlight.set(key, entry);
+    return this.awaitEntryForCaller(key, entry, signal);
   }
 
   /** Drops all cached ranges (e.g. when the remote archive was replaced). */

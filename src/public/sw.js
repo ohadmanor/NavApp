@@ -1,4 +1,4 @@
-const CACHE_NAME = 'navapp-offline-v14';
+const CACHE_NAME = 'navapp-offline-v16';
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -58,7 +58,8 @@ const APP_SHELL = [
   "/assets/poi-symbols/poi-water-pool.svg",
   "/assets/poi-symbols/poi-water-spring.svg",
   "/assets/poi-symbols/poi-water-tap.svg",
-  "/assets/poi-symbols/poi-water-waterfall.svg"
+  "/assets/poi-symbols/poi-water-waterfall.svg",
+  "/assets/world-globe/world-basemap.pmtiles"
 ];
 
 self.addEventListener('install', (event) => {
@@ -77,8 +78,61 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+async function handleBundledWorldPmtilesRequest(event, url) {
+  const cache = await caches.open(CACHE_NAME);
+  let fullResp = await cache.match(url.pathname);
+  if (!fullResp) {
+    try {
+      const netResp = await fetch(event.request);
+      if (netResp.status === 200) {
+        await cache.put(url.pathname, netResp.clone());
+      }
+      return netResp;
+    } catch {
+      return new Response(null, { status: 503 });
+    }
+  }
+  const rangeHeader = event.request.headers.get('range');
+  if (!rangeHeader) {
+    return fullResp;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+  if (!match) {
+    return fullResp;
+  }
+  const buf = await fullResp.arrayBuffer();
+  const total = buf.byteLength;
+  const start = match[1] ? parseInt(match[1], 10) : 0;
+  const end = match[2] ? Math.min(parseInt(match[2], 10), total - 1) : total - 1;
+  if (start >= total || start > end) {
+    return new Response(null, {
+      status: 416,
+      headers: { 'Content-Range': 'bytes */' + total },
+    });
+  }
+  const slice = buf.slice(start, end + 1);
+  return new Response(slice, {
+    status: 206,
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Accept-Ranges': 'bytes',
+      'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
+      'Content-Length': String(slice.byteLength),
+    },
+  });
+}
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  if (
+    event.request.method === 'GET' &&
+    url.origin === self.location.origin &&
+    url.pathname.startsWith('/assets/world-globe/') &&
+    url.pathname.endsWith('.pmtiles')
+  ) {
+    event.respondWith(handleBundledWorldPmtilesRequest(event, url));
+    return;
+  }
   // Never intercept byte-range requests to large .pmtiles files, OAuth callbacks, or cross-origin requests (e.g. Google Satellite tiles)
   if (
     url.pathname.endsWith('.pmtiles') ||

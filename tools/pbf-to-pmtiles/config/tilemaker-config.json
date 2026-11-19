@@ -2,17 +2,23 @@
   "layers": {
     "place": { "minzoom": 0, "maxzoom": 14 },
     "boundary": { "minzoom": 0, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
+    "admin_area": { "minzoom": 0, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
     "water": { "minzoom": 0, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
     "waterway": { "minzoom": 8, "maxzoom": 14, "simplify_below": 12, "simplify_level": 0.0003 },
+    "water_name": { "minzoom": 9, "maxzoom": 14 },
     "landcover": { "minzoom": 0, "maxzoom": 14, "simplify_below": 13, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
     "landuse": { "minzoom": 4, "maxzoom": 14, "simplify_below": 13, "simplify_level": 0.0003, "simplify_algorithm": "visvalingam" },
     "park": { "minzoom": 4, "maxzoom": 14 },
     "transportation": { "minzoom": 4, "maxzoom": 14, "simplify_below": 13, "simplify_level": 0.0003 },
-    "transportation_name": { "minzoom": 8, "maxzoom": 14 },
+    "transportation_name": { "minzoom": 6, "maxzoom": 14 },
     "building": { "minzoom": 13, "maxzoom": 14 },
-    "aeroway": { "minzoom": 11, "maxzoom": 14 },
+    "housenumber": { "minzoom": 14, "maxzoom": 14 },
+    "aeroway": { "minzoom": 10, "maxzoom": 14 },
+    "aerodrome_label": { "minzoom": 10, "maxzoom": 14 },
     "mountain_peak": { "minzoom": 10, "maxzoom": 14 },
-    "poi": { "minzoom": 12, "maxzoom": 14 }
+    "poi": { "minzoom": 12, "maxzoom": 14 },
+    "flood_defence": { "minzoom": 12, "maxzoom": 14, "combine_lines_below": 0 },
+    "fuel_line": { "minzoom": 12, "maxzoom": 14, "combine_lines_below": 0 }
   },
   "settings": {
     "minzoom": 0,

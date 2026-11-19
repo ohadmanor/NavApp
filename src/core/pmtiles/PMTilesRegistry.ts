@@ -14,6 +14,8 @@ import { pmtilesUrl, REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN } from '../
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
 import { NativeOfflineStorage } from './NativeOfflineStorage';
 import { CachedFetchSource } from './CachedFetchSource';
+import { BundledAssetPMTilesSource } from './BundledAssetPMTilesSource';
+import { WORLD_BASEMAP_ASSET_PATH } from '../style/worldGlobeStyle';
 import {
   probeLocalDataServer,
   probeRemoteDataFile,
@@ -145,6 +147,33 @@ export class PMTilesRegistry {
     return this.defaultContourProtocolUrl;
   }
 
+  private getDefaultWorldHttpUrl(): string {
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : REMOTE_DATA_ORIGIN;
+    return `${origin}${WORLD_BASEMAP_ASSET_PATH}`;
+  }
+
+  /**
+   * Constant bundled world globe base archive (`world-basemap.pmtiles`), immutable across
+   * Israel OSM/DEM updates.
+   */
+  getDefaultWorldProtocolUrl(): string {
+    return `pmtiles://${this.getDefaultWorldHttpUrl()}`;
+  }
+
+  private ensureBundledWorldBasemap(httpUrl: string): PMTiles {
+    const existing = this.protocol.get(httpUrl);
+    if (existing) return existing;
+
+    const pmtiles = new PMTiles(new BundledAssetPMTilesSource(httpUrl));
+    this.attachInMemoryTileCache(pmtiles, 600);
+    this.protocol.add(pmtiles);
+    (this.protocol as any).tiles?.set('world-basemap', pmtiles);
+    return pmtiles;
+  }
+
   onArchiveUpdated(listener: ArchiveUpdateListener): () => void {
     this.updateListeners.add(listener);
     return () => this.updateListeners.delete(listener);
@@ -173,7 +202,18 @@ export class PMTilesRegistry {
 
   initProtocols(): void {
     if (this.isProtocolRegistered) return;
-    maplibregl.addProtocol('pmtiles', this.protocol.tile);
+    const rawTileHandler = this.protocol.tile.bind(this.protocol) as any;
+    maplibregl.addProtocol('pmtiles', ((params: any, arg2: any) => {
+      const rawUrl = typeof params?.url === 'string' ? params.url : '';
+      if (rawUrl.startsWith('pmtiles://')) {
+        const stripped = rawUrl.slice('pmtiles://'.length).replace(/\/\d+\/\d+\/\d+$/, '');
+        if (stripped.includes('world-basemap.pmtiles')) {
+          this.ensureBundledWorldBasemap(stripped);
+        }
+      }
+      return rawTileHandler(params, arg2);
+    }) as any);
+    this.ensureBundledWorldBasemap(this.getDefaultWorldHttpUrl());
     registerOfflineGlyphsProtocol();
     registerOfflineRtlTextPlugin();
     registerTacticalGridProtocol();
@@ -796,7 +836,8 @@ export class PMTilesRegistry {
       isLockedConstant: isConstant,
     };
 
-    await db.mapRegistry.put(record).catch(() => {});
+    // Persist registry metadata in the background so IndexedDB contention never delays map boot or 3D DEM mounting.
+    void db.mapRegistry.put(record).catch(() => {});
 
     let contourProtocolUrl: string | undefined;
     if (id === 'israel-dem') {

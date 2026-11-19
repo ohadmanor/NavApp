@@ -64,6 +64,8 @@ export async function generateCarStyleAssets() {
       demProtocolUrl: '__DEM_URL__',
       contourProtocolUrl: undefined, // MapLibre Native renders vector trails + DEM hillshade directly
       tacticalGridProtocolUrl: null, // Web tactical-grid:// protocol is JS-only
+      projection: 'mercator', // Android Auto native MapLibre SDK uses flat/pitched car navigation
+      includeWorldGlobe: false,
       visibility: {
         ...DEFAULT_LAYER_VISIBILITY,
         terrain3d: false,

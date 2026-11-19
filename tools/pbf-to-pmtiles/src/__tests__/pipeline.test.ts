@@ -88,6 +88,41 @@ describe('pbf-to-pmtiles config & enrichment injector', () => {
     expect(lua).toContain('AttributeNumeric("intermittent", 1)');
   });
 
+  it('includes OpenMapTiles/IHM zoom parameters, building heights, flood/fuel layers, and routing attributes in Lua & config', () => {
+    const lua = fs.readFileSync(new URL('../../config/tilemaker-process.lua', import.meta.url), 'utf8');
+    const cfg = JSON.parse(
+      fs.readFileSync(new URL('../../config/tilemaker-config.json', import.meta.url), 'utf8')
+    ) as { layers: Record<string, unknown> };
+
+    expect(lua).toContain('BUILDING_FLOOR_HEIGHT = 3.66');
+    expect(lua).toContain('SetBuildingHeightAttributes()');
+    expect(lua).toContain('AttributeNumeric("render_height", renderHeight)');
+    expect(lua).toContain('AttributeNumeric("render_min_height", renderMinHeight)');
+    expect(lua).toContain('SetBuildingColourAttribute()');
+    expect(lua).toContain('Attribute("colour", colour)');
+    expect(lua).toContain('ZP = {');
+    expect(lua).toContain('routingMinzoom = 13');
+    expect(lua).toContain('floodMinzoom   = 12');
+    expect(lua).toContain('fuelMinzoom    = 12');
+    expect(lua).toContain('function write_admin_area_layer()');
+    expect(lua).toContain('function write_routing_attributes(');
+    expect(lua).toContain('function write_flood_defence(');
+    expect(lua).toContain('function write_fuel_line(');
+    expect(lua).toContain('function write_fuel_attributes(');
+
+    for (const layerName of [
+      'admin_area',
+      'water_name',
+      'building',
+      'housenumber',
+      'aerodrome_label',
+      'flood_defence',
+      'fuel_line',
+    ]) {
+      expect(cfg.layers[layerName]).toBeDefined();
+    }
+  });
+
   it('validates PMTiles vector layers using pbf PbfReader without PbfCtor error', async () => {
     const pmtilesPath = path.join(REPO_ROOT, 'data', 'Israel.osm.pmtiles');
     if (!fs.existsSync(pmtilesPath)) return;

@@ -36,6 +36,7 @@ import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
   buildPoiTieredLayerFilter,
+  findFirstNonRttOverlayLayerId,
   getVectorPoiLayerCategory,
   isAerialOverlayActive,
   isMasterPoiActive,
@@ -2732,6 +2733,10 @@ export const App: React.FC = () => {
       try {
         if (!map.getStyle()) return;
 
+        // Place ground line overlays before the first non-RTT layer (symbol/circle/extrusion)
+        // so MapLibre 3D RenderToTexture keeps all terrain-draped layers in one FBO stack.
+        const rttBeforeId = findFirstNonRttOverlayLayerId(map);
+
         const routeHighlightColor: any = [
           'case',
           ['any', ['==', ['get', 'color'], '#10b981'], ['!', ['has', 'color']]],
@@ -2786,29 +2791,35 @@ export const App: React.FC = () => {
           existingSavedSrc.setData(savedRoutesGeoJson);
         } else {
           map.addSource('saved-routes-src', { type: 'geojson', data: savedRoutesGeoJson });
-          map.addLayer({
-            id: 'saved-routes-line',
-            type: 'line',
-            source: 'saved-routes-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': routeHighlightColor,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 5, 13, 8.5, 16, 12],
-              'line-opacity': 0.34,
+          map.addLayer(
+            {
+              id: 'saved-routes-line',
+              type: 'line',
+              source: 'saved-routes-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': routeHighlightColor,
+                'line-width': ['interpolate', ['linear'], ['zoom'], 9, 5, 13, 8.5, 16, 12],
+                'line-opacity': 0.34,
+              },
             },
-          });
-          map.addLayer({
-            id: 'saved-routes-border',
-            type: 'line',
-            source: 'saved-routes-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': railBorderColor,
-              'line-width': 1.3,
-              'line-gap-width': ['interpolate', ['linear'], ['zoom'], 9, 4.5, 13, 8, 16, 11.5],
-              'line-opacity': 0.55,
+            rttBeforeId
+          );
+          map.addLayer(
+            {
+              id: 'saved-routes-border',
+              type: 'line',
+              source: 'saved-routes-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': railBorderColor,
+                'line-width': 1.3,
+                'line-gap-width': ['interpolate', ['linear'], ['zoom'], 9, 4.5, 13, 8, 16, 11.5],
+                'line-opacity': 0.55,
+              },
             },
-          });
+            rttBeforeId
+          );
         }
 
         // Active Route (deterministic display policy: Planning/Selecting/Editing/Navigating only)
@@ -2831,29 +2842,35 @@ export const App: React.FC = () => {
           existingRouteSrc.setData(routeGeoJson);
         } else {
           map.addSource('active-route-src', { type: 'geojson', data: routeGeoJson });
-          map.addLayer({
-            id: 'active-route-line',
-            type: 'line',
-            source: 'active-route-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': routeHighlightColor,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 7, 13, 11, 16, 15],
-              'line-opacity': 0.44,
+          map.addLayer(
+            {
+              id: 'active-route-line',
+              type: 'line',
+              source: 'active-route-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': routeHighlightColor,
+                'line-width': ['interpolate', ['linear'], ['zoom'], 9, 7, 13, 11, 16, 15],
+                'line-opacity': 0.44,
+              },
             },
-          });
-          map.addLayer({
-            id: 'active-route-casing',
-            type: 'line',
-            source: 'active-route-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': railBorderColor,
-              'line-width': 1.8,
-              'line-gap-width': ['interpolate', ['linear'], ['zoom'], 9, 6.5, 13, 10.5, 16, 14.5],
-              'line-opacity': 0.85,
+            rttBeforeId
+          );
+          map.addLayer(
+            {
+              id: 'active-route-casing',
+              type: 'line',
+              source: 'active-route-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': railBorderColor,
+                'line-width': 1.8,
+                'line-gap-width': ['interpolate', ['linear'], ['zoom'], 9, 6.5, 13, 10.5, 16, 14.5],
+                'line-opacity': 0.85,
+              },
             },
-          });
+            rttBeforeId
+          );
         }
 
         // Active Route Start / Finish Endpoint Markers (supports LineString & MultiLineString)
@@ -2937,16 +2954,19 @@ export const App: React.FC = () => {
           existingTrackSrc.setData(trackGeoJson);
         } else {
           map.addSource('live-track-src', { type: 'geojson', data: trackGeoJson });
-          map.addLayer({
-            id: 'live-track-line',
-            type: 'line',
-            source: 'live-track-src',
-            paint: {
-              'line-color': '#38bdf8',
-              'line-width': 4,
-              'line-dasharray': [2, 1],
+          map.addLayer(
+            {
+              id: 'live-track-line',
+              type: 'line',
+              source: 'live-track-src',
+              paint: {
+                'line-color': '#38bdf8',
+                'line-width': 4,
+                'line-dasharray': [2, 1],
+              },
             },
-          });
+            rttBeforeId
+          );
         }
 
         const activeMapStyle = mapStyleRef.current;
@@ -3125,28 +3145,34 @@ export const App: React.FC = () => {
           }
         } else {
           map.addSource('plan-route-network-src', { type: 'geojson', data: planNetGeoJson });
-          map.addLayer({
-            id: 'plan-route-network-casing',
-            type: 'line',
-            source: 'plan-route-network-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': planCasingColor,
-              'line-width': 7.5,
-              'line-opacity': 0.9,
+          map.addLayer(
+            {
+              id: 'plan-route-network-casing',
+              type: 'line',
+              source: 'plan-route-network-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': planCasingColor,
+                'line-width': 7.5,
+                'line-opacity': 0.9,
+              },
             },
-          });
-          map.addLayer({
-            id: 'plan-route-network-line',
-            type: 'line',
-            source: 'plan-route-network-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': ['coalesce', ['get', 'color'], modeColor],
-              'line-width': 4.2,
-              'line-opacity': 0.95,
+            rttBeforeId
+          );
+          map.addLayer(
+            {
+              id: 'plan-route-network-line',
+              type: 'line',
+              source: 'plan-route-network-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': ['coalesce', ['get', 'color'], modeColor],
+                'line-width': 4.2,
+                'line-opacity': 0.95,
+              },
             },
-          });
+            rttBeforeId
+          );
         }
 
         const straightFeatures: GeoJSON.Feature[] = currentPlan.active
@@ -3172,18 +3198,21 @@ export const App: React.FC = () => {
             type: 'geojson',
             data: planStraightGeoJson,
           });
-          map.addLayer({
-            id: 'plan-route-straight-line',
-            type: 'line',
-            source: 'plan-route-straight-src',
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': PLANNING_ROUTE_COLOR,
-              'line-width': 3.5,
-              'line-dasharray': [2, 1.5],
-              'line-opacity': 0.95,
+          map.addLayer(
+            {
+              id: 'plan-route-straight-line',
+              type: 'line',
+              source: 'plan-route-straight-src',
+              layout: { 'line-cap': 'round', 'line-join': 'round' },
+              paint: {
+                'line-color': PLANNING_ROUTE_COLOR,
+                'line-width': 3.5,
+                'line-dasharray': [2, 1.5],
+                'line-opacity': 0.95,
+              },
             },
-          });
+            rttBeforeId
+          );
         }
 
         // Snap hover preview / disconnected candidate preview
@@ -3241,18 +3270,21 @@ export const App: React.FC = () => {
           existingPreviewSrc.setData(previewGeoJson);
         } else {
           map.addSource('plan-snap-preview-src', { type: 'geojson', data: previewGeoJson });
-          map.addLayer({
-            id: 'plan-snap-preview-tether',
-            type: 'line',
-            source: 'plan-snap-preview-src',
-            filter: ['==', ['get', 'kind'], 'tether'],
-            paint: {
-              'line-color': ['coalesce', ['get', 'color'], '#f59e0b'],
-              'line-width': 2.2,
-              'line-dasharray': [2, 2],
-              'line-opacity': 0.85,
+          map.addLayer(
+            {
+              id: 'plan-snap-preview-tether',
+              type: 'line',
+              source: 'plan-snap-preview-src',
+              filter: ['==', ['get', 'kind'], 'tether'],
+              paint: {
+                'line-color': ['coalesce', ['get', 'color'], '#f59e0b'],
+                'line-width': 2.2,
+                'line-dasharray': [2, 2],
+                'line-opacity': 0.85,
+              },
             },
-          });
+            rttBeforeId
+          );
           map.addLayer({
             id: 'plan-snap-preview-dot',
             type: 'circle',
@@ -3421,15 +3453,16 @@ export const App: React.FC = () => {
     const initialOsmUrl = existingOsm?.protocolUrl || pmtilesRegistry.getDefaultOsmProtocolUrl();
     const initialDemUrl = existingDem?.protocolUrl || pmtilesRegistry.getDefaultDemProtocolUrl();
     const initialContourUrl =
-      existingDem?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl();
+      existingDem?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl() || null;
 
-    mountedStyleKeyRef.current = `${initialOsmUrl}|${initialDemUrl}|${themeRef.current}|${mapStyleRef.current}`;
+    mountedStyleKeyRef.current = `${initialOsmUrl}|${initialDemUrl}|${initialContourUrl || ''}|${themeRef.current}|${mapStyleRef.current}`;
     isStyleLoadedRef.current = false;
 
     const initialStyle = buildIsraelOutdoorStyle({
       osmProtocolUrl: initialOsmUrl,
       demProtocolUrl: initialDemUrl,
       contourProtocolUrl: initialContourUrl,
+      worldProtocolUrl: pmtilesRegistry.getDefaultWorldProtocolUrl(),
       visibility: visibilityRef.current,
       theme: themeRef.current,
       mapStyle: mapStyleRef.current,
@@ -3462,7 +3495,9 @@ export const App: React.FC = () => {
       resizeObserver = new ResizeObserver(() => {
         if (isCancelled) return;
         map.resize();
-        map.triggerRepaint();
+        if (isStyleLoadedRef.current) {
+          map.triggerRepaint();
+        }
       });
       resizeObserver.observe(mapContainerRef.current);
     }
@@ -3586,7 +3621,15 @@ export const App: React.FC = () => {
     });
 
     map.on('mousemove', async (e) => {
-      if (isCancelled || map.isMoving() || map.isZooming() || map.isRotating()) return;
+      if (
+        isCancelled ||
+        map.isMoving() ||
+        map.isZooming() ||
+        map.isRotating() ||
+        (e.originalEvent?.buttons ?? 0) !== 0
+      ) {
+        return;
+      }
       const now = performance.now();
 
       // Snap-to-nearest-highway live preview while Route Planning mode is active (throttled ~75ms)
@@ -3613,12 +3656,13 @@ export const App: React.FC = () => {
       const zoom = Number(map.getZoom().toFixed(1));
       const ele = await ElevationService.getElevationAt(lon, lat, 11, true);
       if (isCancelled) return;
-      setCursorCoords((prev) => ({
-        lon,
-        lat,
-        ele: ele !== null ? ele : prev.ele,
-        zoom,
-      }));
+      setCursorCoords((prev) => {
+        const nextEle = ele !== null ? ele : prev.ele;
+        if (prev.lon === lon && prev.lat === lat && prev.ele === nextEle && prev.zoom === zoom) {
+          return prev;
+        }
+        return { lon, lat, ele: nextEle, zoom };
+      });
     });
 
     const selectPoiFromRenderedFeature = (
@@ -3894,28 +3938,78 @@ export const App: React.FC = () => {
     });
     map.on('mouseup', finishRoadVertexDrag);
     map.on('touchend', finishRoadVertexDrag);
+    // Single throttled POI hover cursor probe (replaces 25+ per-layer delegated listeners that each triggered queryRenderedFeatures -> gl.readPixels in 3D)
     const hoverPoiLayerIds = [...geoJsonPoiLayerIds, ...Array.from(POI_STYLE_LAYER_IDS)];
-    for (const poiHoverLayerId of hoverPoiLayerIds) {
-      map.on('mousemove', poiHoverLayerId, (e) => {
-        if (isPlanningRouteRef.current || isTrailMarkingModeRef.current) return;
-        const hovered = (e.features || []).some((f) => isSelectableRenderedFeature(f, e.lngLat));
-        if (hovered) {
-          map.getCanvas().style.cursor = 'pointer';
-          return;
+    let lastHoverQueryTs = 0;
+    let lastHoverX = -999;
+    let lastHoverY = -999;
+    let hasHoverPointer = false;
+    const resetHoverCursor = () => {
+      if (!hasHoverPointer) return;
+      hasHoverPointer = false;
+      map.getCanvas().style.cursor =
+        isPlanningRouteRef.current || isPickingPoiRef.current ? 'crosshair' : '';
+    };
+    map.on('movestart', resetHoverCursor);
+    map.on('mouseout', resetHoverCursor);
+    map.on('mousemove', (e) => {
+      if (isCancelled || isPlanningRouteRef.current || isTrailMarkingModeRef.current) return;
+      if (
+        map.isMoving() ||
+        map.isZooming() ||
+        map.isRotating() ||
+        (e.originalEvent?.buttons ?? 0) !== 0
+      ) {
+        return;
+      }
+      if (Math.abs(e.point.x - lastHoverX) < 3 && Math.abs(e.point.y - lastHoverY) < 3) {
+        return;
+      }
+      const now = performance.now();
+      if (now - lastHoverQueryTs < 120) return;
+      lastHoverQueryTs = now;
+      lastHoverX = e.point.x;
+      lastHoverY = e.point.y;
+
+      const activeLayers = hoverPoiLayerIds.filter((id) => Boolean(map.getLayer(id)));
+      const anySelectable =
+        activeLayers.length > 0 &&
+        map
+          .queryRenderedFeatures(e.point, { layers: activeLayers })
+          .some((f) => isSelectableRenderedFeature(f, e.lngLat));
+      if (anySelectable !== hasHoverPointer) {
+        hasHoverPointer = anySelectable;
+        map.getCanvas().style.cursor = anySelectable
+          ? 'pointer'
+          : isPlanningRouteRef.current || isPickingPoiRef.current
+            ? 'crosshair'
+            : '';
+      }
+    });
+
+    // Mount PMTiles DEM/OSM immediately without blocking behind Auth or Firestore startup timeouts
+    const archivesPromise = pmtilesRegistry
+      .initializeDefaultIsraelArchives()
+      .then(({ dem, osm }) => {
+        if (isCancelled) return { dem: null, osm: null };
+        if (dem) setDemInfo(dem);
+        if (osm) {
+          setOsmInfo(osm);
+          if (osm.hasTrailColorSchema === false) {
+            showToast(
+              'קובץ Israel.osm.pmtiles שנטען חסר צבעי שבילים — עדכן בענן (upload-map-data.bat) או מחק עותק אופליין ישן.'
+            );
+          }
         }
-        const activeLayers = hoverPoiLayerIds.filter((id) => Boolean(map.getLayer(id)));
-        const anySelectable =
-          activeLayers.length > 0 &&
-          map
-            .queryRenderedFeatures(e.point, { layers: activeLayers })
-            .some((f) => isSelectableRenderedFeature(f, e.lngLat));
-        map.getCanvas().style.cursor = anySelectable ? 'pointer' : '';
+        if (!osm && !dem) {
+          showToast('לא נמצאו קובצי מפה מקומיים — פתח "מפות אופליין" לטעינת PMTiles.');
+        }
+        return { dem, osm };
+      })
+      .catch((err) => {
+        console.warn('[App] Archive init warning:', err);
+        return { dem: null, osm: null };
       });
-      map.on('mouseleave', poiHoverLayerId, () => {
-        map.getCanvas().style.cursor =
-          isPlanningRouteRef.current || isPickingPoiRef.current ? 'crosshair' : '';
-      });
-    }
 
     (async () => {
       try {
@@ -3938,26 +4032,13 @@ export const App: React.FC = () => {
             PoiManager.purgePrivateAndSharedPoisForUserSwitch(null),
           ]);
         }
-        const [{ dem, osm }, loadedPois, loadedRoutes] = await Promise.all([
-          pmtilesRegistry.initializeDefaultIsraelArchives(),
+        const [, loadedPois, loadedRoutes] = await Promise.all([
+          archivesPromise,
           PoiManager.initializePois(),
           RouteManager.initializeStarterRoutes(bootUid),
         ]);
 
         if (isCancelled) return;
-
-        if (dem) setDemInfo(dem);
-        if (osm) {
-          setOsmInfo(osm);
-          if (osm.hasTrailColorSchema === false) {
-            showToast(
-              'קובץ Israel.osm.pmtiles שנטען חסר צבעי שבילים — עדכן בענן (upload-map-data.bat) או מחק עותק אופליין ישן.'
-            );
-          }
-        }
-        if (!osm && !dem) {
-          showToast('לא נמצאו קובצי מפה מקומיים — פתח "מפות אופליין" לטעינת PMTiles.');
-        }
         if (loadedPois.length > 0) setPois(loadedPois);
         if (deletedRouteIdsRef.current.size > 0) {
           const delIds = Array.from(deletedRouteIdsRef.current);
@@ -4004,7 +4085,7 @@ export const App: React.FC = () => {
     const effectiveDemUrl = demInfo?.protocolUrl || pmtilesRegistry.getDefaultDemProtocolUrl();
     const effectiveContourUrl =
       demInfo?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl() || null;
-    const nextStyleKey = `${effectiveOsmUrl}|${effectiveDemUrl}|${theme}|${mapStyle}`;
+    const nextStyleKey = `${effectiveOsmUrl}|${effectiveDemUrl}|${effectiveContourUrl || ''}|${theme}|${mapStyle}`;
     if (mountedStyleKeyRef.current === nextStyleKey) {
       return;
     }
@@ -4016,6 +4097,7 @@ export const App: React.FC = () => {
       osmProtocolUrl: effectiveOsmUrl,
       demProtocolUrl: effectiveDemUrl,
       contourProtocolUrl: effectiveContourUrl,
+      worldProtocolUrl: pmtilesRegistry.getDefaultWorldProtocolUrl(),
       visibility: visibilityRef.current,
       theme,
       mapStyle,
@@ -4047,6 +4129,10 @@ export const App: React.FC = () => {
     };
 
     map.once('style.load', restoreOverlays);
+    // Detach active 3D terrain before diff:false reset so projection/shader state cannot race mid-reload.
+    if (map.getTerrain?.()) {
+      map.setTerrain(null);
+    }
     map.setStyle(newStyle, { diff: false });
 
     return () => {
@@ -4113,7 +4199,7 @@ export const App: React.FC = () => {
       ? 'community-trails-casing'
       : map.getLayer('saved-routes-line')
         ? 'saved-routes-line'
-        : undefined;
+        : findFirstNonRttOverlayLayerId(map);
 
     if (!map.getLayer('community-roads-casing')) {
       const roadTrailSpniColorExpr: maplibregl.ExpressionSpecification = [
@@ -4315,8 +4401,7 @@ export const App: React.FC = () => {
             'text-halo-color': theme === 'topo-dark' ? '#0f172a' : '#ffffff',
             'text-halo-width': 2,
           },
-        },
-        beforeTrailsId
+        }
       );
     }
 
@@ -4328,18 +4413,21 @@ export const App: React.FC = () => {
       map.addSource(draftSourceId, { type: 'geojson', data: communityRoadDraftGeoJSON });
     }
     if (!map.getLayer('community-road-draft-line')) {
-      map.addLayer({
-        id: 'community-road-draft-line',
-        type: 'line',
-        source: draftSourceId,
-        filter: ['==', ['get', 'role'], 'draft-line'],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: {
-          'line-color': '#10b981',
-          'line-width': 4,
-          'line-dasharray': [3, 2],
+      map.addLayer(
+        {
+          id: 'community-road-draft-line',
+          type: 'line',
+          source: draftSourceId,
+          filter: ['==', ['get', 'role'], 'draft-line'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#10b981',
+            'line-width': 4,
+            'line-dasharray': [3, 2],
+          },
         },
-      });
+        findFirstNonRttOverlayLayerId(map)
+      );
       map.addLayer({
         id: 'community-road-draft-midpoints',
         type: 'circle',
@@ -4503,7 +4591,9 @@ export const App: React.FC = () => {
       ['coalesce', ['get', 'color'], '#FF0000'],
     ];
 
-    const beforeId = map.getLayer('saved-routes-line') ? 'saved-routes-line' : undefined;
+    const beforeId = map.getLayer('saved-routes-line')
+      ? 'saved-routes-line'
+      : findFirstNonRttOverlayLayerId(map);
     if (!map.getLayer('community-trails-casing')) {
       const isTrackOrRoadFilter: maplibregl.FilterSpecification = [
         'all',
@@ -4639,8 +4729,7 @@ export const App: React.FC = () => {
             'text-halo-width': 2.5,
             'text-halo-blur': 1,
           },
-        },
-        beforeId
+        }
       );
     }
 

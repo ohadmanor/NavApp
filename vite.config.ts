@@ -34,20 +34,40 @@ const APP_VERSION = buildAppVersionString();
  */
 function pmtilesDataRangePlugin(): Plugin {
   const dataDir = path.resolve(__dirname, 'data');
+  const publicDir = path.resolve(__dirname, 'src', 'public');
+  const distDir = path.resolve(__dirname, 'dist');
 
   const serveDataMiddleware = (req: any, res: any, next: () => void) => {
-    if (!req.url || !req.url.startsWith('/data/')) {
+    if (!req.url) {
       return next();
     }
 
     const urlObj = new URL(req.url, 'http://localhost');
-    const relPath = decodeURIComponent(urlObj.pathname.replace(/^\/data\//, ''));
-    const safePath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
-    const filePath = path.join(dataDir, safePath);
+    let filePath: string | null = null;
+    let relLabel = urlObj.pathname;
+
+    if (urlObj.pathname.startsWith('/data/')) {
+      const relPath = decodeURIComponent(urlObj.pathname.replace(/^\/data\//, ''));
+      const safePath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
+      filePath = path.join(dataDir, safePath);
+      relLabel = safePath;
+    } else if (
+      urlObj.pathname.startsWith('/assets/world-globe/') &&
+      urlObj.pathname.endsWith('.pmtiles')
+    ) {
+      const relPath = decodeURIComponent(urlObj.pathname.replace(/^\/+/, ''));
+      const safePath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
+      const distCandidate = path.join(distDir, safePath);
+      const publicCandidate = path.join(publicDir, safePath);
+      filePath = fs.existsSync(publicCandidate) ? publicCandidate : distCandidate;
+      relLabel = safePath;
+    } else {
+      return next();
+    }
 
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       res.statusCode = 404;
-      res.end(JSON.stringify({ error: `File not found in data/: ${safePath}` }));
+      res.end(JSON.stringify({ error: `PMTiles data file not found: ${relLabel}` }));
       return;
     }
 
