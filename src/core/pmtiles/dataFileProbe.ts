@@ -4,6 +4,7 @@ import {
   isLocalDevServer,
   REMOTE_DATA_FALLBACK_ORIGIN,
   REMOTE_DATA_ORIGIN,
+  wrapAndroidRemoteProxyUrl,
 } from '../dataUrls';
 
 export interface LocalDataServerProbe {
@@ -52,6 +53,9 @@ export function clearDataFileMeta(fileName: string): void {
   }
 }
 
+const LOCAL_PROBE_TIMEOUT_MS = 4000;
+const REMOTE_PROBE_TIMEOUT_MS = 10000;
+
 export async function probeLocalDataServer(
   fileName: string
 ): Promise<LocalDataServerProbe | null> {
@@ -63,7 +67,7 @@ export async function probeLocalDataServer(
     const head = await fetch(localUrl, {
       method: 'HEAD',
       cache: 'no-store',
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(LOCAL_PROBE_TIMEOUT_MS),
     });
     const contentType = head.headers.get('content-type') || '';
     if (!head.ok || contentType.includes('text/html')) {
@@ -90,7 +94,7 @@ async function tryHeadProbe(targetUrl: string): Promise<RemoteDataProbe | null> 
   const res = await fetch(targetUrl, {
     method: 'HEAD',
     cache: 'no-store',
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(REMOTE_PROBE_TIMEOUT_MS),
   });
   if (!res.ok) return null;
   const contentType = res.headers.get('content-type') || '';
@@ -110,7 +114,7 @@ async function tryRangeProbe(targetUrl: string): Promise<RemoteDataProbe | null>
   const res = await fetch(targetUrl, {
     headers: { Range: 'bytes=0-0' },
     cache: 'no-store',
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(REMOTE_PROBE_TIMEOUT_MS),
   });
   if (!res.ok) return null;
   const contentType = res.headers.get('content-type') || '';
@@ -143,7 +147,9 @@ export async function probeRemoteDataFile(
   const candidateUrls: string[] = [];
   if (fileName === 'Israel.dem.pmtiles') {
     const customDemUrl = getCustomDemPmtilesUrl();
-    if (customDemUrl) candidateUrls.push(customDemUrl);
+    if (customDemUrl) {
+      candidateUrls.push(wrapAndroidRemoteProxyUrl(fileName, customDemUrl));
+    }
   }
   const customOrigin = getCustomDataOrigin();
   const origins = customOrigin

@@ -51,6 +51,7 @@ import { CachedFetchSource } from '../pmtiles/CachedFetchSource';
 import { OpfsStorageAdapter } from '../pmtiles/OpfsStorageAdapter';
 import {
   PMTilesRegistry,
+  decodeDemPngSafely,
   getEmptyTerrariumTileBlob,
   wrapManagerWithSafeContourBuffers,
 } from '../pmtiles/PMTilesRegistry';
@@ -787,6 +788,39 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     expect(emptyBlob.type).toBe('image/png');
     const pngBytes = new Uint8Array(await emptyBlob.arrayBuffer());
     expect(Array.from(pngBytes.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
+
+    // Verify safe DEM decoder uses standard 2D HTMLCanvasElement when available and disposes ImageBitmap
+    const origDoc = (globalThis as any).document;
+    const origCreateBitmap = (globalThis as any).createImageBitmap;
+    let closedBitmap = false;
+    try {
+      (globalThis as any).createImageBitmap = async () => ({
+        width: 1,
+        height: 1,
+        close: () => {
+          closedBitmap = true;
+        },
+      });
+      (globalThis as any).document = {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            clearRect: () => {},
+            drawImage: () => {},
+            // Terrarium R=130, G=12, B=0 => 130*256 + 12 - 32768 = 524m
+            getImageData: () => ({ data: new Uint8ClampedArray([130, 12, 0, 255]) }),
+          }),
+        }),
+      };
+      const grid = await decodeDemPngSafely(emptyBlob, 'terrarium');
+      expect(closedBitmap).toBe(true);
+      expect(grid?.width).toBe(1);
+      expect(grid?.data[0]).toBeCloseTo(524, 3);
+    } finally {
+      (globalThis as any).document = origDoc;
+      (globalThis as any).createImageBitmap = origCreateBitmap;
+    }
   });
 
   it('replaces stale OPFS Israel.osm.pmtiles with fresher local /data archive and detects trail color schema', async () => {
@@ -881,7 +915,7 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
       (globalThis as any).caches = {
         open: async () => fakeCache,
         delete: async (name: string) => {
-          if (name === 'pmtiles-range-cache-v3') {
+          if (name === 'pmtiles-range-cache-v4') {
             cacheDeleted = true;
             store.clear();
           }
@@ -920,6 +954,75 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
       expect(
         store.has(`https://pmtiles-range-cache.invalid/${encodeURIComponent(url)}/16384-100`)
       ).toBe(false);
+    } finally {
+      (globalThis as any).caches = origCaches;
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('uses X-NavApp-Range on Android proxy URLs and rejects truncated or unbounded range replies', async () => {
+    const { CachedFetchSource } = await import('../pmtiles/CachedFetchSource');
+    const { BundledAssetPMTilesSource } = await import('../pmtiles/BundledAssetPMTilesSource');
+
+    const origCaches = (globalThis as any).caches;
+    const origFetch = globalThis.fetch;
+    try {
+      const store = new Map<string, Response>();
+      (globalThis as any).caches = {
+        open: async () => ({
+          match: async (req: Request) => store.get(req.url)?.clone(),
+          put: async (req: Request, res: Response) => {
+            store.set(req.url, res.clone());
+          },
+          delete: async (req: Request) => store.delete(req.url),
+        }),
+        delete: async () => true,
+      };
+
+      // 1. Proxy URL must use x-navapp-range (never HTTP Range) so Android WebView does not double-skip
+      const proxyUrl =
+        'https://localhost/__remote_proxy__/Israel.dem.pmtiles?url=https%3A%2F%2Ffirebasestorage.googleapis.com%2Fv0%2Fb%2Fnavapp-israel-topo.firebasestorage.app%2Fo%2Fmap_data%252FIsrael.dem.pmtiles%3Falt%3Dmedia';
+      const seenHeaders: Record<string, string>[] = [];
+      let failTruncatedOnce = true;
+      globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+        seenHeaders.push({ ...(init?.headers || {}) });
+        if (init?.headers?.['x-navapp-range'] === 'bytes=177-870') {
+          if (failTruncatedOnce) {
+            failTruncatedOnce = false;
+            return new Response(new Uint8Array(517), { status: 206 });
+          }
+          return new Response(new Uint8Array(694), { status: 206 });
+        }
+        return new Response(new Uint8Array([0x50, 0x4d, 0x03]), { status: 206 });
+      }) as any;
+
+      const demSrc = new CachedFetchSource(proxyUrl, { immutable: true });
+      const dirRes = await demSrc.getBytes(177, 694);
+      expect(dirRes.data.byteLength).toBe(694);
+      expect(seenHeaders[0]['x-navapp-range']).toBe('bytes=177-870');
+      expect(seenHeaders[0].range).toBeUndefined();
+      // Retried automatically after truncated 517-byte reply and cached only valid 694-byte reply
+      expect(seenHeaders.length).toBe(2);
+
+      // 2. BundledAssetPMTilesSource must fall back to full asset when host returns unbounded 206 (> requested length)
+      const fullPayload = new Uint8Array(30000);
+      fullPayload[0] = 0x50;
+      fullPayload[1] = 0x4d;
+      fullPayload[14956] = 0x1f;
+      fullPayload[14957] = 0x8b;
+      globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+        const hdrs = init?.headers || {};
+        if (hdrs.range || hdrs['x-navapp-range']) {
+          // Simulate Capacitor WebViewLocalServer returning 206 with the entire rest of file
+          return new Response(fullPayload.slice(14956), { status: 206 });
+        }
+        return new Response(fullPayload, { status: 200 });
+      }) as any;
+
+      const worldSrc = new BundledAssetPMTilesSource('https://localhost/assets/world-globe/world-basemap.pmtiles');
+      const meta = await worldSrc.getBytes(14956, 259);
+      expect(meta.data.byteLength).toBe(259);
+      expect(Array.from(new Uint8Array(meta.data.slice(0, 2)))).toEqual([0x1f, 0x8b]);
     } finally {
       (globalThis as any).caches = origCaches;
       globalThis.fetch = origFetch;

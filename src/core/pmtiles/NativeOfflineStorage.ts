@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import { unwrapAndroidRemoteProxyUrl } from '../dataUrls';
 
 export interface NativeArchiveFileStatus {
   exists: boolean;
@@ -144,9 +145,10 @@ export class NativeOfflineStorage {
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
+      const resolvedUrl = unwrapAndroidRemoteProxyUrl(url);
       const result = await plugin.downloadArchive({
         fileName,
-        url,
+        url: resolvedUrl,
         expectedSize,
       });
       if (cancelledBySignal) {

@@ -1572,7 +1572,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     sources['israel-contours'] = {
       type: 'vector',
       tiles: [contourProtocolUrl],
-      minzoom: 10,
+      minzoom: 9,
       maxzoom: 14,
     };
   }

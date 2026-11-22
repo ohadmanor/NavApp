@@ -6,9 +6,12 @@ import {
   REMOTE_DATA_FALLBACK_ORIGIN,
   REMOTE_DATA_ORIGIN,
   bundledDataUrl,
+  isAndroidNativePlatform,
   isLocalDevServer,
   pmtilesUrl,
   remoteDataUrl,
+  unwrapAndroidRemoteProxyUrl,
+  wrapAndroidRemoteProxyUrl,
 } from '../dataUrls';
 import {
   clearDataFileMeta,
@@ -351,5 +354,66 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('routes Android Capacitor Firebase Storage DEM URLs through same-origin /__remote_proxy__/ and unwraps for native downloads', async () => {
+    const storageDemUrl =
+      'https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media';
+
+    // Non-Android web keeps direct storage URL untouched
+    (globalThis as any).window = {
+      location: { origin: 'https://navapp-israel-topo.web.app', hostname: 'navapp-israel-topo.web.app' },
+    };
+    expect(isAndroidNativePlatform()).toBe(false);
+    expect(wrapAndroidRemoteProxyUrl('Israel.dem.pmtiles', storageDemUrl)).toBe(storageDemUrl);
+
+    // iOS Capacitor keeps direct URL untouched (iOS does not intercept Android /__remote_proxy__/)
+    (globalThis as any).window = {
+      location: { origin: 'capacitor://localhost', hostname: 'localhost' },
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => 'ios' },
+    };
+    expect(isAndroidNativePlatform()).toBe(false);
+    expect(wrapAndroidRemoteProxyUrl('Israel.dem.pmtiles', storageDemUrl)).toBe(storageDemUrl);
+
+    // Android Capacitor wraps Firebase Storage URL onto same-origin /__remote_proxy__/
+    (globalThis as any).window = {
+      location: { origin: 'https://localhost', hostname: 'localhost' },
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => 'android' },
+    };
+    expect(isAndroidNativePlatform()).toBe(true);
+    const wrapped = wrapAndroidRemoteProxyUrl('Israel.dem.pmtiles', storageDemUrl);
+    expect(wrapped).toBe(
+      `https://localhost/__remote_proxy__/Israel.dem.pmtiles?url=${encodeURIComponent(storageDemUrl)}`
+    );
+    expect(unwrapAndroidRemoteProxyUrl(wrapped)).toBe(storageDemUrl);
+    expect(pmtilesUrl('Israel.dem.pmtiles')).toBe(wrapped);
+
+    // probeRemoteDataFile probes the same-origin proxy URL when running in Android WebView
+    const probedUrls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      probedUrls.push(url);
+      if (url === wrapped) {
+        return {
+          ok: true,
+          status: 206,
+          headers: new Headers({
+            'content-type': 'application/octet-stream',
+            'content-range': 'bytes 0-0/1402183369',
+            'content-length': '1',
+            etag: '"dem-etag"',
+          }),
+        } as unknown as Response;
+      }
+      return { ok: false, status: 404, headers: new Headers() } as unknown as Response;
+    });
+
+    const probe = await probeRemoteDataFile('Israel.dem.pmtiles');
+    expect(probedUrls[0]).toBe(wrapped);
+    expect(probe).toEqual({
+      url: wrapped,
+      size: 1402183369,
+      etag: '"dem-etag"',
+    });
   });
 });

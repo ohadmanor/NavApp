@@ -1,11 +1,18 @@
 import { type RangeResponse, type Source } from 'pmtiles';
-import { CachedFetchSource } from './CachedFetchSource';
+import { CachedFetchSource, isValidRangeLength } from './CachedFetchSource';
+
+function isNativeCapacitorRuntime(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    Boolean((window as any).Capacitor?.isNativePlatform?.())
+  );
+}
 
 /**
  * Immutable bundled-asset PMTiles source (e.g. `/assets/world-globe/world-basemap.pmtiles`).
- * Prefers HTTP 206 Byte-Range streaming + Cache Storage via `CachedFetchSource`, and falls back
- * transparently to a single in-memory `ArrayBuffer` fetch if a static host or Capacitor WebView
- * returns HTTP 200 without Byte-Range support.
+ * Prefers HTTP 206 Byte-Range streaming + Cache Storage via `CachedFetchSource` on standard web
+ * hosts, and reads the compact local asset once into memory on Capacitor native WebViews (or any
+ * host whose 206/200 responses fail byte-length validation).
  */
 export class BundledAssetPMTilesSource implements Source {
   private readonly rangeSource: CachedFetchSource;
@@ -54,18 +61,24 @@ export class BundledAssetPMTilesSource implements Source {
     signal?: AbortSignal,
     etag?: string
   ): Promise<RangeResponse> {
-    if (this.fullBufferPromise) {
-      const buf = await this.fullBufferPromise;
+    if (this.fullBufferPromise || isNativeCapacitorRuntime()) {
+      const buf = await this.loadFullAsset();
       return { data: buf.slice(offset, offset + length) };
     }
 
     try {
-      return await this.rangeSource.getBytes(offset, length, signal, etag);
+      const res = await this.rangeSource.getBytes(offset, length, signal, etag);
+      if (!res?.data || !isValidRangeLength(offset, length, res.data.byteLength)) {
+        throw new Error(
+          `Invalid range byte length (${res?.data?.byteLength ?? 0} for ${offset}+${length})`
+        );
+      }
+      return res;
     } catch (err: any) {
       if (err?.name === 'AbortError' && signal?.aborted) {
         throw err;
       }
-      // Hosts such as Capacitor WebView asset servers often return HTTP 200 without Range support
+      // Hosts such as Capacitor WebView asset servers often return HTTP 200 or unbounded 206 without true Range slicing
       const buf = await this.loadFullAsset();
       return { data: buf.slice(offset, offset + length) };
     }

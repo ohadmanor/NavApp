@@ -6,6 +6,7 @@ import {
   FetchSource,
   FileSource,
   SharedPromiseCache,
+  type Header,
   type Source,
   type RangeResponse,
 } from 'pmtiles';
@@ -46,6 +47,37 @@ export type DownloadProgressListener = (
   loaded: number,
   total: number
 ) => void;
+
+/**
+ * SharedPromiseCache clears aborted pendingFetches, but leaves rejected promises
+ * cached when getHeader/getDirectory fails transiently. Evict rejected entries so retries succeed.
+ */
+class TransientSafePromiseCache extends SharedPromiseCache {
+  override async getHeader(source: Source): Promise<Header> {
+    try {
+      return await super.getHeader(source);
+    } catch (err) {
+      this.cache.delete(source.getKey());
+      throw err;
+    }
+  }
+
+  override async getDirectory(
+    source: Source,
+    offset: number,
+    length: number,
+    header: Header,
+    signal?: AbortSignal
+  ) {
+    try {
+      return await super.getDirectory(source, offset, length, header, signal);
+    } catch (err) {
+      const cacheKey = `${source.getKey()}|${header.etag || ''}|${offset}|${length}`;
+      this.cache.delete(cacheKey);
+      throw err;
+    }
+  }
+}
 
 const EMPTY_TERRARIUM_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAA1UlEQVR42u3BMQEAAADCoPVP7WULoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAGwEtAAGey8LtAAAAAElFTkSuQmCC';
@@ -103,6 +135,124 @@ export function wrapManagerWithSafeContourBuffers(manager: any): void {
   manager.__navappSafeContours = true;
 }
 
+let contourDecodeCanvas: HTMLCanvasElement | null = null;
+let contourDecodeCtx: CanvasRenderingContext2D | null = null;
+
+function getContourDecodeContext(): {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+} | null {
+  if (typeof document === 'undefined') return null;
+  if (!contourDecodeCanvas) {
+    contourDecodeCanvas = document.createElement('canvas');
+    contourDecodeCtx = contourDecodeCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  if (!contourDecodeCtx) return null;
+  return { canvas: contourDecodeCanvas, ctx: contourDecodeCtx };
+}
+
+function decodeRgbaElevationGrid(
+  width: number,
+  height: number,
+  encoding: string,
+  rgba: Uint8ClampedArray
+): { width: number; height: number; data: Float32Array } {
+  const data = new Float32Array(width * height);
+  if (encoding === 'mapbox') {
+    for (let i = 0; i < rgba.length; i += 4) {
+      data[i >> 2] = -10000 + (rgba[i] * 256 * 256 + rgba[i + 1] * 256 + rgba[i + 2]) * 0.1;
+    }
+  } else {
+    for (let i = 0; i < rgba.length; i += 4) {
+      data[i >> 2] = rgba[i] * 256 + rgba[i + 1] + rgba[i + 2] / 256 - 32768;
+    }
+  }
+  return { width, height, data };
+}
+
+/**
+ * Decodes Terrarium/Mapbox DEM PNG blobs using standard HTMLCanvasElement 2D readback and explicit
+ * ImageBitmap disposal so Android System WebView VideoFrame / OffscreenCanvas driver quirks cannot hide contours.
+ */
+export async function decodeDemPngSafely(
+  blob: Blob,
+  encoding: string,
+  abortController?: AbortController,
+  fallbackDecoder?: (
+    b: Blob,
+    enc: string,
+    ac?: AbortController
+  ) => Promise<{ width: number; height: number; data: Float32Array } | null>
+): Promise<{ width: number; height: number; data: Float32Array } | null> {
+  if (abortController?.signal?.aborted) return null;
+  const surface = getContourDecodeContext();
+  if (!surface) {
+    return fallbackDecoder ? fallbackDecoder(blob, encoding, abortController) : null;
+  }
+
+  if (typeof createImageBitmap === 'function') {
+    let bitmap: ImageBitmap | null = null;
+    try {
+      bitmap = await createImageBitmap(blob);
+      if (abortController?.signal?.aborted) return null;
+      surface.canvas.width = bitmap.width;
+      surface.canvas.height = bitmap.height;
+      surface.ctx.clearRect(0, 0, bitmap.width, bitmap.height);
+      surface.ctx.drawImage(bitmap, 0, 0);
+      const rgba = surface.ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      return decodeRgbaElevationGrid(bitmap.width, bitmap.height, encoding, rgba);
+    } catch {
+      // Fall through to <img> element decode below
+    } finally {
+      bitmap?.close?.();
+    }
+  }
+
+  if (typeof Image !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      const objUrl = blob.size ? URL.createObjectURL(blob) : '';
+      const cleanup = () => {
+        if (objUrl) URL.revokeObjectURL(objUrl);
+      };
+      const onAbort = () => {
+        img.src = '';
+        cleanup();
+        resolve(null);
+      };
+      abortController?.signal?.addEventListener('abort', onAbort, { once: true });
+      img.onload = () => {
+        abortController?.signal?.removeEventListener('abort', onAbort);
+        cleanup();
+        if (abortController?.signal?.aborted) {
+          resolve(null);
+          return;
+        }
+        try {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          surface.canvas.width = w;
+          surface.canvas.height = h;
+          surface.ctx.clearRect(0, 0, w, h);
+          surface.ctx.drawImage(img, 0, 0, w, h);
+          const rgba = surface.ctx.getImageData(0, 0, w, h).data;
+          resolve(decodeRgbaElevationGrid(w, h, encoding, rgba));
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.onerror = () => {
+        abortController?.signal?.removeEventListener('abort', onAbort);
+        cleanup();
+        reject(new Error('Could not decode DEM PNG image.'));
+      };
+      img.src = objUrl;
+    });
+  }
+
+  return fallbackDecoder ? fallbackDecoder(blob, encoding, abortController) : null;
+}
+
 /**
  * Central PMTiles Engine managing the dual-file Israel architecture:
  *  1. Israel.dem.pmtiles (1.40 GB — CONSTANT / IMMUTABLE Terrarium 256px DEM)
@@ -117,6 +267,7 @@ export class PMTilesRegistry {
   private isProtocolRegistered = false;
   private demContourSource: any = null;
   private activeDemPmtiles: PMTiles | null = null;
+  private contourArchiveRef: PMTiles | null = null;
   private defaultContourProtocolUrl?: string;
   private updateListeners = new Set<ArchiveUpdateListener>();
   private progressListeners = new Set<DownloadProgressListener>();
@@ -167,7 +318,10 @@ export class PMTilesRegistry {
     const existing = this.protocol.get(httpUrl);
     if (existing) return existing;
 
-    const pmtiles = new PMTiles(new BundledAssetPMTilesSource(httpUrl));
+    const pmtiles = new PMTiles(
+      new BundledAssetPMTilesSource(httpUrl),
+      new TransientSafePromiseCache(400)
+    );
     this.attachInMemoryTileCache(pmtiles, 600);
     this.protocol.add(pmtiles);
     (this.protocol as any).tiles?.set('world-basemap', pmtiles);
@@ -227,7 +381,7 @@ export class PMTilesRegistry {
     const defaultOsmSource = osmIsRemote
       ? new CachedFetchSource(defaultOsmUrl, { immutable: false })
       : new FetchSource(defaultOsmUrl);
-    const defaultOsmPmtiles = new PMTiles(defaultOsmSource);
+    const defaultOsmPmtiles = new PMTiles(defaultOsmSource, new TransientSafePromiseCache(1000));
     this.attachInMemoryTileCache(defaultOsmPmtiles, 400);
     this.protocol.add(defaultOsmPmtiles);
     (this.protocol as any).tiles?.set('israel-osm', defaultOsmPmtiles);
@@ -243,7 +397,7 @@ export class PMTilesRegistry {
     const defaultDemSource = demIsRemote
       ? new CachedFetchSource(defaultDemUrl, { immutable: true })
       : new FetchSource(defaultDemUrl);
-    const defaultDemPmtiles = new PMTiles(defaultDemSource);
+    const defaultDemPmtiles = new PMTiles(defaultDemSource, new TransientSafePromiseCache(1000));
     this.attachInMemoryTileCache(defaultDemPmtiles, 500);
     this.protocol.add(defaultDemPmtiles);
     (this.protocol as any).tiles?.set('israel-dem', defaultDemPmtiles);
@@ -293,7 +447,8 @@ export class PMTilesRegistry {
           fileStatus.nativeUrl,
           isConstant,
           fileStatus.sizeBytes,
-          fileStatus.localPath
+          fileStatus.localPath,
+          fileStatus.lastModifiedMs
         );
         if (!isConstant) {
           void this.checkForRemoteUpdate(id, fileName, fileStatus.sizeBytes);
@@ -568,11 +723,17 @@ export class PMTilesRegistry {
   ): Promise<MountedArchiveInfo> {
     this.initProtocols();
     const isRemote =
+      url.includes('/__remote_proxy__/') ||
       url.startsWith(REMOTE_DATA_ORIGIN) ||
       url.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
       (url.startsWith('https://') &&
         (typeof window === 'undefined' || !url.startsWith(window.location?.origin || 'https://__none__')));
-    const source = isRemote ? new CachedFetchSource(url, { immutable: isConstant }) : new FetchSource(url);
+    const existingPmtiles = this.protocol.get(url);
+    const source = existingPmtiles
+      ? existingPmtiles.source
+      : isRemote
+        ? new CachedFetchSource(url, { immutable: isConstant })
+        : new FetchSource(url);
     return this.registerArchiveSource(
       id,
       fileName,
@@ -580,7 +741,8 @@ export class PMTilesRegistry {
       isRemote ? 'remote-url' : 'local-server',
       url,
       knownSizeBytes,
-      isConstant
+      isConstant,
+      existingPmtiles
     );
   }
 
@@ -779,16 +941,24 @@ export class PMTilesRegistry {
     storageKind: MapArchiveRecord['storageKind'],
     urlOrPath: string,
     knownSizeBytes: number,
-    isConstant: boolean
+    isConstant: boolean,
+    existingPmtiles?: PMTiles
   ): Promise<MountedArchiveInfo> {
-    const directoryCache = new SharedPromiseCache(1000);
-    const pmtiles = new PMTiles(source, directoryCache);
-    this.attachInMemoryTileCache(pmtiles, id === 'israel-dem' ? 500 : 400);
+    let pmtiles: PMTiles;
+    if (existingPmtiles) {
+      pmtiles = existingPmtiles;
+    } else {
+      const directoryCache = new TransientSafePromiseCache(1000);
+      pmtiles = new PMTiles(source, directoryCache);
+      this.attachInMemoryTileCache(pmtiles, id === 'israel-dem' ? 500 : 400);
+    }
 
     const header = await pmtiles.getHeader();
     const metadata: any = await pmtiles.getMetadata().catch(() => ({}));
 
-    this.protocol.add(pmtiles);
+    if (!existingPmtiles) {
+      this.protocol.add(pmtiles);
+    }
     (this.protocol as any).tiles?.set(id, pmtiles);
     this.archives.set(id, pmtiles);
 
@@ -935,6 +1105,9 @@ export class PMTilesRegistry {
       const DemSource = (mlcontour as any).DemSource || (mlcontour as any).default?.DemSource;
       if (!DemSource) return undefined;
 
+      const archiveChanged = this.contourArchiveRef !== demPmtiles;
+      this.contourArchiveRef = demPmtiles;
+
       if (!this.demContourSource) {
         this.demContourSource = new DemSource({
           url: 'https://localhost/__dem_pmtiles__/{z}/{x}/{y}.png',
@@ -942,23 +1115,38 @@ export class PMTilesRegistry {
           maxzoom: maxZoom || 14,
           worker: false,
           cacheSize: 300,
+          timeoutMs: 25000,
         });
 
         // Override LocalDemManager.fetchTile to read PNG DEM tiles directly from Israel.dem.pmtiles
         const manager = this.demContourSource.manager;
         if (manager) {
+          const rawDecodeImage =
+            typeof manager.decodeImage === 'function' ? manager.decodeImage.bind(manager) : undefined;
+          manager.decodeImage = (blob: Blob, encoding: string, abortController?: AbortController) =>
+            decodeDemPngSafely(blob, encoding, abortController, rawDecodeImage);
+
           manager.fetchTile = async (
             z: number,
             x: number,
             y: number,
             parentAbortController?: AbortController
           ) => {
-            if (parentAbortController?.signal?.aborted) {
+            const sig = parentAbortController?.signal;
+            if (sig?.aborted) {
               throw new Error('aborted');
             }
             const activeDem = this.activeDemPmtiles || demPmtiles;
-            const tileRes = await activeDem.getZxy(z, x, y, parentAbortController?.signal);
-            if (parentAbortController?.signal?.aborted) {
+            let tileRes: RangeResponse | undefined;
+            try {
+              tileRes = await activeDem.getZxy(z, x, y, sig);
+            } catch {
+              if (sig?.aborted) throw new Error('aborted');
+              await new Promise((r) => setTimeout(r, 250));
+              if (sig?.aborted) throw new Error('aborted');
+              tileRes = await activeDem.getZxy(z, x, y, sig);
+            }
+            if (sig?.aborted) {
               throw new Error('aborted');
             }
             if (!tileRes || !tileRes.data) {
@@ -976,9 +1164,11 @@ export class PMTilesRegistry {
         const manager = this.demContourSource.manager;
         if (manager) {
           if (maxZoom) manager.maxzoom = maxZoom;
-          manager.tileCache?.clear?.();
-          manager.parsedCache?.clear?.();
-          manager.contourCache?.clear?.();
+          if (archiveChanged) {
+            manager.tileCache?.clear?.();
+            manager.parsedCache?.clear?.();
+            manager.contourCache?.clear?.();
+          }
           wrapManagerWithSafeContourBuffers(manager);
         }
       }
@@ -987,6 +1177,7 @@ export class PMTilesRegistry {
       // overzoom: 1 computes zoom Z contours from zoom Z-1 DEM tiles (4x fewer DEM fetches & 4x faster Marching Squares!)
       return this.demContourSource.contourProtocolUrl({
         thresholds: {
+          9: [100, 500],
           10: [50, 250],
           11: [20, 100],
           12: [10, 50],

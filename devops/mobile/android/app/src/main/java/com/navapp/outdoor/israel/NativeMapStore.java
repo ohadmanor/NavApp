@@ -14,7 +14,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -57,9 +59,14 @@ public final class NativeMapStore {
     private static final String FILE_CAR_STATE = "car_state.json";
     private static final String FILE_COMPACT_POIS_GEOJSON = "compact_pois.geojson";
 
-    private static final String REMOTE_DATA_ORIGIN = "https://navapp-israel-topo-data.web.app";
-    private static final String REMOTE_DEM_STORAGE_URL =
+    public static final String REMOTE_DATA_ORIGIN = "https://navapp-israel-topo-data.web.app";
+    public static final String REMOTE_DATA_FALLBACK_ORIGIN = "https://navapp-israel-topo.web.app";
+    public static final String REMOTE_DEM_STORAGE_URL =
         "https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media";
+    private static final String REMOTE_STORAGE_BUCKET_PREFIX =
+        "https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/";
+    private static final String REMOTE_GCS_BUCKET_PREFIX =
+        "https://storage.googleapis.com/navapp-israel-topo.firebasestorage.app/";
 
     public interface CarStateListener {
         void onCarStateUpdated();
@@ -409,6 +416,85 @@ public final class NativeMapStore {
 
     public static String nativeUrlFor(String fileName) {
         return "https://localhost/__native_maps__/" + fileName;
+    }
+
+    /** Restricts Android WebView CORS-bypass proxying to NavApp's own HTTPS data hosts. */
+    public static boolean isAllowedRemoteUrl(String urlStr) {
+        if (urlStr == null) return false;
+        String trimmed = urlStr.trim();
+        try {
+            URI parsed = new URI(trimmed);
+            if (!"https".equalsIgnoreCase(parsed.getScheme()) || parsed.getUserInfo() != null) {
+                return false;
+            }
+            String host = parsed.getHost();
+            String path = parsed.getRawPath();
+            if (host == null || path == null) return false;
+            String lowerHost = host.toLowerCase(Locale.ROOT);
+            if ("firebasestorage.googleapis.com".equals(lowerHost)) {
+                return path.startsWith("/v0/b/navapp-israel-topo.firebasestorage.app/");
+            }
+            if ("storage.googleapis.com".equals(lowerHost)) {
+                return path.startsWith("/navapp-israel-topo.firebasestorage.app/");
+            }
+            return "navapp-israel-topo-data.web.app".equals(lowerHost)
+                || "navapp-israel-topo.web.app".equals(lowerHost);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    /** Resolves and validates the upstream HTTPS URL for a `/__remote_proxy__/{fileName}` WebView request. */
+    public static String resolveAllowedRemoteProxyUrl(String safeFileName, String rawUrlParam) {
+        if (rawUrlParam != null && !rawUrlParam.trim().isEmpty()) {
+            String candidate = rawUrlParam.trim();
+            return isAllowedRemoteUrl(candidate) ? candidate : null;
+        }
+        if (FILE_DEM_PMTILES.equals(safeFileName)) {
+            return REMOTE_DEM_STORAGE_URL;
+        }
+        if (safeFileName != null) {
+            return REMOTE_DATA_ORIGIN + "/data/" + safeFileName;
+        }
+        return null;
+    }
+
+    /** Unwraps a same-origin `/__remote_proxy__/` WebView URL back to its allowlisted upstream HTTPS URL. */
+    public static String unwrapRemoteProxyUrl(String rawUrl) {
+        if (rawUrl == null) return null;
+        String trimmed = rawUrl.trim();
+        if (trimmed.startsWith("https://localhost/__remote_proxy__/")) {
+            try {
+                URI uri = new URI(trimmed);
+                String path = uri.getRawPath();
+                String fileName =
+                    path != null && path.startsWith("/__remote_proxy__/")
+                        ? sanitizeFileName(path.substring("/__remote_proxy__/".length()))
+                        : null;
+                String rawUrlParam = extractQueryParam(uri.getRawQuery(), "url");
+                return resolveAllowedRemoteProxyUrl(fileName, rawUrlParam);
+            } catch (Exception ex) {
+                return null;
+            }
+        }
+        return trimmed.startsWith("https://") ? trimmed : null;
+    }
+
+    private static String extractQueryParam(String rawQuery, String key) {
+        if (rawQuery == null || rawQuery.isEmpty()) return null;
+        for (String pair : rawQuery.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq <= 0) continue;
+            try {
+                String k = URLDecoder.decode(pair.substring(0, eq), StandardCharsets.UTF_8.name());
+                if (key.equals(k)) {
+                    return URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8.name());
+                }
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     public void syncCarData(

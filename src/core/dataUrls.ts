@@ -49,6 +49,45 @@ export function isNativePlatform(): boolean {
   return !!cap?.isNativePlatform?.();
 }
 
+export function isAndroidNativePlatform(): boolean {
+  if (!isNativePlatform()) return false;
+  const cap = (typeof window !== 'undefined' ? (window as any).Capacitor : undefined) as
+    | { getPlatform?: () => string }
+    | undefined;
+  const platform = typeof cap?.getPlatform === 'function' ? cap.getPlatform() : '';
+  if (platform) return platform === 'android';
+  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+}
+
+const ANDROID_REMOTE_PROXY_PREFIX = 'https://localhost/__remote_proxy__/';
+
+/**
+ * Rewrites cross-origin Firebase Storage HTTPS URLs onto Capacitor Android's same-origin
+ * `/__remote_proxy__/` endpoint so WebView `fetch()` Range requests do not fail CORS on `https://localhost`.
+ */
+export function wrapAndroidRemoteProxyUrl(fileName: string, targetUrl: string): string {
+  if (!isAndroidNativePlatform()) return targetUrl;
+  if (!targetUrl.startsWith('https://') || targetUrl.startsWith('https://localhost/')) {
+    return targetUrl;
+  }
+  if (!targetUrl.startsWith('https://firebasestorage.googleapis.com/') && !targetUrl.startsWith('https://storage.googleapis.com/')) {
+    return targetUrl;
+  }
+  return `${ANDROID_REMOTE_PROXY_PREFIX}${encodeURIComponent(fileName)}?url=${encodeURIComponent(targetUrl)}`;
+}
+
+/** Extracts the upstream HTTPS URL from an Android `/__remote_proxy__/` URL when needed by native downloaders. */
+export function unwrapAndroidRemoteProxyUrl(targetUrl: string): string {
+  if (!targetUrl.startsWith(ANDROID_REMOTE_PROXY_PREFIX)) return targetUrl;
+  try {
+    const parsed = new URL(targetUrl);
+    const inner = parsed.searchParams.get('url');
+    return inner && inner.startsWith('https://') ? inner : targetUrl;
+  } catch {
+    return targetUrl;
+  }
+}
+
 export function isLocalDevServer(): boolean {
   return (
     typeof window !== 'undefined' &&
@@ -74,7 +113,7 @@ export function remoteDataUrl(fileName: string): string {
 export function pmtilesUrl(fileName: string): string {
   if (!isLocalDevServer() && fileName === 'Israel.dem.pmtiles') {
     const customDemUrl = getCustomDemPmtilesUrl();
-    if (customDemUrl) return customDemUrl;
+    if (customDemUrl) return wrapAndroidRemoteProxyUrl(fileName, customDemUrl);
   }
   return remoteDataUrl(fileName);
 }

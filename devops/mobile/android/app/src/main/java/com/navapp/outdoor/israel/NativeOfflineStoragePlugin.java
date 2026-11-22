@@ -101,7 +101,8 @@ public class NativeOfflineStoragePlugin extends Plugin {
     public void downloadArchive(PluginCall call) {
         String rawFileName = call.getString("fileName");
         String fileName = NativeMapStore.sanitizeFileName(rawFileName);
-        String urlStr = call.getString("url");
+        String rawUrlStr = call.getString("url");
+        String urlStr = NativeMapStore.unwrapRemoteProxyUrl(rawUrlStr);
         Long expectedSizeObj = call.getLong("expectedSize");
         long expectedSize = expectedSizeObj != null ? expectedSizeObj : 0L;
 

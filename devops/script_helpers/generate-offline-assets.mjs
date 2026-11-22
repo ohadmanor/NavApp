@@ -422,8 +422,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(handleBundledWorldPmtilesRequest(event, url));
     return;
   }
-  // Never intercept byte-range requests to large .pmtiles files, OAuth callbacks, or cross-origin requests (e.g. Google Satellite tiles)
+  // Never intercept byte-range requests to large .pmtiles files, Android native/remote map endpoints, OAuth callbacks, or cross-origin requests
   if (
+    url.pathname.startsWith('/__native_maps__/') ||
+    url.pathname.startsWith('/__remote_proxy__/') ||
     url.pathname.endsWith('.pmtiles') ||
     url.pathname === '/osm-callback' ||
     url.searchParams.has('code') ||
