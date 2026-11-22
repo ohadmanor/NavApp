@@ -24,6 +24,7 @@
   - [`data-workflow-diagram.html`](./data-workflow-diagram.html) — Per-file online &amp; offline data workflow diagram (Firebase Storage DEM, Firebase Hosting data, OPFS/Native, Cache API, and DevOps scripts).
   - [`poi-workflow-diagram.html`](./poi-workflow-diagram.html) — POI lifecycle diagram covering Display, Add/Update, Edit, and Delete across Hosting, Firestore, IndexedDB, and MapLibre.
   - [`navapp-ui-mockup.html`](./navapp-ui-mockup.html) — Interactive Web Desktop & Mobile UI/UX mockup synced to the shipped application.
+  - [`icon-groups-mockup.html`](./icon-groups-mockup.html) — Interactive mockup comparing Web (all icons organized in 2 groups) vs Mobile (collapsed Map & User groups, speed-dial vs tabbed sheet, portrait & landscape).
   - [`osm-zoom-levels.md`](./osm-zoom-levels.md) — Vector tile & contour zoom-level specification.
   - [`tilemaker-nature-reserves-fix.md`](./tilemaker-nature-reserves-fix.md) — Tilemaker nature reserves rendering fix documentation.
   - [`android-auto-distribution.md`](./android-auto-distribution.md) — Publishing & installing NavApp for Android Auto (Play Internal Testing, Production, and Sideloading).

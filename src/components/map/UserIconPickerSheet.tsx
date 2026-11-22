@@ -17,6 +17,7 @@ interface UserIconPickerSheetProps {
   isOnline: boolean;
   hasGpsFix?: boolean;
   embedded?: boolean;
+  anchorSide?: 'left' | 'right';
   onSelectPreference: (next: UserLocationIconPreference) => void;
   onLocateOnMap?: () => void;
   onClose: () => void;
@@ -99,6 +100,7 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
   isOnline,
   hasGpsFix = true,
   embedded = false,
+  anchorSide = 'right',
   onSelectPreference,
   onLocateOnMap,
   onClose,
@@ -381,7 +383,9 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
 
   return (
     <div
-      className={`fixed bottom-20 left-16 z-40 w-[340px] max-w-[calc(100vw-5rem)] rounded-2xl border shadow-2xl overflow-hidden ${t.panel}`}
+      className={`fixed bottom-12 ${
+        anchorSide === 'right' ? 'right-16' : 'left-16'
+      } z-40 w-[340px] max-w-[calc(100vw-5rem)] rounded-2xl border shadow-2xl overflow-hidden ${t.panel}`}
     >
       {content}
     </div>

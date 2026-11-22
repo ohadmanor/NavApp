@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NavApp — On-Screen Icon Groups Mockup (Web Expanded vs Mobile Collapsed)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    .map-canvas { touch-action: none; cursor: grab; }
+    .map-canvas:active { cursor: grabbing; }
+    .map-canvas.picking { cursor: crosshair; }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateX(-6px) scale(0.97); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+    .anim-pop { animation: fadeSlideIn 0.14s ease-out; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased min-h-screen p-3 sm:p-5">
+
+  <div class="max-w-[1640px] mx-auto space-y-4">
+    <!-- ==================== STUDIO CONTROL HEADER ==================== -->
+    <header class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3" dir="rtl">
+      <div class="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+        <div class="space-y-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="px-2.5 py-0.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950">
+              INTERACTIVE UI MOCKUP
+            </span>
+            <span class="text-xs font-medium text-slate-400" dir="ltr">
+              NavApp • Web (All Icons Grouped) vs Mobile (Collapsed Groups)
+            </span>
+          </div>
+          <h1 class="text-lg sm:text-xl font-bold text-white">
+            ארגון מחדש של אייקוני המסך: 1. שכבות ופעולות מפה &nbsp;|&nbsp; 2. פרמטרי משתמש
+          </h1>
+          <p class="text-xs text-slate-400">
+            לחצו על כל האייקונים בתוך המסכים כדי לבדוק התנהגות חיה: בדסקטופ כל האייקונים גלויים בשתי קבוצות ללא חפיפת חלונות, ובמובייל הקבוצות מתקפלות כדי למנוע גלישה בפורטרט ובנוף.
+          </p>
+        </div>
+
+        <!-- Viewport & Mode Controls -->
+        <div class="flex flex-wrap items-center gap-2" dir="ltr">
+          <div class="inline-flex bg-slate-950 border border-slate-800 rounded-xl p-1 gap-1">
+            <button onclick="setViewMode('split')" id="vm-split" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">Side-by-Side</button>
+            <button onclick="setViewMode('web')" id="vm-web" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">Web Only</button>
+            <button onclick="setViewMode('mobile')" id="vm-mobile" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile Portrait</button>
+            <button onclick="setViewMode('landscape')" id="vm-landscape" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile Landscape</button>
+          </div>
+
+          <div class="inline-flex bg-slate-950 border border-slate-800 rounded-xl p-1 gap-1">
+            <button onclick="setMobileMode('planning')" id="mm-planning" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile: Planning</button>
+            <button onclick="setMobileMode('navigating')" id="mm-navigating" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">Mobile: Navigating</button>
+          </div>
+
+          <button onclick="toggleTheme()" id="btn-theme" class="px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-semibold transition-all"></button>
+        </div>
+      </div>
+
+      <!-- Design Option Toggles -->
+      <div class="flex flex-wrap items-center gap-2 pt-2.5 border-t border-slate-800 text-xs" dir="rtl">
+        <span class="font-bold text-slate-400">אפשרויות עיצוב לבדיקה:</span>
+
+        <div class="inline-flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5 gap-0.5">
+          <span class="px-2 text-[11px] text-slate-400">קיפול במובייל:</span>
+          <button onclick="setMobileCollapseMode('speed-dial')" id="mc-speed-dial" class="px-2.5 py-1 rounded-lg font-semibold transition-all">
+            A. פס אייקונים נפתח (Speed-Dial)
+          </button>
+          <button onclick="setMobileCollapseMode('tabbed-sheet')" id="mc-tabbed-sheet" class="px-2.5 py-1 rounded-lg font-semibold transition-all">
+            B. כרטיסייה אחת עם לשוניות
+          </button>
+        </div>
+
+        <div class="inline-flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5 gap-0.5">
+          <span class="px-2 text-[11px] text-slate-400">+ הוסף נקודה במובייל:</span>
+          <button onclick="setMobilePinAddPoi(false)" id="mp-collapsed" class="px-2.5 py-1 rounded-lg font-semibold transition-all">
+            מקופל בקבוצה 1
+          </button>
+          <button onclick="setMobilePinAddPoi(true)" id="mp-pinned" class="px-2.5 py-1 rounded-lg font-semibold transition-all">
+            נגיש בלחיצה אחת
+          </button>
+        </div>
+
+        <div class="inline-flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5 gap-0.5">
+          <span class="px-2 text-[11px] text-slate-400">מיקום קבוצה 2 בווב:</span>
+          <button onclick="setWebGroup2Pos('bottom-right')" id="wg-bottom-right" class="px-2.5 py-1 rounded-lg font-semibold transition-all">
+            פינה ימנית תחתונה
+          </button>
+          <button onclick="setWebGroup2Pos('second-col')" id="wg-second-col" class="px-2.5 py-1 rounded-lg font-semibold transition-all">
+            טור מקביל משמאל
+          </button>
+        </div>
+
+        <div class="inline-flex items-center gap-1.5 mr-auto">
+          <button onclick="toggleSimulatedBearing()" id="sim-bearing" class="px-2.5 py-1 rounded-lg border font-semibold transition-all"></button>
+          <button onclick="toggleLiveShare()" id="sim-share" class="px-2.5 py-1 rounded-lg border font-semibold transition-all"></button>
+          <button onclick="toggleAuthUser()" id="sim-auth" class="px-2.5 py-1 rounded-lg border font-semibold transition-all"></button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ==================== DEVICE STAGE ==================== -->
+    <div id="stage-grid" class="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start" dir="ltr">
+
+      <!-- ==================== WEB DESKTOP ==================== -->
+      <section id="web-wrapper" class="xl:col-span-7 flex flex-col gap-2">
+        <div class="flex items-center justify-between px-1">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <h2 class="text-sm font-bold text-white">Web Desktop — All Icons Visible in 2 Clean Groups</h2>
+          </div>
+          <span class="text-xs text-slate-400">No popover overlap • Uniform 40px targets • Add-POI in top actions</span>
+        </div>
+
+        <div class="rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 flex flex-col h-[690px]">
+          <!-- Browser Bar -->
+          <div class="h-8 bg-slate-900 border-b border-slate-800 px-3 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-rose-500/80"></span>
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-500/80"></span>
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/80"></span>
+            </div>
+            <div class="bg-slate-950 border border-slate-800 rounded-md px-3 py-0.5 text-[11px] text-slate-300 font-mono">
+              navapp-israel-topo.web.app
+            </div>
+            <span class="text-[11px] text-emerald-400 font-semibold">Desktop</span>
+          </div>
+
+          <!-- Web Map Viewport -->
+          <div id="web-viewport" dir="rtl" class="relative flex-1 overflow-hidden select-none">
+            <canvas id="web-canvas" class="map-canvas absolute inset-0 w-full h-full block"></canvas>
+
+            <!-- Top-Right: Search Capsule -->
+            <div class="absolute top-3 right-3 z-30 w-[330px] max-w-[calc(100%-24px)] pointer-events-auto">
+              <div id="web-search-bar" class="flex items-center gap-2 rounded-2xl px-3 py-2 border"></div>
+            </div>
+
+            <!-- Top-Left: Nav Banner / Offline Pill + Quick Action Bar (now includes Add POI!) -->
+            <div id="web-top-left" class="absolute top-3 left-3 z-30 max-w-[calc(100%-365px)] flex flex-wrap items-center gap-2 pointer-events-auto"></div>
+
+            <!-- Add-POI Pick Hint Banner -->
+            <div id="web-pick-banner" class="hidden absolute top-16 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 rounded-full bg-sky-600 text-white text-xs font-bold shadow-xl flex items-center gap-2">
+              <span>לחץ על נקודה במפה למיקום ה-POI החדש</span>
+              <button onclick="cancelPickPoi()" class="px-2 py-0.5 rounded-full bg-white/20 hover:bg-white/30">ביטול</button>
+            </div>
+
+            <!-- GROUP 1 (Bottom-Left): Map Layers & Map Operations -->
+            <div id="web-group1-stack" class="absolute bottom-4 left-4 z-20 flex items-end gap-2.5 pointer-events-auto"></div>
+
+            <!-- GROUP 2 (Bottom-Right OR Second Column): User Parameters -->
+            <div id="web-group2-stack" class="absolute z-20 pointer-events-auto"></div>
+
+            <!-- Web Floating Popover Slot (Group 1 OR Group 2 — mutually exclusive!) -->
+            <div id="web-popover-slot"></div>
+
+            <!-- Bottom-Center Tactical HUD Pill -->
+            <div id="web-hud-pill" class="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-full border text-xs font-mono flex items-center gap-2.5 pointer-events-auto"></div>
+
+            <!-- Bottom-Right MapLibre Scale Bar -->
+            <div id="web-scale-bar" class="absolute bottom-3 right-4 z-10 px-2.5 py-0.5 rounded-full border text-[11px] font-mono pointer-events-none">
+              2 km
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== MOBILE ==================== -->
+      <section id="mobile-wrapper" class="xl:col-span-5 flex flex-col items-center gap-2">
+        <div class="w-full max-w-[720px] flex items-center justify-between px-1">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
+            <h2 id="mobile-title" class="text-sm font-bold text-white">Mobile Portrait — Collapsed Groups</h2>
+          </div>
+          <span id="mobile-subtitle" class="text-xs font-semibold text-emerald-400">Only 3–4 icons • Zero clipping</span>
+        </div>
+
+        <!-- Phone Frame (resizes cleanly between Portrait & Landscape!) -->
+        <div id="mobile-bezel" class="w-[375px] h-[690px] rounded-[40px] border-[8px] border-slate-800 shadow-2xl overflow-hidden bg-slate-950 flex flex-col relative transition-all duration-200">
+          <!-- Phone Status Bar -->
+          <div id="mobile-status-bar" class="h-7 px-5 flex items-center justify-between text-[11px] font-semibold shrink-0 z-30" dir="ltr">
+            <span class="tabular-nums">18:04</span>
+            <div class="w-16 h-3.5 bg-black rounded-full"></div>
+            <div class="flex items-center gap-1.5">
+              <span>GPS</span>
+              <span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] leading-none">92%</span>
+            </div>
+          </div>
+
+          <!-- Mobile App Viewport -->
+          <div id="mobile-viewport" dir="rtl" class="relative flex-1 overflow-hidden select-none flex flex-col">
+            <!-- Map Area -->
+            <div class="relative flex-1 overflow-hidden">
+              <canvas id="mobile-canvas" class="map-canvas absolute inset-0 w-full h-full block"></canvas>
+
+              <!-- Top Overlay (Planning Search Pill OR Navigating Status Bar) -->
+              <div id="mobile-top-bar" class="absolute top-2.5 right-2.5 left-2.5 z-30 pointer-events-none"></div>
+
+              <!-- Nav Mode On-Demand Search Box -->
+              <div id="mobile-nav-search-box" class="hidden absolute right-3 left-[4rem] top-[3.6rem] z-40 pointer-events-auto"></div>
+
+              <!-- Add-POI Pick Hint Banner (fixes invisible crosshair on touchscreens) -->
+              <div id="mobile-pick-banner" class="hidden absolute bottom-12 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-full bg-sky-600 text-white text-[11px] font-bold shadow-xl flex items-center gap-2 whitespace-nowrap">
+                <span>לחץ במפה למיקום הנקודה</span>
+                <button onclick="cancelPickPoi()" class="px-2 py-0.5 rounded-full bg-white/20">ביטול</button>
+              </div>
+
+              <!-- MOBILE COLLAPSED LEFT-EDGE CONTROLS (Single slim column, fits portrait & landscape!) -->
+              <div id="mobile-left-controls" dir="ltr" class="absolute left-2.5 z-20 flex flex-col items-start gap-2 pointer-events-auto"></div>
+
+              <!-- Mobile Compact HUD Pill (Planning Mode) -->
+              <div id="mobile-hud-pill" class="absolute bottom-2.5 right-2.5 z-20 px-2.5 py-1 rounded-full border text-[11px] font-mono pointer-events-auto"></div>
+            </div>
+
+            <!-- Mobile Bottom Sheet / Overlay (or Peek / Nav Telemetry Strip) -->
+            <div id="mobile-bottom-sheet" class="relative z-30 border-t shadow-2xl shrink-0"></div>
+
+            <!-- Mobile Bottom 4-Tab Bar (Planning Mode Only) -->
+            <nav id="mobile-bottom-nav" class="h-14 border-t px-1 flex items-center justify-around shrink-0 z-40"></nav>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== COMPARISON SUMMARY ==================== -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm space-y-3" dir="rtl">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h3 class="text-sm font-bold text-white">סיכום השינויים במוקאפ</h3>
+        <span class="text-xs text-slate-400">החלף למעלה בין Option A (Speed-Dial) ל-Option B (לשוניות) ובין מצב פורטרט/נוף כדי להשוות</span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-bold text-emerald-400">קבוצה 1 — שכבות ופעולות מפה</div>
+          <ul class="space-y-1 text-slate-300 list-disc list-inside leading-relaxed">
+            <li><strong>ווב:</strong> קפסולה מאוחדת ל-[סגנון | שכבות | POI] (עם אייקון POI ייעודי שאינו מתנגש ב״סימון שבילים״), ומתחתיה פעולות מפה: מצפן / כיוון ניווט חכם, זום +/−, ו-GPS.</li>
+            <li><strong>״הוסף נקודה (+)״ בווב:</strong> עבר לסרגל הפעולות העליון ליד תכנון והקלטה.</li>
+            <li><strong>מובייל:</strong> מתקפל לכפתור <strong>שכבות</strong> אחד (Speed-Dial או לשוניות) + כפתור GPS קבוע.</li>
+          </ul>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-bold text-sky-400">קבוצה 2 — פרמטרי משתמש</div>
+          <ul class="space-y-1 text-slate-300 list-disc list-inside leading-relaxed">
+            <li><strong>ווב:</strong> שלושת הכפתורים נשארים גלויים בקבוצה נפרדת (Google + סנכרון, סמן מיקום, שיתוף מיקום חי עם מונה חברים).</li>
+            <li><strong>מניעת חפיפות:</strong> פתיחת חלון אחד סוגרת אוטומטית את האחרים, והתפריטים ממוקמים לפי הקבוצה שלהם.</li>
+            <li><strong>מובייל:</strong> מתקפל לכפתור <strong>משתמש</strong> אחד (עם חיווי אונליין/שיתוף חי), כך שתפריט Google נפתח בגיליון התחתון ולא נחתך מעל המסך.</li>
+          </ul>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-bold text-amber-400">פתרון באגים במובייל ובטאץ׳</div>
+          <ul class="space-y-1 text-slate-300 list-disc list-inside leading-relaxed">
+            <li><strong>פורטרט ונוף:</strong> ירידה מ-8–11 אייקונים בטור ל-<strong>3–4 אייקונים בלבד</strong> — נכנס תמיד בטור אחד גם במסך Landscape נמוך בלי לעלות על חיפוש הניווט.</li>
+            <li><strong>בחירת POI במגע:</strong> לחיצה על <code>+</code> מציגה פס הנחיה ברור ״לחץ במפה למיקום הנקודה • ביטול״.</li>
+            <li><strong>כפתורי +/−:</strong> מופיעים בווב בלבד (במובייל זום בצביטה).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Toast Banner -->
+  <div id="toast" class="hidden fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-emerald-600 text-white text-xs font-bold shadow-2xl"></div>
+
+  <script>
+    // =========================================================================
+    // ICONS (Clean inline Lucide-matching SVGs)
+    // =========================================================================
+    const SVG = {
+      palette: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`,
+      layers: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>`,
+      poiFilter: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/><path d="M19 3l1 2 2 1-2 1-1 2-1-2-2-1 2-1z" fill="currentColor" stroke="none"/></svg>`,
+      compass: (deg) => `<svg class="w-[18px] h-[18px] text-rose-500 transition-transform duration-200" style="transform: rotate(${-deg}deg)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="currentColor" fill-opacity="0.2"/></svg>`,
+      headingUp: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24"><path d="M12 2.5L4.5 20.5l7.5-3.6 7.5 3.6L12 2.5z" fill="currentColor"/></svg>`,
+      northUp: (deg) => `<svg class="w-[18px] h-[18px] transition-transform" style="transform: rotate(${-deg}deg)" viewBox="0 0 24 24"><path d="M9.2 7.5V2.5h1.3l3 3.5V2.5h1.3v5h-1.3l-3-3.5v3.5H9.2z" fill="#e11d48"/><polygon points="12,8.8 15.2,15.4 8.8,15.4" fill="#e11d48"/><polygon points="12,22 15.2,15.4 8.8,15.4" fill="#64748b" opacity="0.75"/></svg>`,
+      locate: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg>`,
+      plus: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+      radio: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>`,
+      googleG: `<svg class="w-[18px] h-[18px]" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"/></svg>`,
+      search: `<svg class="w-[16px] h-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
+      route: `<svg class="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>`,
+      nav: `<svg class="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`,
+      pen: `<svg class="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>`,
+      mapPin: `<svg class="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`,
+      mapIcon: `<svg class="w-[17px] h-[17px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>`,
+      drive: `<svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>`,
+      folder: `<svg class="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+      close: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`,
+      sun: `<svg class="w-4 h-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`,
+      moon: `<svg class="w-4 h-4 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`,
+      mountain: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg>`,
+      car4wd: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11h1a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-1a2 2 0 1 1-4 0H9a2 2 0 1 1-4 0H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h1zm2.8-4L6.7 10.5h10.6L16.2 7H7.8z"/></svg>`,
+      bike: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-3 11.5V14l-3-3 4-3 2 3h2"/></svg>`,
+      walk: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13" cy="4" r="2"/><path d="M13 7l-3 5 3 3-2 6M10 12l-3 3M14 9l4 2"/></svg>`,
+      arrow: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L4.5 20.5l7.5-3.6 7.5 3.6L12 2z"/></svg>`,
+      play: `<svg class="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>`,
+      pause: `<svg class="w-4 h-4 text-rose-500" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
+    };
+
+    const USER_ICONS = [
+      { id: 'car-4wd', label: 'ג׳יפ 4x4', svg: SVG.car4wd },
+      { id: 'arrow', label: 'חץ ניווט', svg: SVG.arrow },
+      { id: 'bike', label: 'אופניים', svg: SVG.bike },
+      { id: 'walk', label: 'מטייל', svg: SVG.walk },
+    ];
+    const ACCENT_COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
+    const state = {
+      viewMode: 'split',               // 'split' | 'web' | 'mobile' | 'landscape'
+      theme: 'topo-day',               // 'topo-day' | 'topo-dark'
+      mapStyle: 'nms',                 // 'ihm' | 'nms' | 'govmap'
+      mobileDisplayMode: 'planning',   // 'planning' | 'navigating'
+      mobileCollapseMode: 'speed-dial',// 'speed-dial' | 'tabbed-sheet'
+      mobilePinAddPoi: false,          // false (collapsed in Group 1) | true (always 1-tap)
+      webGroup2Pos: 'bottom-right',    // 'bottom-right' | 'second-col'
+      bearingDeg: 28,                  // 0 or 28 so user can test compass!
+      zoom: 13.4,
+      isNavigating: false,
+      navOrientation: 'heading-up',
+      isFollowingGps: true,
+      isLiveSharing: true,
+      livePeersCount: 3,
+      isSignedIn: true,
+      isPickingPoi: false,
+      isRecording: false,
+      userIconId: 'car-4wd',
+      accentColor: '#0ea5e9',
+      webPopover: null,                // null | 'style' | 'layers' | 'pois' | 'google' | 'user-icon' | 'live-share'
+      mobileSpeedDial: null,           // null | 'map' | 'user'
+      mobileSheet: null,               // null | 'layers' | 'user' | 'google' | 'user-icon' | 'live-share' | 'add-poi'
+      mobileLayerTab: 'layers',        // 'style' | 'layers' | 'pois'
+      mobileUserTab: 'google',         // 'google' | 'user-icon' | 'live-share'
+      mobileNavSearchOpen: false,
+      visibility: {
+        terrain3d: false,
+        googleSatellite: false,
+        contours: true,
+        tacticalGrid: true,
+        hillshade: true,
+        offroad4x4: true,
+        hikingTrails: true,
+        pois: true,
+        poiWater: true,
+        poiOffroad: true,
+        poiCampsite: true,
+        poiHeritage: true,
+        poiPeak: true,
+        poiUser: true,
+        peerLocations: true,
+      },
+    };
+
+    function tTokens() {
+      if (state.theme === 'topo-day') {
+        return {
+          panel: 'bg-white/95 text-slate-900 border-slate-200/90 backdrop-blur-md shadow-xl',
+          subCard: 'bg-slate-50/95 border-slate-200 text-slate-800',
+          pillBtn: 'bg-white/95 hover:bg-slate-100 text-slate-800 border-slate-200/90',
+          muted: 'text-slate-500',
+          divider: 'border-slate-200',
+          navBar: 'bg-white/95 border-slate-200 text-slate-500',
+          hoverRow: 'hover:bg-emerald-50/80',
+          statusBg: 'bg-slate-100 text-slate-900',
+        };
+      }
+      return {
+        panel: 'bg-slate-900/95 text-slate-100 border-slate-700/80 backdrop-blur-md shadow-2xl',
+        subCard: 'bg-slate-950/85 border-slate-800 text-slate-200',
+        pillBtn: 'bg-slate-900/95 hover:bg-slate-800 text-slate-100 border-slate-700/80',
+        muted: 'text-slate-400',
+        divider: 'border-slate-800',
+        navBar: 'bg-slate-950/95 border-slate-800 text-slate-400',
+        hoverRow: 'hover:bg-slate-800/80',
+        statusBg: 'bg-slate-950 text-slate-100',
+      };
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.add('hidden'), 2400);
+    }
+
+    // =========================================================================
+    // HEADER ACTIONS
+    // =========================================================================
+    function setViewMode(m) { state.viewMode = m; renderAll(); }
+    function setMobileMode(m) {
+      state.mobileDisplayMode = m;
+      state.mobileSpeedDial = null;
+      state.mobileSheet = null;
+      state.mobileNavSearchOpen = false;
+      state.isNavigating = (m === 'navigating');
+      renderAll();
+    }
+    function setMobileCollapseMode(m) {
+      state.mobileCollapseMode = m;
+      state.mobileSpeedDial = null;
+      state.mobileSheet = null;
+      renderAll();
+    }
+    function setMobilePinAddPoi(v) {
+      state.mobilePinAddPoi = v;
+      state.mobileSpeedDial = null;
+      renderAll();
+    }
+    function setWebGroup2Pos(p) {
+      state.webGroup2Pos = p;
+      renderAll();
+    }
+    function toggleTheme() {
+      state.theme = state.theme === 'topo-day' ? 'topo-dark' : 'topo-day';
+      renderAll();
+    }
+    function toggleSimulatedBearing() {
+      state.bearingDeg = state.bearingDeg === 0 ? 28 : 0;
+      renderAll();
+    }
+    function toggleLiveShare() {
+      state.isLiveSharing = !state.isLiveSharing;
+      showToast(state.isLiveSharing ? 'שיתוף מיקום חי הופעל' : 'שיתוף מיקום חי כובה');
+      renderAll();
+    }
+    function toggleAuthUser() {
+      state.isSignedIn = !state.isSignedIn;
+      showToast(state.isSignedIn ? 'מחובר לחשבון Google' : 'מנותק מחשבון Google');
+      renderAll();
+    }
+
+    // =========================================================================
+    // MAP ACTIONS (Shared Web + Mobile)
+    // =========================================================================
+    function toggleWebPopover(name) {
+      state.webPopover = state.webPopover === name ? null : name;
+      renderAll();
+    }
+    function resetNorth() {
+      if (state.isNavigating) {
+        state.navOrientation = state.navOrientation === 'heading-up' ? 'north-up' : 'heading-up';
+        showToast(state.navOrientation === 'heading-up' ? 'כיוון מפה: כיוון נסיעה' : 'כיוון מפה: צפון למעלה');
+      } else {
+        state.bearingDeg = 0;
+        showToast('המפה אופסה לצפון (0°)');
+      }
+      renderAll();
+    }
+    function toggleNavigation() {
+      state.isNavigating = !state.isNavigating;
+      state.mobileDisplayMode = state.isNavigating ? 'navigating' : 'planning';
+      showToast(state.isNavigating ? 'מצב ניווט הופעל' : 'יצאת ממצב ניווט');
+      renderAll();
+    }
+    function adjustZoom(delta) {
+      state.zoom = Math.max(8, Math.min(18, Number((state.zoom + delta).toFixed(1))));
+      renderAll();
+    }
+    function toggleGpsFollow() {
+      state.isFollowingGps = !state.isFollowingGps;
+      showToast(state.isFollowingGps ? 'מעקב מיקום GPS פעיל' : 'מעקב מיקום הושהה');
+      renderAll();
+    }
+    function startPickPoi() {
+      state.isPickingPoi = !state.isPickingPoi;
+      state.mobileSpeedDial = null;
+      if (state.isPickingPoi) showToast('לחץ במפה לבחירת מיקום הנקודה');
+      renderAll();
+    }
+    function cancelPickPoi() {
+      state.isPickingPoi = false;
+      renderAll();
+    }
+    function toggleVis(key) {
+      state.visibility[key] = !state.visibility[key];
+      renderAll();
+    }
+    function selectUserIcon(id) {
+      state.userIconId = id;
+      renderAll();
+    }
+    function selectAccent(hex) {
+      state.accentColor = hex;
+      renderAll();
+    }
+    function toggleMobileGroup(group) {
+      if (state.mobileCollapseMode === 'tabbed-sheet') {
+        state.mobileSpeedDial = null;
+        const target = group === 'map' ? 'layers' : 'user';
+        state.mobileSheet = state.mobileSheet === target ? null : target;
+      } else {
+        state.mobileSpeedDial = state.mobileSpeedDial === group ? null : group;
+      }
+      renderAll();
+    }
+    function openMobileLayerSection(sec) {
+      state.mobileLayerTab = sec;
+      state.mobileSheet = 'layers';
+      state.mobileSpeedDial = null;
+      renderAll();
+    }
+    function openMobileUserSection(sec) {
+      state.mobileUserTab = sec;
+      state.mobileSheet = state.mobileCollapseMode === 'tabbed-sheet' ? 'user' : sec;
+      state.mobileSpeedDial = null;
+      renderAll();
+    }
+
+    function renderUserBadge(size = 'sm') {
+      const icon = USER_ICONS.find((i) => i.id === state.userIconId) || USER_ICONS[0];
+      const dim = size === 'lg' ? 'w-9 h-9' : 'w-7 h-7';
+      return `
+        <span class="${dim} rounded-full border-2 border-white shadow flex items-center justify-center text-white shrink-0" style="background:${state.accentColor}">
+          ${icon.svg}
+        </span>
+      `;
+    }
+
+    function renderGoogleAvatar(size = 'sm') {
+      if (!state.isSignedIn) return SVG.googleG;
+      const dim = size === 'lg' ? 'w-8 h-8 text-xs' : 'w-7 h-7 text-[11px]';
+      return `<span class="${dim} rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center">א</span>`;
+    }
+
+    // =========================================================================
+    // CANVAS MAP RENDERER
+    // =========================================================================
+    function drawMapCanvas(canvasId) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      const w = rect.width;
+      const h = rect.height;
+      const isDay = state.theme === 'topo-day';
+      const isSat = state.visibility.googleSatellite;
+
+      // Base
+      ctx.fillStyle = isSat ? '#1a2e22' : isDay ? '#f4efe2' : '#0b1015';
+      ctx.fillRect(0, 0, w, h);
+
+      if (isSat) {
+        const satGrad = ctx.createRadialGradient(w * 0.45, h * 0.45, 30, w * 0.5, h * 0.5, w * 0.7);
+        satGrad.addColorStop(0, 'rgba(62, 92, 58, 0.55)');
+        satGrad.addColorStop(1, 'rgba(18, 28, 24, 0.85)');
+        ctx.fillStyle = satGrad;
+        ctx.fillRect(0, 0, w, h);
+      } else if (state.visibility.hillshade) {
+        const g = ctx.createRadialGradient(w * 0.35, h * 0.4, 20, w * 0.35, h * 0.4, w * 0.55);
+        g.addColorStop(0, isDay ? 'rgba(176, 146, 98, 0.28)' : 'rgba(56, 189, 248, 0.13)');
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      // Rotate around center for bearing
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate((-state.bearingDeg * Math.PI) / 180);
+      const zoomScale = Math.pow(1.18, state.zoom - 13.4);
+      ctx.scale(zoomScale, state.visibility.terrain3d ? zoomScale * 0.78 : zoomScale);
+      ctx.translate(-w / 2, -h / 2);
+
+      // Tactical Grid
+      if (state.visibility.tacticalGrid && !isSat) {
+        ctx.strokeStyle = isDay ? 'rgba(100,116,139,0.22)' : 'rgba(148,163,184,0.16)';
+        ctx.lineWidth = 1;
+        for (let x = -w * 0.3; x < w * 1.3; x += 64) {
+          ctx.beginPath(); ctx.moveTo(x, -h); ctx.lineTo(x, h * 2); ctx.stroke();
+        }
+        for (let y = -h * 0.3; y < h * 1.3; y += 64) {
+          ctx.beginPath(); ctx.moveTo(-w, y); ctx.lineTo(w * 2, y); ctx.stroke();
+        }
+      }
+
+      // Contours
+      if (state.visibility.contours && !isSat) {
+        for (let r = 1; r <= 6; r++) {
+          ctx.beginPath();
+          ctx.ellipse(w * 0.62, h * 0.36, r * 36, r * 24, 0.3, 0, Math.PI * 2);
+          ctx.strokeStyle = isDay ? 'rgba(142,102,52,0.34)' : 'rgba(148,163,184,0.22)';
+          ctx.lineWidth = r % 2 === 0 ? 1.3 : 0.7;
+          ctx.stroke();
+        }
+      }
+
+      // 4x4 Track + Hiking Trail
+      if (state.visibility.offroad4x4) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(w * 0.14, h * 0.65);
+        ctx.quadraticCurveTo(w * 0.42, h * 0.45, w * 0.82, h * 0.32);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2.6;
+        ctx.setLineDash([8, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+      if (state.visibility.hikingTrails) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(w * 0.25, h * 0.25);
+        ctx.quadraticCurveTo(w * 0.55, h * 0.52, w * 0.72, h * 0.76);
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 2.4;
+        ctx.setLineDash([5, 3]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Planned Pink Route
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(w * 0.28, h * 0.72);
+      ctx.bezierCurveTo(w * 0.42, h * 0.54, w * 0.52, h * 0.48, w * 0.68, h * 0.28);
+      ctx.strokeStyle = 'rgba(236,72,153,0.45)';
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.strokeStyle = isDay ? '#9d174d' : '#f9a8d4';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.restore();
+
+      // POIs
+      if (state.visibility.pois) {
+        const pois = [
+          { x: 0.48, y: 0.50, c: '#0284c7', show: state.visibility.poiWater, t: 'עין עקב' },
+          { x: 0.70, y: 0.34, c: '#dc2626', show: state.visibility.poiOffroad, t: 'מעלה זיק' },
+          { x: 0.30, y: 0.36, c: '#16a34a', show: state.visibility.poiCampsite, t: 'חניון צין' },
+        ];
+        pois.filter((p) => p.show).forEach((p) => {
+          const px = w * p.x, py = h * p.y;
+          ctx.beginPath();
+          ctx.arc(px, py, 6, 0, Math.PI * 2);
+          ctx.fillStyle = p.c;
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+          ctx.fillStyle = isSat || !isDay ? '#f8fafc' : '#1e293b';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(p.t, px, py - 10);
+        });
+      }
+
+      // Peer Locations
+      if (state.visibility.peerLocations) {
+        [[0.58, 0.42, 'נועה'], [0.40, 0.62, 'יובל']].forEach(([nx, ny, name]) => {
+          const px = w * nx, py = h * ny;
+          ctx.beginPath();
+          ctx.arc(px, py, 7, 0, Math.PI * 2);
+          ctx.fillStyle = '#10b981';
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#fff';
+          ctx.stroke();
+          ctx.fillStyle = isSat || !isDay ? '#ecfdf5' : '#065f46';
+          ctx.font = 'bold 10px sans-serif';
+          ctx.fillText(name, px, py + 18);
+        });
+      }
+
+      // User GPS Puck
+      const ux = w * 0.50, uy = h * 0.56;
+      ctx.beginPath();
+      ctx.arc(ux, uy, 14, 0, Math.PI * 2);
+      ctx.fillStyle = state.accentColor + '33';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(ux, uy, 8, 0, Math.PI * 2);
+      ctx.fillStyle = state.accentColor;
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      ctx.restore();
+      ctx.restore();
+    }
+
+    // =========================================================================
+    // SHARED POPOVER / SHEET BODY RENDERERS
+    // =========================================================================
+    function renderLayerSheetBody(sec) {
+      const t = tTokens();
+      const v = state.visibility;
+      if (sec === 'style') {
+        return `
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-2">
+              <button onclick="state.theme='topo-day'; renderAll()" class="p-2 rounded-xl border-2 text-center ${state.theme === 'topo-day' ? 'border-emerald-500 bg-emerald-500/10' : t.subCard}">
+                <div class="h-7 rounded-lg bg-[#f4efe2] text-amber-900 flex items-center justify-center gap-1 text-xs font-bold mb-1">${SVG.sun}<span>יום</span></div>
+                <span class="text-[11px] font-bold">טופוגרפי</span>
+              </button>
+              <button onclick="state.theme='topo-dark'; renderAll()" class="p-2 rounded-xl border-2 text-center ${state.theme === 'topo-dark' ? 'border-emerald-500 bg-emerald-500/10' : t.subCard}">
+                <div class="h-7 rounded-lg bg-slate-900 text-sky-400 flex items-center justify-center gap-1 text-xs font-bold mb-1">${SVG.moon}<span>לילה</span></div>
+                <span class="text-[11px] font-bold">טקטי</span>
+              </button>
+            </div>
+            <div class="grid grid-cols-3 gap-1.5 text-[11px]">
+              ${[['ihm', 'IHM', 'קלאסי'], ['nms', 'NMS', 'משופר'], ['govmap', 'GovMap', '1:25k']].map(([id, title, sub]) => `
+                <button onclick="state.mapStyle='${id}'; renderAll()" class="p-2 rounded-xl border-2 text-right ${state.mapStyle === id ? 'border-emerald-500 bg-emerald-500/10' : t.subCard}">
+                  <div class="font-extrabold">${title}</div>
+                  <div class="text-[10px] ${t.muted}">${sub}</div>
+                </button>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+      if (sec === 'layers') {
+        const items = [
+          ['googleSatellite', 'תצלום לוויין (Google)', 'SAT'],
+          ['contours', 'קווי גובה 10/50 מ׳', 'DEM'],
+          ['tacticalGrid', 'רשת קואורדינטות ITM', 'Grid'],
+          ['hillshade', 'הצללת תבליט הרים', 'Relief'],
+          ['offroad4x4', 'צירי 4x4 ודרכי עפר', '4x4'],
+          ['hikingTrails', 'שבילים מסומנים', 'Trails'],
+        ];
+        return `
+          <div class="space-y-1.5">
+            ${items.map(([k, label, badge]) => `
+              <button onclick="toggleVis('${k}')" class="w-full flex items-center justify-between px-2.5 py-2 rounded-xl border text-xs ${t.subCard}">
+                <span class="font-semibold">${label}</span>
+                <span class="flex items-center gap-2">
+                  <span class="font-mono text-[10px] ${t.muted}">${badge}</span>
+                  <span class="w-8 h-4 rounded-full p-0.5 flex items-center ${v[k] ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'}">
+                    <span class="w-3 h-3 rounded-full bg-white shadow"></span>
+                  </span>
+                </span>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      }
+      // pois
+      const cats = [
+        ['poiWater', 'מעיינות ומים', 'border-sky-500 bg-sky-500/15 text-sky-500'],
+        ['poiOffroad', 'מעלות 4x4', 'border-red-500 bg-red-500/15 text-red-500'],
+        ['poiCampsite', 'חניוני לילה', 'border-emerald-500 bg-emerald-500/15 text-emerald-500'],
+        ['poiHeritage', 'תצפיות ומורשת', 'border-amber-500 bg-amber-500/15 text-amber-500'],
+        ['poiPeak', 'פסגות', 'border-indigo-500 bg-indigo-500/15 text-indigo-500'],
+        ['poiUser', 'דיווחי מטיילים', 'border-violet-500 bg-violet-500/15 text-violet-500'],
+      ];
+      return `
+        <div class="space-y-2.5">
+          <button onclick="toggleVis('pois')" class="w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs ${t.subCard}">
+            <span class="font-bold">הצג נקודות עניין במפה</span>
+            <span class="w-8 h-4 rounded-full p-0.5 flex items-center ${v.pois ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'}">
+              <span class="w-3 h-3 rounded-full bg-white shadow"></span>
+            </span>
+          </button>
+          <div class="flex flex-wrap gap-1.5 ${v.pois ? '' : 'opacity-50'}">
+            ${cats.map(([k, lbl, cls]) => `
+              <button onclick="toggleVis('${k}')" class="px-2.5 py-1.5 rounded-xl border text-xs font-semibold ${v.pois && v[k] ? cls : t.subCard + ' opacity-55'}">${lbl}</button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderGoogleBody() {
+      const t = tTokens();
+      return `
+        <div class="space-y-2.5 text-xs">
+          ${state.isSignedIn ? `
+            <div class="flex items-center gap-2.5">
+              ${renderGoogleAvatar('lg')}
+              <div class="min-w-0">
+                <div class="font-bold truncate">אוהד מנור</div>
+                <div class="text-[11px] truncate ${t.muted}" dir="ltr">ohad.manor@gmail.com</div>
+              </div>
+            </div>
+            <div class="px-2.5 py-2 rounded-xl border flex items-center justify-between ${t.subCard}">
+              <span class="font-semibold text-emerald-500">● סנכרון ענן פעיל</span>
+              <span class="font-mono text-[10px] ${t.muted}">18:02</span>
+            </div>
+            <div class="grid grid-cols-2 gap-1.5">
+              <button onclick="showToast('מיקום והגדרות סונכרנו לענן')" class="py-1.5 px-2.5 rounded-xl border font-bold ${t.pillBtn}">סנכרן עכשיו</button>
+              <button onclick="toggleAuthUser()" class="py-1.5 px-2.5 rounded-xl border border-rose-500/35 bg-rose-500/10 text-rose-500 font-bold">התנתק</button>
+            </div>
+          ` : `
+            <div class="p-2.5 rounded-xl border text-center space-y-2 ${t.subCard}">
+              <div class="${t.muted}">התחבר כדי לסנכרן מסלולים, סמן מיקום והגדרות</div>
+              <button onclick="toggleAuthUser()" class="w-full py-2 rounded-xl bg-emerald-600 text-white font-bold">התחבר עם Google</button>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    function renderUserIconBody() {
+      const t = tTokens();
+      return `
+        <div class="space-y-3 text-xs">
+          <div class="flex items-center justify-between">
+            <span class="font-semibold ${t.muted}">צבע סמן:</span>
+            <div class="flex items-center gap-1.5">
+              ${ACCENT_COLORS.map((hex) => `
+                <button onclick="selectAccent('${hex}')" class="w-5 h-5 rounded-full border-2 ${state.accentColor === hex ? 'border-white ring-2 ring-emerald-500 scale-110' : 'border-white/60'}" style="background:${hex}"></button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="grid grid-cols-4 gap-1.5">
+            ${USER_ICONS.map((ic) => `
+              <button onclick="selectUserIcon('${ic.id}')" class="p-2 rounded-xl border flex flex-col items-center gap-1 ${state.userIconId === ic.id ? 'border-emerald-500 bg-emerald-500/15' : t.subCard}">
+                <span class="w-7 h-7 rounded-full border-2 border-white shadow flex items-center justify-center text-white" style="background:${state.accentColor}">${ic.svg}</span>
+                <span class="text-[10px] font-semibold truncate w-full text-center">${ic.label}</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLiveShareBody() {
+      const t = tTokens();
+      return `
+        <div class="space-y-2.5 text-xs">
+          <div class="flex items-center justify-between px-2.5 py-2 rounded-xl border ${t.subCard}">
+            <div>
+              <div class="font-bold">שיתוף מיקום חי</div>
+              <div class="text-[11px] ${t.muted}">${state.isLiveSharing ? `משתף עם ${state.livePeersCount} חברים • נותרו 3:42 ש׳` : 'כבוי כרגע'}</div>
+            </div>
+            <button onclick="toggleLiveShare()" class="px-3 py-1 rounded-lg font-bold text-white ${state.isLiveSharing ? 'bg-rose-600' : 'bg-emerald-600'}">
+              ${state.isLiveSharing ? 'הפסק' : 'הפעל'}
+            </button>
+          </div>
+          <button onclick="toggleVis('peerLocations')" class="w-full flex items-center justify-between px-2.5 py-2 rounded-xl border ${t.subCard}">
+            <span class="font-semibold">הצג מיקומי חברים במפה (${state.livePeersCount})</span>
+            <span class="w-8 h-4 rounded-full p-0.5 flex items-center ${state.visibility.peerLocations ? 'bg-emerald-600 justify-start' : 'bg-slate-400/40 justify-end'}">
+              <span class="w-3 h-3 rounded-full bg-white shadow"></span>
+            </span>
+          </button>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // RENDER WEB DESKTOP
+    // =========================================================================
+    function renderWeb() {
+      const t = tTokens();
+
+      // Search Bar
+      document.getElementById('web-search-bar').className = `flex items-center gap-2 rounded-2xl px-3 py-2 border ${t.panel}`;
+      document.getElementById('web-search-bar').innerHTML = `
+        <span class="text-emerald-500 shrink-0">${SVG.search}</span>
+        <input type="text" placeholder="חפש עיר, נחל, מעיין, הר, נ.צ..." class="w-full bg-transparent text-xs focus:outline-none" />
+        <div class="h-4 w-px bg-current opacity-15"></div>
+        <button onclick="showToast('פתיחת מגירת מסלולים')" class="p-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white shrink-0" title="מסלולים">${SVG.route}</button>
+      `;
+
+      // Top-Left Quick Actions (now includes "+ הוסף נקודה"!)
+      document.getElementById('web-top-left').innerHTML = `
+        <button onclick="showToast('ניהול מפות אופליין')" class="px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 ${t.panel}">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span class="text-sky-500">${SVG.drive}</span>
+          <span>100% אופליין</span>
+        </button>
+        <div class="flex items-center gap-0.5 rounded-full p-1 border ${t.panel}">
+          <button onclick="toggleNavigation()" class="px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 ${state.isNavigating ? 'bg-emerald-600 text-white' : t.hoverRow}">
+            <span class="${state.isNavigating ? 'text-white' : 'text-emerald-500'}">${SVG.nav}</span><span>ניווט</span>
+          </button>
+          <button onclick="showToast('מסלולים')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 ${t.hoverRow}">
+            <span class="text-emerald-500">${SVG.route}</span><span>מסלולים</span>
+          </button>
+          <button onclick="showToast('תכנון מסלול')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 ${t.hoverRow}">
+            <span class="text-blue-500">${SVG.pen}</span><span>תכנון</span>
+          </button>
+          <button onclick="startPickPoi()" class="px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 ${state.isPickingPoi ? 'bg-sky-600 text-white' : t.hoverRow}" title="הוסף נקודת עניין חדשה במפה">
+            <span class="${state.isPickingPoi ? 'text-white' : 'text-sky-500'}">${SVG.plus}</span><span>הוסף נקודה</span>
+          </button>
+          <button onclick="showToast('סימון שבילים')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold flex items-center gap-1 ${t.hoverRow}">
+            <span class="text-rose-500">${SVG.mapPin}</span><span>סימון שבילים</span>
+          </button>
+        </div>
+      `;
+
+      // Pick POI banner
+      document.getElementById('web-pick-banner').classList.toggle('hidden', !state.isPickingPoi);
+
+      // GROUP 1 (Bottom-Left): Map Layers & Map Operations
+      const activeG1 = (id) => state.webPopover === id ? 'bg-emerald-600 text-white' : 'hover:bg-black/5';
+      document.getElementById('web-group1-stack').innerHTML = `
+        <div class="flex flex-col gap-2 items-center">
+          <div class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-600/90 text-white shadow">1. מפה</div>
+
+          <!-- Layers Sub-Capsule (Connected) -->
+          <div class="flex flex-col rounded-xl border shadow-lg overflow-hidden ${t.pillBtn}">
+            <button onclick="toggleWebPopover('style')" class="w-10 h-10 flex items-center justify-center transition-colors ${activeG1('style')}" title="סגנון מפה (יום / לילה)">${SVG.palette}</button>
+            <div class="h-px bg-current opacity-15"></div>
+            <button onclick="toggleWebPopover('layers')" class="w-10 h-10 flex items-center justify-center transition-colors ${activeG1('layers')}" title="שכבות מפה">${SVG.layers}</button>
+            <div class="h-px bg-current opacity-15"></div>
+            <button onclick="toggleWebPopover('pois')" class="w-10 h-10 flex items-center justify-center transition-colors ${activeG1('pois')}" title="נקודות עניין (POI)">${SVG.poiFilter}</button>
+          </div>
+
+          <!-- Orientation (Compass outside Nav, Heading/North toggle during Nav) -->
+          <button onclick="resetNorth()" class="w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${t.pillBtn}" title="${state.isNavigating ? 'החלף כיוון מפה' : 'אפס לצפון'}">
+            ${state.isNavigating ? (state.navOrientation === 'heading-up' ? SVG.headingUp : SVG.northUp(state.bearingDeg)) : SVG.compass(state.bearingDeg)}
+          </button>
+
+          <!-- Zoom +/- -->
+          <div class="flex flex-col rounded-xl border shadow-lg overflow-hidden ${t.pillBtn}">
+            <button onclick="adjustZoom(0.5)" class="w-10 h-9 flex items-center justify-center text-base font-bold hover:bg-black/10" title="התקרב">+</button>
+            <div class="h-px bg-current opacity-15"></div>
+            <button onclick="adjustZoom(-0.5)" class="w-10 h-9 flex items-center justify-center text-base font-bold hover:bg-black/10" title="התרחק">−</button>
+          </div>
+
+          <!-- Locate GPS -->
+          <button onclick="toggleGpsFollow()" class="w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${state.isFollowingGps ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn}" title="המיקום שלי (GPS)">
+            <span class="${state.isFollowingGps ? 'text-white' : 'text-sky-500'}">${SVG.locate}</span>
+          </button>
+        </div>
+      `;
+
+      // GROUP 2: User Parameters (Bottom-Right OR Second Column)
+      const g2El = document.getElementById('web-group2-stack');
+      g2El.className = state.webGroup2Pos === 'bottom-right'
+        ? 'absolute bottom-11 right-4 z-20 pointer-events-auto flex flex-col items-center gap-1.5'
+        : 'absolute bottom-4 left-16 z-20 pointer-events-auto flex flex-col items-center gap-1.5';
+
+      g2El.innerHTML = `
+        <div class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-600/90 text-white shadow">2. משתמש</div>
+        <button onclick="toggleWebPopover('google')" class="relative w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${state.webPopover === 'google' ? 'border-emerald-500 ring-2 ring-emerald-500/40' : ''} ${t.pillBtn}" title="חשבון Google וסנכרון">
+          ${renderGoogleAvatar()}
+          ${state.isSignedIn ? '<span class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white"></span>' : ''}
+        </button>
+
+        <button onclick="toggleWebPopover('user-icon')" class="w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${state.webPopover === 'user-icon' ? 'border-emerald-500 ring-2 ring-emerald-500/40' : state.isLiveSharing ? 'border-red-500 ring-2 ring-red-500/50' : ''} ${t.pillBtn}" title="סמן המיקום שלי במפה">
+          ${renderUserBadge()}
+        </button>
+
+        <button onclick="toggleWebPopover('live-share')" class="relative w-10 h-10 rounded-xl border shadow-lg flex items-center justify-center transition-all ${state.isLiveSharing ? 'bg-red-600 border-red-400 text-white' : t.pillBtn}" title="שיתוף מיקום חי">
+          <span class="${state.isLiveSharing ? 'animate-pulse' : ''}">${SVG.radio}</span>
+          ${state.livePeersCount > 0 ? `<span class="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow">${state.livePeersCount}</span>` : ''}
+        </button>
+      `;
+
+      // Web Popover Slot (never overlaps!)
+      const popSlot = document.getElementById('web-popover-slot');
+      if (!state.webPopover) {
+        popSlot.innerHTML = '';
+      } else {
+        const isG1 = ['style', 'layers', 'pois'].includes(state.webPopover);
+        const titles = {
+          style: 'סגנון מפה (יום / לילה)',
+          layers: 'שכבות מפה',
+          pois: 'נקודות עניין (POI)',
+          google: 'חשבון Google וסנכרון',
+          'user-icon': 'אייקון המיקום שלי',
+          'live-share': 'שיתוף מיקום חי',
+        };
+        const body = isG1
+          ? renderLayerSheetBody(state.webPopover)
+          : state.webPopover === 'google'
+            ? renderGoogleBody()
+            : state.webPopover === 'user-icon'
+              ? renderUserIconBody()
+              : renderLiveShareBody();
+
+        const posCls = isG1
+          ? (state.webGroup2Pos === 'second-col' ? 'bottom-4 left-[7.5rem]' : 'bottom-4 left-16')
+          : (state.webGroup2Pos === 'bottom-right' ? 'bottom-11 right-16' : 'bottom-4 left-[7.5rem]');
+
+        popSlot.innerHTML = `
+          <div class="anim-pop absolute ${posCls} z-40 w-72 rounded-2xl border p-3.5 space-y-3 ${t.panel}">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold">${titles[state.webPopover]}</span>
+              <button onclick="toggleWebPopover(null)" class="p-1 rounded-lg border ${t.pillBtn}">${SVG.close}</button>
+            </div>
+            ${body}
+          </div>
+        `;
+      }
+
+      // HUD + Scale bar
+      document.getElementById('web-hud-pill').className = `absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-full border text-xs font-mono flex items-center gap-2.5 pointer-events-auto ${t.panel}`;
+      document.getElementById('web-hud-pill').innerHTML = `
+        <span class="text-emerald-500 font-bold">גובה: 390m</span>
+        <span class="opacity-30">|</span>
+        <span class="text-amber-500 font-bold">נ.צ. <span dir="ltr">1784 3094</span></span>
+        <span class="opacity-30">|</span>
+        <span class="${t.muted}" dir="ltr">z${state.zoom}</span>
+      `;
+      document.getElementById('web-scale-bar').className = `absolute bottom-3 right-4 z-10 px-2.5 py-0.5 rounded-full border text-[11px] font-mono pointer-events-none ${t.panel}`;
+    }
+
+    // =========================================================================
+    // RENDER MOBILE (COLLAPSED GROUPS!)
+    // =========================================================================
+    function renderMobile() {
+      const t = tTokens();
+      const isNav = state.mobileDisplayMode === 'navigating';
+      const isLandscape = state.viewMode === 'landscape';
+
+      // Resize bezel
+      const bezel = document.getElementById('mobile-bezel');
+      if (isLandscape) {
+        bezel.className = 'w-[680px] h-[360px] max-w-full rounded-[30px] border-[8px] border-slate-800 shadow-2xl overflow-hidden bg-slate-950 flex flex-col relative transition-all duration-200';
+        document.getElementById('mobile-title').textContent = 'Mobile Landscape — Still 1 Slim Column!';
+        document.getElementById('mobile-subtitle').textContent = '3–4 icons fit cleanly inside 360px height';
+      } else {
+        bezel.className = 'w-[375px] h-[690px] rounded-[40px] border-[8px] border-slate-800 shadow-2xl overflow-hidden bg-slate-950 flex flex-col relative transition-all duration-200';
+        document.getElementById('mobile-title').textContent = 'Mobile Portrait — Collapsed Groups';
+        document.getElementById('mobile-subtitle').textContent = 'Only 3–4 icons • Zero clipping';
+      }
+
+      document.getElementById('mobile-status-bar').className = `h-7 px-5 flex items-center justify-between text-[11px] font-semibold shrink-0 z-30 ${t.statusBg}`;
+
+      // Top bar
+      const topBar = document.getElementById('mobile-top-bar');
+      if (!isNav) {
+        topBar.innerHTML = `
+          <div class="flex items-center gap-2 rounded-full px-3 py-1.5 border pointer-events-auto ${t.panel}">
+            <span class="text-emerald-500">${SVG.search}</span>
+            <input type="text" placeholder="חפש מעיין, נחל, נ.צ..." class="w-full bg-transparent text-xs focus:outline-none" />
+            <span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 text-[11px] font-bold">אופליין</span>
+          </div>
+        `;
+      } else {
+        topBar.innerHTML = `
+          <div class="flex items-center justify-between gap-2">
+            <div class="px-3 py-1.5 rounded-full bg-emerald-600/95 text-white text-xs font-bold shadow-lg flex items-center gap-2 pointer-events-auto">
+              ${SVG.nav}
+              <span>ניווט פעיל • 6.4 ק״מ</span>
+            </div>
+            <button onclick="setMobileMode('planning')" class="w-9 h-9 rounded-full border shadow-lg flex items-center justify-center pointer-events-auto ${t.panel}" title="חזור למצב תכנון">
+              <span class="text-emerald-500">${SVG.mapIcon}</span>
+            </button>
+          </div>
+        `;
+      }
+
+      // Nav search box
+      const navSearchBox = document.getElementById('mobile-nav-search-box');
+      if (isNav && state.mobileNavSearchOpen) {
+        navSearchBox.classList.remove('hidden');
+        navSearchBox.innerHTML = `
+          <div class="flex items-center gap-2 rounded-full px-3 py-1.5 border ${t.panel}">
+            <span class="text-emerald-500">${SVG.search}</span>
+            <input type="text" placeholder="חיפוש מהיר בניווט..." class="w-full bg-transparent text-xs focus:outline-none" />
+            <button onclick="state.mobileNavSearchOpen=false; renderAll()" class="text-xs font-bold px-2 py-0.5 rounded-full border ${t.pillBtn}">סגור</button>
+          </div>
+        `;
+      } else {
+        navSearchBox.classList.add('hidden');
+      }
+
+      // Pick POI banner
+      document.getElementById('mobile-pick-banner').classList.toggle('hidden', !state.isPickingPoi);
+
+      // MOBILE COLLAPSED LEFT COLUMN
+      const leftCol = document.getElementById('mobile-left-controls');
+      leftCol.style.top = isNav ? '3.5rem' : '3.8rem';
+
+      const mapGroupActive = state.mobileSpeedDial === 'map' || state.mobileSheet === 'layers';
+      const userGroupActive = state.mobileSpeedDial === 'user' || ['user', 'google', 'user-icon', 'live-share'].includes(state.mobileSheet);
+
+      leftCol.innerHTML = `
+        ${isNav ? `
+          <button onclick="state.mobileNavSearchOpen=!state.mobileNavSearchOpen; renderAll()" class="w-10 h-10 rounded-full border shadow-lg flex items-center justify-center ${state.mobileNavSearchOpen ? 'bg-emerald-600 text-white border-emerald-400' : t.pillBtn}" title="חיפוש">
+            ${SVG.search}
+          </button>
+        ` : ''}
+
+        <!-- GROUP 1 COLLAPSED TRIGGER (Map Layers & Operations) -->
+        <div class="relative flex items-center gap-1.5">
+          <button onclick="toggleMobileGroup('map')" class="relative w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${mapGroupActive ? 'bg-emerald-600 border-emerald-400 text-white' : t.pillBtn}" title="קבוצה 1: שכבות ופעולות מפה">
+            ${SVG.layers}
+            ${state.visibility.googleSatellite || state.visibility.terrain3d ? '<span class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white"></span>' : ''}
+          </button>
+
+          ${state.mobileCollapseMode === 'speed-dial' && state.mobileSpeedDial === 'map' ? `
+            <div class="anim-pop flex items-center gap-1 p-1 rounded-full border shadow-2xl ${t.panel}">
+              <button onclick="openMobileLayerSection('style')" class="w-8 h-8 rounded-full flex items-center justify-center ${t.hoverRow}" title="סגנון מפה">${SVG.palette}</button>
+              <button onclick="openMobileLayerSection('layers')" class="w-8 h-8 rounded-full flex items-center justify-center ${t.hoverRow}" title="שכבות מפה">${SVG.layers}</button>
+              <button onclick="openMobileLayerSection('pois')" class="w-8 h-8 rounded-full flex items-center justify-center ${t.hoverRow}" title="נקודות עניין">${SVG.poiFilter}</button>
+              ${!state.mobilePinAddPoi ? `<button onclick="startPickPoi()" class="w-8 h-8 rounded-full flex items-center justify-center text-sky-500 ${t.hoverRow}" title="הוסף נקודה">${SVG.plus}</button>` : ''}
+              ${state.bearingDeg !== 0 || isNav ? `<button onclick="resetNorth()" class="w-8 h-8 rounded-full flex items-center justify-center ${t.hoverRow}" title="כיוון / צפון">${isNav ? (state.navOrientation === 'heading-up' ? SVG.headingUp : SVG.northUp(state.bearingDeg)) : SVG.compass(state.bearingDeg)}</button>` : ''}
+            </div>
+          ` : ''}
+        </div>
+
+        <!-- GROUP 2 COLLAPSED TRIGGER (User Parameters) -->
+        <div class="relative flex items-center gap-1.5">
+          <button onclick="toggleMobileGroup('user')" class="relative w-10 h-10 rounded-full border shadow-lg flex items-center justify-center transition-all ${userGroupActive ? 'border-emerald-500 ring-2 ring-emerald-500/40' : state.isLiveSharing ? 'border-red-500 ring-2 ring-red-500/60' : ''} ${t.pillBtn}" title="קבוצה 2: פרמטרי משתמש">
+            ${renderUserBadge()}
+            ${state.livePeersCount > 0 ? `<span class="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-500 text-white text-[9px] font-bold flex items-center justify-center shadow">${state.livePeersCount}</span>` : ''}
+            ${state.isSignedIn ? '<span class="absolute -bottom-0.5 -left-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white"></span>' : ''}
+          </button>
+
+          ${state.mobileCollapseMode === 'speed-dial' && state.mobileSpeedDial === 'user' ? `
+            <div class="anim-pop flex items-center gap-1 p-1 rounded-full border shadow-2xl ${t.panel}">
+              <button onclick="openMobileUserSection('google')" class="w-8 h-8 rounded-full flex items-center justify-center ${t.hoverRow}" title="חשבון Google וסנכרון">${renderGoogleAvatar()}</button>
+              <button onclick="openMobileUserSection('user-icon')" class="w-8 h-8 rounded-full flex items-center justify-center ${t.hoverRow}" title="אייקון מיקום">${renderUserBadge()}</button>
+              <button onclick="openMobileUserSection('live-share')" class="relative w-8 h-8 rounded-full flex items-center justify-center ${state.isLiveSharing ? 'bg-red-600 text-white' : t.hoverRow}" title="שיתוף מיקום חי">${SVG.radio}</button>
+            </div>
+          ` : ''}
+        </div>
+
+        ${state.mobilePinAddPoi ? `
+          <button onclick="startPickPoi()" class="w-10 h-10 rounded-full border shadow-lg flex items-center justify-center ${state.isPickingPoi ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn}" title="הוסף נקודה">
+            <span class="${state.isPickingPoi ? 'text-white' : 'text-sky-500'}">${SVG.plus}</span>
+          </button>
+        ` : ''}
+
+        <!-- ALWAYS 1-TAP: Locate GPS -->
+        <button onclick="toggleGpsFollow()" class="w-10 h-10 rounded-full border shadow-lg flex items-center justify-center ${state.isFollowingGps ? 'bg-sky-600 border-sky-400 text-white' : t.pillBtn}" title="מיקום GPS">
+          <span class="${state.isFollowingGps ? 'text-white' : 'text-sky-500'}">${SVG.locate}</span>
+        </button>
+
+        ${isNav ? `
+          <button onclick="resetNorth()" class="w-10 h-10 rounded-full border shadow-lg flex items-center justify-center ${t.pillBtn}" title="החלף כיוון מפה">
+            ${state.navOrientation === 'heading-up' ? SVG.headingUp : SVG.northUp(state.bearingDeg)}
+          </button>
+        ` : ''}
+      `;
+
+      // Planning HUD Pill
+      const mHud = document.getElementById('mobile-hud-pill');
+      mHud.classList.toggle('hidden', isNav);
+      mHud.className = `absolute bottom-2.5 right-2.5 z-20 px-2.5 py-1 rounded-full border text-[11px] font-mono pointer-events-auto ${t.panel} ${isNav ? 'hidden' : ''}`;
+      mHud.innerHTML = `<span class="text-emerald-500 font-bold">390m</span> • <span class="text-amber-500 font-bold">1784 3094</span>`;
+
+      // Mobile Bottom Sheet (either open Group 1 / Group 2 sheet OR slim Planning/Nav bar)
+      const sheet = document.getElementById('mobile-bottom-sheet');
+      sheet.className = `relative z-30 border-t shadow-2xl shrink-0 ${t.panel}`;
+      const sheetMaxH = isLandscape ? 'max-h-[185px]' : 'max-h-[260px]';
+      if (state.mobileSheet === 'layers') {
+        sheet.innerHTML = `
+          <div class="p-3 space-y-2.5 ${sheetMaxH} overflow-y-auto">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1">
+                ${[['style', 'סגנון'], ['layers', 'שכבות'], ['pois', 'POI']].map(([id, lbl]) => `
+                  <button onclick="state.mobileLayerTab='${id}'; renderAll()" class="px-2.5 py-1 rounded-lg text-xs font-bold ${state.mobileLayerTab === id ? 'bg-emerald-600 text-white' : t.subCard + ' border'}">${lbl}</button>
+                `).join('')}
+              </div>
+              <button onclick="state.mobileSheet=null; renderAll()" class="p-1 rounded-lg border ${t.pillBtn}">${SVG.close}</button>
+            </div>
+            ${renderLayerSheetBody(state.mobileLayerTab)}
+          </div>
+        `;
+      } else if (['user', 'google', 'user-icon', 'live-share'].includes(state.mobileSheet)) {
+        const activeTab = state.mobileSheet === 'user' ? state.mobileUserTab : state.mobileSheet;
+        const tabLabels = [['google', 'Google וסנכרון'], ['user-icon', 'סמן מיקום'], ['live-share', 'שיתוף חי']];
+        sheet.innerHTML = `
+          <div class="p-3 space-y-2.5 ${sheetMaxH} overflow-y-auto">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1">
+                ${state.mobileSheet === 'user'
+                  ? tabLabels.map(([id, lbl]) => `
+                      <button onclick="state.mobileUserTab='${id}'; renderAll()" class="px-2 py-1 rounded-lg text-[11px] font-bold ${activeTab === id ? 'bg-sky-600 text-white' : t.subCard + ' border'}">${lbl}</button>
+                    `).join('')
+                  : `<span class="text-xs font-bold">${tabLabels.find((x) => x[0] === activeTab)?.[1] || ''}</span>`
+                }
+              </div>
+              <button onclick="state.mobileSheet=null; renderAll()" class="p-1 rounded-lg border ${t.pillBtn}">${SVG.close}</button>
+            </div>
+            ${activeTab === 'google' ? renderGoogleBody() : activeTab === 'user-icon' ? renderUserIconBody() : renderLiveShareBody()}
+          </div>
+        `;
+      } else if (!isNav) {
+        sheet.innerHTML = isLandscape ? '' : `
+          <div class="px-3.5 py-2 flex items-center justify-between text-xs">
+            <span class="font-bold">בקרבתך (6)</span>
+            <div class="flex items-center gap-1.5">
+              <button onclick="showToast('תכנון מסלול')" class="px-2.5 py-1 rounded-full bg-blue-600 text-white font-bold">תכנון</button>
+              <button onclick="setMobileMode('navigating')" class="px-2.5 py-1 rounded-full bg-emerald-600 text-white font-bold">ניווט</button>
+            </div>
+          </div>
+        `;
+      } else {
+        sheet.innerHTML = `
+          <div class="px-3 py-2 flex items-center justify-between text-xs font-mono">
+            <div class="flex items-center gap-3">
+              <div><span class="block text-[10px] font-sans ${t.muted}">גובה</span><span class="font-bold text-emerald-500">390m</span></div>
+              <div><span class="block text-[10px] font-sans ${t.muted}">נותר</span><span class="font-bold">6.4 km</span></div>
+              <div><span class="block text-[10px] font-sans ${t.muted}">נ.צ.</span><span class="font-bold text-amber-500">1784 3094</span></div>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="state.isRecording=!state.isRecording; renderAll()" class="w-8 h-8 rounded-xl border flex items-center justify-center ${t.pillBtn}">${state.isRecording ? SVG.pause : SVG.play}</button>
+              <button onclick="setMobileMode('planning')" class="px-2.5 h-8 rounded-xl bg-rose-600 text-white font-sans font-bold">סיום</button>
+            </div>
+          </div>
+        `;
+      }
+
+      // Mobile Bottom Nav Bar (Planning Portrait only — hidden in Nav & compact Landscape)
+      const bNav = document.getElementById('mobile-bottom-nav');
+      if (isNav || isLandscape) {
+        bNav.className = 'hidden';
+      } else {
+        bNav.className = `h-14 border-t px-1 flex items-center justify-around shrink-0 z-40 ${t.navBar}`;
+        bNav.innerHTML = [
+          ['מפה', SVG.mapIcon, true],
+          ['מסלולים', SVG.route, false],
+          ['מאגר תכנון', SVG.folder, false],
+          ['אופליין', SVG.drive, false],
+        ].map(([lbl, ic, act]) => `
+          <button onclick="showToast('${lbl}')" class="flex-1 h-full flex flex-col items-center justify-center gap-0.5 text-[11px] font-bold ${act ? 'text-emerald-500' : ''}">
+            ${ic}<span>${lbl}</span>
+          </button>
+        `).join('');
+      }
+    }
+
+    // =========================================================================
+    // RENDER HEADER & STAGE
+    // =========================================================================
+    function renderAll() {
+      const btnCls = (on) => on
+        ? 'bg-emerald-600 text-white shadow'
+        : 'text-slate-300 hover:bg-slate-800';
+
+      document.getElementById('vm-split').className = `px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${btnCls(state.viewMode === 'split')}`;
+      document.getElementById('vm-web').className = `px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${btnCls(state.viewMode === 'web')}`;
+      document.getElementById('vm-mobile').className = `px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${btnCls(state.viewMode === 'mobile')}`;
+      document.getElementById('vm-landscape').className = `px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${btnCls(state.viewMode === 'landscape')}`;
+
+      document.getElementById('mm-planning').className = `px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${btnCls(state.mobileDisplayMode === 'planning')}`;
+      document.getElementById('mm-navigating').className = `px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${btnCls(state.mobileDisplayMode === 'navigating')}`;
+
+      document.getElementById('mc-speed-dial').className = `px-2.5 py-1 rounded-lg font-semibold transition-all ${btnCls(state.mobileCollapseMode === 'speed-dial')}`;
+      document.getElementById('mc-tabbed-sheet').className = `px-2.5 py-1 rounded-lg font-semibold transition-all ${btnCls(state.mobileCollapseMode === 'tabbed-sheet')}`;
+
+      document.getElementById('mp-collapsed').className = `px-2.5 py-1 rounded-lg font-semibold transition-all ${btnCls(!state.mobilePinAddPoi)}`;
+      document.getElementById('mp-pinned').className = `px-2.5 py-1 rounded-lg font-semibold transition-all ${btnCls(state.mobilePinAddPoi)}`;
+
+      document.getElementById('wg-bottom-right').className = `px-2.5 py-1 rounded-lg font-semibold transition-all ${btnCls(state.webGroup2Pos === 'bottom-right')}`;
+      document.getElementById('wg-second-col').className = `px-2.5 py-1 rounded-lg font-semibold transition-all ${btnCls(state.webGroup2Pos === 'second-col')}`;
+
+      document.getElementById('btn-theme').textContent = state.theme === 'topo-day' ? '☀️ מצב יום' : '🌙 מצב לילה';
+
+      const simCls = (on) => on
+        ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400'
+        : 'bg-slate-950 border-slate-700 text-slate-400';
+      document.getElementById('sim-bearing').className = `px-2.5 py-1 rounded-lg border font-semibold transition-all ${simCls(state.bearingDeg !== 0)}`;
+      document.getElementById('sim-bearing').textContent = `סיבוב מפה: ${state.bearingDeg}°`;
+      document.getElementById('sim-share').className = `px-2.5 py-1 rounded-lg border font-semibold transition-all ${simCls(state.isLiveSharing)}`;
+      document.getElementById('sim-share').textContent = state.isLiveSharing ? 'שיתוף חי: פעיל' : 'שיתוף חי: כבוי';
+      document.getElementById('sim-auth').className = `px-2.5 py-1 rounded-lg border font-semibold transition-all ${simCls(state.isSignedIn)}`;
+      document.getElementById('sim-auth').textContent = state.isSignedIn ? 'משתמש: מחובר' : 'משתמש: אורח';
+
+      // Show/hide Web vs Mobile sections
+      const webW = document.getElementById('web-wrapper');
+      const mobW = document.getElementById('mobile-wrapper');
+      const grid = document.getElementById('stage-grid');
+      if (state.viewMode === 'split') {
+        grid.className = 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start';
+        webW.className = 'xl:col-span-7 flex flex-col gap-2';
+        mobW.className = 'xl:col-span-5 flex flex-col items-center gap-2';
+      } else if (state.viewMode === 'web') {
+        grid.className = 'grid grid-cols-1 gap-5';
+        webW.className = 'flex flex-col gap-2';
+        mobW.className = 'hidden';
+      } else {
+        grid.className = 'grid grid-cols-1 gap-5';
+        webW.className = 'hidden';
+        mobW.className = 'flex flex-col items-center gap-2';
+      }
+
+      document.getElementById('web-canvas').classList.toggle('picking', state.isPickingPoi);
+      document.getElementById('mobile-canvas').classList.toggle('picking', state.isPickingPoi);
+
+      renderWeb();
+      renderMobile();
+      requestAnimationFrame(() => {
+        drawMapCanvas('web-canvas');
+        drawMapCanvas('mobile-canvas');
+      });
+    }
+
+    // Clicking canvas while picking POI creates a simulated confirmation toast
+    ['web-canvas', 'mobile-canvas'].forEach((id) => {
+      document.getElementById(id).addEventListener('click', () => {
+        if (state.isPickingPoi) {
+          state.isPickingPoi = false;
+          showToast('נבחר מיקום! נפתח חלון הוספת נקודת עניין');
+          renderAll();
+        }
+      });
+    });
+
+    window.addEventListener('resize', () => {
+      drawMapCanvas('web-canvas');
+      drawMapCanvas('mobile-canvas');
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>

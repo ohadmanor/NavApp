@@ -1095,6 +1095,17 @@ function getDynamicPaintUpdates(
           : 'white',
     };
   }
+  if (layerId === 'building' && isGovmap) {
+    const rawPaint = rawLayerById.get('building')?.paint || {};
+    return {
+      'fill-extrusion-height': visibility.terrain3d
+        ? structuredClone(rawPaint['fill-extrusion-height'] ?? ['get', 'render_height'])
+        : 0,
+      'fill-extrusion-base': visibility.terrain3d
+        ? structuredClone(rawPaint['fill-extrusion-base'] ?? ['get', 'render_min_height'])
+        : 0,
+    };
+  }
   return null;
 }
 

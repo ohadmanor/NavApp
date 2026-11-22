@@ -188,18 +188,26 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     expect(hybridMerge.merged.config.theme).toBe('topo-dark');
   });
 
-  it('places Google account button below My Position on both Desktop and Mobile and permits settings sync in firestore.rules', () => {
+  it('organizes on-screen icons into Map Layers/Operations and User Parameters groups on Desktop & collapsed Mobile and permits settings sync in firestore.rules', () => {
     const appSrc = fs.readFileSync('src/App.tsx', 'utf-8');
     expect(appSrc).toContain('<GoogleAccountButton');
-    const desktopLocateIdx = appSrc.indexOf('onClick={handleLocateMe}');
+    expect(appSrc).toContain('<GoogleAccountMenuCard');
+    expect(appSrc).toContain("mobileSpeedDial === 'map'");
+    expect(appSrc).toContain("mobileSpeedDial === 'user'");
+
+    const desktopLocateIdx = appSrc.indexOf('renderLocationModeButton(false)');
     const desktopGoogleIdx = appSrc.indexOf('<GoogleAccountButton', desktopLocateIdx);
     expect(desktopLocateIdx).toBeGreaterThan(-1);
     expect(desktopGoogleIdx).toBeGreaterThan(desktopLocateIdx);
 
-    const mobileLocateIdx = appSrc.indexOf('onClick={handleLocateMe}', desktopGoogleIdx);
-    const mobileGoogleIdx = appSrc.indexOf('<GoogleAccountButton', mobileLocateIdx);
-    expect(mobileLocateIdx).toBeGreaterThan(desktopGoogleIdx);
-    expect(mobileGoogleIdx).toBeGreaterThan(mobileLocateIdx);
+    const mobileGroup1Idx = appSrc.indexOf("aria-label=\"שכבות ופעולות מפה\"", desktopGoogleIdx);
+    const mobileGroup2Idx = appSrc.indexOf("aria-label=\"פרמטרי משתמש\"", mobileGroup1Idx);
+    const mobileGoogleIdx = appSrc.indexOf('<GoogleAccountButton', mobileGroup2Idx);
+    const mobileLocateIdx = appSrc.indexOf('renderLocationModeButton(true)', mobileGoogleIdx);
+    expect(mobileGroup1Idx).toBeGreaterThan(desktopGoogleIdx);
+    expect(mobileGroup2Idx).toBeGreaterThan(mobileGroup1Idx);
+    expect(mobileGoogleIdx).toBeGreaterThan(mobileGroup2Idx);
+    expect(mobileLocateIdx).toBeGreaterThan(mobileGoogleIdx);
 
     const rules = fs.readFileSync('devops/firebase/firestore.rules', 'utf-8');
     expect(rules).toContain('/planing_tracks/{userId}/settings/{settingId}');

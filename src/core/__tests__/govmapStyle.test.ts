@@ -138,6 +138,35 @@ describe('GovMap 1:25k (Topo25k) Offline Vector Style', () => {
     expect(pathCall?.[2]).toBe('#1E1E1E');
     expect(trackRightCall?.[2]).toBe('#1E1E1E');
     expect(trackCasingCall?.[2]).toBe('#FFFFFF');
+
+    // Toggling 3D relief ON at runtime restores GovMap building extrusion expressions; turning it OFF flattens them back to 0.
+    setPaintProperty.mockClear();
+    applyLayerVisibilityToMap(mockMap, {
+      ...DEFAULT_LAYER_VISIBILITY,
+      terrain3d: true,
+    });
+    const heightOnCall = setPaintProperty.mock.calls.find(
+      ([id, prop]) => id === 'building' && prop === 'fill-extrusion-height'
+    );
+    const baseOnCall = setPaintProperty.mock.calls.find(
+      ([id, prop]) => id === 'building' && prop === 'fill-extrusion-base'
+    );
+    expect(heightOnCall?.[2]).toEqual(['get', 'render_height']);
+    expect(baseOnCall?.[2]).toEqual(['get', 'render_min_height']);
+
+    setPaintProperty.mockClear();
+    applyLayerVisibilityToMap(mockMap, {
+      ...DEFAULT_LAYER_VISIBILITY,
+      terrain3d: false,
+    });
+    const heightOffCall = setPaintProperty.mock.calls.find(
+      ([id, prop]) => id === 'building' && prop === 'fill-extrusion-height'
+    );
+    const baseOffCall = setPaintProperty.mock.calls.find(
+      ([id, prop]) => id === 'building' && prop === 'fill-extrusion-base'
+    );
+    expect(heightOffCall?.[2]).toBe(0);
+    expect(baseOffCall?.[2]).toBe(0);
   });
 
   it('persists and sanitizes "govmap" in UserStateSyncService', () => {

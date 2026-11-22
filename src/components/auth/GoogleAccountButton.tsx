@@ -12,9 +12,26 @@ interface GoogleAccountButtonProps {
   lastSyncedAt?: string;
   theme: MapTheme;
   mobile?: boolean;
+  compact?: boolean;
+  menuAlign?: 'open-left' | 'open-right';
+  isMenuOpen?: boolean;
+  onMenuOpenChange?: (open: boolean) => void;
+  onOpenSignedInMenu?: () => void;
   onSignInGoogle: () => void;
   onSignOutGoogle: () => void;
   onSyncNow?: () => void;
+}
+
+export interface GoogleAccountMenuCardProps {
+  currentUser: NavUser;
+  isOnline: boolean;
+  isSyncingCloud?: boolean;
+  lastSyncedAt?: string;
+  theme: MapTheme;
+  embedded?: boolean;
+  onSyncNow?: () => void;
+  onSignOutGoogle: () => void;
+  onClose: () => void;
 }
 
 const GoogleGIcon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
@@ -43,6 +60,122 @@ function getUserInitial(user: NavUser): string {
   return source.charAt(0).toUpperCase();
 }
 
+function formatLastSync(lastSyncedAt?: string): string | null {
+  if (!lastSyncedAt) return null;
+  const d = new Date(lastSyncedAt);
+  return Number.isNaN(d.getTime())
+    ? null
+    : d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+}
+
+export const GoogleAccountMenuCard: React.FC<GoogleAccountMenuCardProps> = ({
+  currentUser,
+  isOnline,
+  isSyncingCloud = false,
+  lastSyncedAt,
+  theme,
+  embedded = false,
+  onSyncNow,
+  onSignOutGoogle,
+  onClose,
+}) => {
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+  const t = getSurfaceTheme(theme);
+  const formattedLastSync = formatLastSync(lastSyncedAt);
+
+  useEffect(() => {
+    setAvatarLoadError(false);
+  }, [currentUser.photoURL]);
+
+  return (
+    <div dir="rtl" className={embedded ? 'p-4 space-y-3' : 'p-3.5 space-y-3'}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {currentUser.photoURL && !avatarLoadError ? (
+            <img
+              src={currentUser.photoURL}
+              alt={currentUser.displayName || 'Google'}
+              referrerPolicy="no-referrer"
+              onError={() => setAvatarLoadError(true)}
+              className="w-9 h-9 rounded-full object-cover shrink-0 border border-emerald-500/40"
+            />
+          ) : (
+            <span className="w-9 h-9 rounded-full bg-emerald-600 text-white text-sm font-bold flex items-center justify-center shrink-0">
+              {getUserInitial(currentUser)}
+            </span>
+          )}
+          <div className="min-w-0">
+            <div className="text-xs font-bold truncate">
+              {currentUser.displayName || 'משתמש Google'}
+            </div>
+            <div className={`text-[11px] truncate ${t.muted}`} dir="ltr">
+              {currentUser.email || currentUser.uid}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className={`p-1 rounded-lg ${t.muted} hover:bg-slate-500/10`}
+          title="סגור"
+          aria-label="סגור"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div
+        className={`px-2.5 py-2 rounded-xl border text-[11px] flex items-center justify-between gap-2 ${t.subCard}`}
+      >
+        <span className="flex items-center gap-1.5 font-semibold min-w-0">
+          {isOnline ? (
+            <Cloud className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+          ) : (
+            <CloudOff className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+          )}
+          <span className="truncate">
+            {isSyncingCloud
+              ? 'מסנכרן לענן...'
+              : isOnline
+                ? 'סנכרון חוצה פלטפורמות פעיל'
+                : 'מצב אופליין — נשמר מקומית'}
+          </span>
+        </span>
+        {formattedLastSync && (
+          <span className={`font-mono text-[10px] shrink-0 ${t.muted}`} dir="ltr">
+            {formattedLastSync}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        {onSyncNow && (
+          <button
+            type="button"
+            disabled={!isOnline || isSyncingCloud}
+            onClick={() => onSyncNow()}
+            className={`w-full py-1.5 px-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-45 ${t.pillBtn}`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+            <span>סנכרן מיקום והגדרות עכשיו</span>
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            onClose();
+            onSignOutGoogle();
+          }}
+          className="w-full py-1.5 px-2.5 rounded-xl border border-rose-500/35 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+          <span>התנתק מחשבון Google</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
   currentUser,
   firebaseAvailable,
@@ -52,11 +185,23 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
   lastSyncedAt,
   theme,
   mobile = false,
+  compact = false,
+  menuAlign = 'open-left',
+  isMenuOpen: controlledIsMenuOpen,
+  onMenuOpenChange,
+  onOpenSignedInMenu,
   onSignInGoogle,
   onSignOutGoogle,
   onSyncNow,
 }) => {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
+  const isMenuOpen = controlledIsMenuOpen !== undefined ? controlledIsMenuOpen : uncontrolledIsMenuOpen;
+  const setMenuOpen = (next: boolean) => {
+    if (controlledIsMenuOpen === undefined) {
+      setUncontrolledIsMenuOpen(next);
+    }
+    onMenuOpenChange?.(next);
+  };
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const t = getSurfaceTheme(theme);
@@ -67,7 +212,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
 
   useEffect(() => {
     if (!currentUser) {
-      setIsMenuOpen(false);
+      setMenuOpen(false);
     }
   }, [currentUser]);
 
@@ -79,7 +224,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
         ev.target instanceof Node &&
         !containerRef.current.contains(ev.target)
       ) {
-        setIsMenuOpen(false);
+        setMenuOpen(false);
       }
     };
     document.addEventListener('pointerdown', handlePointerDown);
@@ -89,20 +234,21 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
   const handlePrimaryClick = () => {
     if (isAuthBusy) return;
     if (currentUser) {
-      setIsMenuOpen((prev) => !prev);
+      if (onOpenSignedInMenu) {
+        onOpenSignedInMenu();
+        return;
+      }
+      setMenuOpen(!isMenuOpen);
       return;
     }
     onSignInGoogle();
   };
 
-  const formattedLastSync = lastSyncedAt
-    ? (() => {
-        const d = new Date(lastSyncedAt);
-        return Number.isNaN(d.getTime())
-          ? null
-          : d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
-      })()
-    : null;
+  const sizeCls = compact
+    ? 'w-9 h-9 rounded-full'
+    : mobile
+      ? 'w-10 h-10 rounded-full shadow-lg'
+      : 'w-10 h-10 rounded-xl shadow-lg';
 
   return (
     <div ref={containerRef} className="relative flex justify-center">
@@ -116,7 +262,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
             ? `חשבון Google: ${currentUser.email || currentUser.displayName || 'מחובר'}`
             : 'התחבר לחשבון Google'
         }
-        aria-expanded={currentUser ? isMenuOpen : undefined}
+        aria-expanded={currentUser && !onOpenSignedInMenu ? isMenuOpen : undefined}
         title={
           !firebaseAvailable
             ? 'חיבור Google / Firebase (דורש הגדרת סביבה)'
@@ -124,9 +270,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
               ? `${currentUser.displayName || currentUser.email} • מסנכרן מיקום והגדרות`
               : 'התחבר עם Google לשמירה וסנכרון מיקום והגדרות'
         }
-        className={`relative border flex items-center justify-center transition-all ${
-          mobile ? 'w-10 h-10 rounded-full shadow-lg' : 'w-10 h-10 rounded-xl shadow-lg'
-        } ${
+        className={`relative border flex items-center justify-center transition-all ${sizeCls} ${
           currentUser
             ? isMenuOpen
               ? 'border-emerald-500 ring-2 ring-emerald-500/40 ' + t.pillBtn
@@ -135,7 +279,7 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
         }`}
       >
         {isAuthBusy ? (
-          <Loader2 className="w-4 h-4 animate-spin text-sky-500" />
+          <Loader2 className="w-[18px] h-[18px] animate-spin text-sky-500" />
         ) : currentUser ? (
           currentUser.photoURL && !avatarLoadError ? (
             <img
@@ -143,19 +287,15 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
               alt={currentUser.displayName || 'Google'}
               referrerPolicy="no-referrer"
               onError={() => setAvatarLoadError(true)}
-              className={`w-7 h-7 rounded-full object-cover`}
+              className="w-7 h-7 rounded-full object-cover"
             />
           ) : (
-            <span
-              className={`${
-                'w-7 h-7 text-[11px]'
-              } rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center`}
-            >
+            <span className="w-7 h-7 text-[11px] rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center">
               {getUserInitial(currentUser)}
             </span>
           )
         ) : (
-          <GoogleGIcon className={mobile ? 'w-5 h-5' : 'w-4 h-4'} />
+          <GoogleGIcon className="w-[18px] h-[18px]" />
         )}
 
         {currentUser && (
@@ -167,93 +307,22 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
         )}
       </button>
 
-      {currentUser && isMenuOpen && (
+      {currentUser && isMenuOpen && !onOpenSignedInMenu && (
         <div
-          dir="rtl"
-          className={`absolute bottom-0 left-12 z-50 w-64 max-w-[calc(100vw-80px)] rounded-2xl border p-3.5 space-y-3 ${t.panel}`}
+          className={`absolute bottom-0 ${
+            menuAlign === 'open-left' ? 'right-12' : 'left-12'
+          } z-50 w-64 max-w-[calc(100vw-80px)] rounded-2xl border ${t.panel}`}
         >
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              {currentUser.photoURL && !avatarLoadError ? (
-                <img
-                  src={currentUser.photoURL}
-                  alt={currentUser.displayName || 'Google'}
-                  referrerPolicy="no-referrer"
-                  onError={() => setAvatarLoadError(true)}
-                  className="w-9 h-9 rounded-full object-cover shrink-0 border border-emerald-500/40"
-                />
-              ) : (
-                <span className="w-9 h-9 rounded-full bg-emerald-600 text-white text-sm font-bold flex items-center justify-center shrink-0">
-                  {getUserInitial(currentUser)}
-                </span>
-              )}
-              <div className="min-w-0">
-                <div className="text-xs font-bold truncate">
-                  {currentUser.displayName || 'משתמש Google'}
-                </div>
-                <div className={`text-[11px] truncate ${t.muted}`} dir="ltr">
-                  {currentUser.email || currentUser.uid}
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsMenuOpen(false)}
-              className={`p-1 rounded-lg ${t.muted} hover:bg-slate-500/10`}
-              title="סגור"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div
-            className={`px-2.5 py-2 rounded-xl border text-[11px] flex items-center justify-between gap-2 ${t.subCard}`}
-          >
-            <span className="flex items-center gap-1.5 font-semibold min-w-0">
-              {isOnline ? (
-                <Cloud className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-              ) : (
-                <CloudOff className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-              )}
-              <span className="truncate">
-                {isSyncingCloud
-                  ? 'מסנכרן לענן...'
-                  : isOnline
-                    ? 'סנכרון חוצה פלטפורמות פעיל'
-                    : 'מצב אופליין — נשמר מקומית'}
-              </span>
-            </span>
-            {formattedLastSync && (
-              <span className={`font-mono text-[10px] shrink-0 ${t.muted}`} dir="ltr">
-                {formattedLastSync}
-              </span>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            {onSyncNow && (
-              <button
-                type="button"
-                disabled={!isOnline || isSyncingCloud}
-                onClick={() => onSyncNow()}
-                className={`w-full py-1.5 px-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-45 ${t.pillBtn}`}
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
-                <span>סנכרן מיקום והגדרות עכשיו</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setIsMenuOpen(false);
-                onSignOutGoogle();
-              }}
-              className="w-full py-1.5 px-2.5 rounded-xl border border-rose-500/35 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>התנתק מחשבון Google</span>
-            </button>
-          </div>
+          <GoogleAccountMenuCard
+            currentUser={currentUser}
+            isOnline={isOnline}
+            isSyncingCloud={isSyncingCloud}
+            lastSyncedAt={lastSyncedAt}
+            theme={theme}
+            onSyncNow={onSyncNow}
+            onSignOutGoogle={onSignOutGoogle}
+            onClose={() => setMenuOpen(false)}
+          />
         </div>
       )}
     </div>

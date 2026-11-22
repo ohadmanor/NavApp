@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Sun, Moon, Mountain, Satellite, ChevronDown, X, Lock, Palette, MapPin } from 'lucide-react';
+import { Layers, Sun, Moon, Satellite, ChevronDown, X, Lock, Palette, MapPinned } from 'lucide-react';
 import {
   countActivePoiCategories,
   enableAllPoiVisibility,
@@ -21,10 +21,10 @@ import { POI_CATEGORY_SPECS } from '../../core/pois/poiTaxonomy';
 
 export type LayerSheetSection = 'style' | 'layers' | 'pois';
 
-const SECTION_HEADERS: Record<LayerSheetSection, { title: string; Icon: React.ComponentType<{ className?: string }> }> = {
-  style: { title: 'סגנון מפה (3D / יום / לילה)', Icon: Palette },
-  layers: { title: 'שכבות מפה', Icon: Layers },
-  pois: { title: 'נקודות עניין (POI)', Icon: MapPin },
+const SECTION_HEADERS: Record<LayerSheetSection, { title: string; shortLabel: string; Icon: React.ComponentType<{ className?: string }> }> = {
+  style: { title: 'סגנון מפה (יום / לילה)', shortLabel: 'סגנון', Icon: Palette },
+  layers: { title: 'שכבות מפה', shortLabel: 'שכבות', Icon: Layers },
+  pois: { title: 'נקודות עניין (POI)', shortLabel: 'POI', Icon: MapPinned },
 };
 
 interface LayerSwitcherSheetProps {
@@ -36,10 +36,10 @@ interface LayerSwitcherSheetProps {
   onSelectTheme: (theme: MapTheme) => void;
   mapStyle: MapStyleId;
   onSelectMapStyle: (style: MapStyleId) => void;
-  onToggle3D: () => void;
   embedded?: boolean;
   /** Which part of the controls to show. Omit to show everything. */
   section?: LayerSheetSection;
+  onSelectSection?: (section: LayerSheetSection) => void;
 }
 
 export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
@@ -51,9 +51,9 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
   onSelectTheme,
   mapStyle,
   onSelectMapStyle,
-  onToggle3D,
   embedded = false,
   section,
+  onSelectSection,
 }) => {
   const [showPoiSubCategories, setShowPoiSubCategories] = useState(true);
   const [minimized, setMinimized] = useState(false);
@@ -151,11 +151,33 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
 
   const content = (
     <div dir="rtl" className="p-4 space-y-3.5 overflow-y-auto max-h-[65vh] md:max-h-[72vh]">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <header.Icon className="w-4 h-4 text-emerald-500" />
-          <h3 className="text-sm font-bold">{header.title}</h3>
-        </div>
+      <div className="flex items-center justify-between gap-2">
+        {embedded && section && onSelectSection ? (
+          <div className="flex items-center gap-1">
+            {(['style', 'layers', 'pois'] as LayerSheetSection[]).map((secKey) => {
+              const spec = SECTION_HEADERS[secKey];
+              const active = section === secKey;
+              return (
+                <button
+                  key={secKey}
+                  type="button"
+                  onClick={() => onSelectSection(secKey)}
+                  className={`px-2.5 py-1 rounded-xl border text-xs font-bold flex items-center gap-1 transition-colors ${
+                    active ? 'bg-emerald-600 border-emerald-500 text-white' : t.subCard
+                  }`}
+                >
+                  <spec.Icon className="w-3.5 h-3.5" />
+                  <span>{spec.shortLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <header.Icon className="w-4 h-4 text-emerald-500" />
+            <h3 className="text-sm font-bold">{header.title}</h3>
+          </div>
+        )}
         <div className="flex items-center gap-1.5">
           {!embedded && (
             <MinimizeToggle minimized={minimized} onToggle={() => setMinimized((v) => !v)} theme={theme} />
@@ -174,12 +196,12 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
 
       {show('style') && (
         <>
-      {/* Visual Map Type Selector Cards */}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Day / Night Map Mode Selector Cards */}
+      <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => onSelectTheme('topo-day')}
           className={`p-2 rounded-xl border-2 text-center transition-all ${
-            theme === 'topo-day' && !visibility.terrain3d
+            theme === 'topo-day'
               ? 'border-emerald-500 bg-emerald-500/10'
               : t.subCard
           }`}
@@ -194,7 +216,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
         <button
           onClick={() => onSelectTheme('topo-dark')}
           className={`p-2 rounded-xl border-2 text-center transition-all ${
-            theme === 'topo-dark' && !visibility.terrain3d
+            theme === 'topo-dark'
               ? 'border-emerald-500 bg-emerald-500/10'
               : t.subCard
           }`}
@@ -204,19 +226,6 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
             <span>OPS</span>
           </div>
           <span className="text-xs font-bold block">לילה טקטי</span>
-        </button>
-
-        <button
-          onClick={onToggle3D}
-          className={`p-2 rounded-xl border-2 text-center transition-all ${
-            visibility.terrain3d ? 'border-emerald-500 bg-emerald-500/10' : t.subCard
-          }`}
-        >
-          <div className="h-9 rounded-lg bg-gradient-to-br from-emerald-700 to-amber-700 mb-1.5 flex items-center justify-center gap-1 text-xs font-bold text-white">
-            <Mountain className="w-3.5 h-3.5" />
-            <span>3D</span>
-          </div>
-          <span className="text-xs font-bold block">תבליט 3D</span>
         </button>
       </div>
 
