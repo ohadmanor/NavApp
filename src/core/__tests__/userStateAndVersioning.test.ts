@@ -42,15 +42,16 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     vi.unstubAllGlobals();
   });
 
-  it('formats app version as x.y.z.<date&time> starting at 1.1.1 and displays it at the bottom of LayerSwitcherSheet', () => {
+  it('formats app version as x.y.z.<date&time> starting at 1.1.2 and displays it at the bottom of LayerSwitcherSheet', () => {
     const version = getAppVersion();
-    expect(version).toMatch(/^1\.1\.1\.\d{8}-\d{4}$/);
+    expect(version).toMatch(/^1\.1\.2\.\d{8}-\d{4}$/);
 
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-    expect(pkg.version).toBe('1.1.1');
+    expect(pkg.version).toBe('1.1.2');
 
     const gradle = fs.readFileSync('devops/mobile/android/app/build.gradle', 'utf-8');
-    expect(gradle).toContain('versionName "1.1.1"');
+    expect(gradle).toContain('versionCode 7');
+    expect(gradle).toContain('versionName "1.1.2"');
 
     const layerSheetSrc = fs.readFileSync('src/components/map/LayerSwitcherSheet.tsx', 'utf-8');
     expect(layerSheetSrc).toContain('getAppVersion()');
@@ -195,19 +196,20 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     expect(appSrc).toContain("mobileSpeedDial === 'map'");
     expect(appSrc).toContain("mobileSpeedDial === 'user'");
 
-    const desktopLocateIdx = appSrc.indexOf('renderLocationModeButton(false)');
+    const desktopLocateIdx = appSrc.indexOf('renderLocationModeButton(false');
     const desktopGoogleIdx = appSrc.indexOf('<GoogleAccountButton', desktopLocateIdx);
     expect(desktopLocateIdx).toBeGreaterThan(-1);
     expect(desktopGoogleIdx).toBeGreaterThan(desktopLocateIdx);
 
-    const mobileGroup1Idx = appSrc.indexOf("aria-label=\"שכבות ופעולות מפה\"", desktopGoogleIdx);
+    // On mobile, My Location + combined Navigate->Record group sits at the top above Group 1 & Group 2
+    const mobileLocateIdx = appSrc.indexOf('renderLocationModeButton(true', desktopGoogleIdx);
+    const mobileGroup1Idx = appSrc.indexOf("aria-label=\"שכבות ופעולות מפה\"", mobileLocateIdx);
     const mobileGroup2Idx = appSrc.indexOf("aria-label=\"פרמטרי משתמש\"", mobileGroup1Idx);
     const mobileGoogleIdx = appSrc.indexOf('<GoogleAccountButton', mobileGroup2Idx);
-    const mobileLocateIdx = appSrc.indexOf('renderLocationModeButton(true)', mobileGoogleIdx);
-    expect(mobileGroup1Idx).toBeGreaterThan(desktopGoogleIdx);
+    expect(mobileLocateIdx).toBeGreaterThan(desktopGoogleIdx);
+    expect(mobileGroup1Idx).toBeGreaterThan(mobileLocateIdx);
     expect(mobileGroup2Idx).toBeGreaterThan(mobileGroup1Idx);
     expect(mobileGoogleIdx).toBeGreaterThan(mobileGroup2Idx);
-    expect(mobileLocateIdx).toBeGreaterThan(mobileGoogleIdx);
 
     const rules = fs.readFileSync('devops/firebase/firestore.rules', 'utf-8');
     expect(rules).toContain('/planing_tracks/{userId}/settings/{settingId}');

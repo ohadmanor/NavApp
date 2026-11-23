@@ -988,6 +988,35 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
     </div>
   );
 
+  if (!currentUser) {
+    const gatedBody = (
+      <div dir="rtl" className="space-y-3 text-center py-4">
+        <div className="mx-auto w-10 h-10 rounded-full bg-amber-500/15 text-amber-500 flex items-center justify-center">
+          <Lock className="w-5 h-5" />
+        </div>
+        <h2 className="text-sm font-bold">מפות אופליין וייבוא קבצים</h2>
+        <p className={`text-xs ${t.muted}`}>
+          ניהול מפות אופליין וייבוא קובצי מפה זמין למשתמשים מחוברים בחשבון Google בלבד.
+        </p>
+        <button
+          type="button"
+          onClick={onClose}
+          className={`px-4 py-1.5 rounded-xl border text-xs font-bold ${t.pillBtn}`}
+        >
+          סגור
+        </button>
+      </div>
+    );
+    if (embedded) {
+      return <div className="p-4">{gatedBody}</div>;
+    }
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+        <div className={`rounded-2xl border max-w-md w-full p-5 ${t.panelSolid}`}>{gatedBody}</div>
+      </div>
+    );
+  }
+
   if (embedded) {
     return <div className="p-4 max-h-[65vh] overflow-y-auto">{body}</div>;
   }

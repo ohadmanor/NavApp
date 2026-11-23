@@ -266,4 +266,91 @@ describe('Map Control Modes: My Location (3-state) & Zero-to-North (3-state)', (
     });
     expect(enterPovWhenUpright.northMode).toBe('2d-pov');
   });
+
+  it('pulls My Location on top of all left icons combined with Navigate spanning out to Record while navigating, plus מסלולים & עריכת מפה menus', () => {
+    const appSrc = fs.readFileSync('src/App.tsx', 'utf-8');
+
+    // Combined vertical My Location + icon-only Navigate capsule (like Style/Layers/POI) that spans to Record only while navigating
+    expect(appSrc).toContain('renderLocationNavGroup');
+    expect(appSrc).toContain('data-testid="location-nav-group"');
+    expect(appSrc).toContain('data-testid="nav-toggle-btn"');
+    expect(appSrc).toContain('data-testid="record-toggle-btn"');
+    const navGroupMatch = appSrc.match(
+      /const renderLocationNavGroup = [\s\S]*?return \(\s*<div/
+    );
+    const navGroupBodyMatch = appSrc.match(
+      /const renderLocationNavGroup = [\s\S]*?return \(\s*<div[\s\S]*?^\s{2}\};/m
+    );
+    expect(navGroupMatch).not.toBeNull();
+    const navGroupBody = navGroupBodyMatch?.[0] ?? '';
+    expect(navGroupBody).toContain('w-10 flex flex-col border shadow-lg overflow-hidden');
+    expect(navGroupBody).toContain('<div className="h-px bg-current opacity-15" />');
+    expect(navGroupBody).not.toContain('<span>ניווט</span>');
+    expect(appSrc).toMatch(/\{isNavigationActive && \(\s*<button[\s\S]*?data-testid="record-toggle-btn"/);
+    expect(appSrc).toMatch(/handleStartOrResumeRecording[\s\S]*if\s*\(!isNavigationActiveRef\.current\)/);
+    expect(appSrc).not.toContain('data-testid="nav-record-group"');
+
+    // Desktop Group 1 places My Location+Navigate above Connected Layers & Zero-to-North
+    const desktopNavGroupIdx = appSrc.indexOf('renderLocationNavGroup(false');
+    const desktopLayerButtonsIdx = appSrc.indexOf('LAYER_SECTION_BUTTONS.map', desktopNavGroupIdx);
+    const desktopNorthIdx = appSrc.indexOf('renderNorthModeButton(false)', desktopLayerButtonsIdx);
+    expect(desktopNavGroupIdx).toBeGreaterThan(-1);
+    expect(desktopLayerButtonsIdx).toBeGreaterThan(desktopNavGroupIdx);
+    expect(desktopNorthIdx).toBeGreaterThan(desktopLayerButtonsIdx);
+
+    // Mobile places My Location+Navigate above all left-column controls
+    const mobileNavGroupIdx = appSrc.indexOf('renderLocationNavGroup(true');
+    const mobileLayersIdx = appSrc.indexOf("aria-label=\"שכבות ופעולות מפה\"", mobileNavGroupIdx);
+    const mobileNorthIdx = appSrc.indexOf('renderNorthModeButton(true)', mobileLayersIdx);
+    expect(mobileNavGroupIdx).toBeGreaterThan(desktopNorthIdx);
+    expect(mobileLayersIdx).toBeGreaterThan(mobileNavGroupIdx);
+    expect(mobileNorthIdx).toBeGreaterThan(mobileLayersIdx);
+
+    // Group 2: Unified מסלולים menu
+    expect(appSrc).toContain('data-testid="menu-trails-btn"');
+    expect(appSrc).toContain('data-testid="menu-trails-dropdown"');
+    const trailsDropdownMatch = appSrc.match(
+      /data-testid="menu-trails-dropdown"[\s\S]*?data-testid="menu-map-edit-btn"/
+    );
+    const trailsMenu = trailsDropdownMatch?.[0] ?? '';
+    expect(trailsMenu).toContain('המסלולים שלי');
+    expect(trailsMenu).toContain('תכנון מסלול');
+    expect(trailsMenu).toContain('מאגר תכנון');
+    expect(trailsMenu).toContain('ייבוא GPX / KML');
+
+    // Group 3: Unified עריכת מפה menu
+    expect(appSrc).toContain('data-testid="menu-map-edit-btn"');
+    expect(appSrc).toContain('data-testid="menu-map-edit-dropdown"');
+    const editDropdownMatch = appSrc.match(
+      /data-testid="menu-map-edit-dropdown"[\s\S]*?Active Route Navigation Status Pill/
+    );
+    const editMenu = editDropdownMatch?.[0] ?? '';
+    expect(editMenu).toContain('הוסף נקודה (POI)');
+    expect(editMenu).toContain('עריכת דרך / סימון שבילים');
+    expect(editMenu).toContain('הוספת דרך חדשה');
+    expect(editMenu).toContain('OpenStreetMap');
+
+    // Offline / Import maps is moved inside signed-in User Account menu (logged-in users only), removed from top-left bar & public mobile tabs
+    const googleCardSrc = fs.readFileSync('src/components/auth/GoogleAccountButton.tsx', 'utf-8');
+    expect(googleCardSrc).toContain('data-testid="user-menu-offline-maps-btn"');
+    expect(googleCardSrc).toContain('מפות אופליין / ייבוא');
+    expect(appSrc).not.toContain('Compact Offline Status Pill');
+    expect(appSrc).toContain('{!isMobile && currentUser && isStorageOpen && (');
+    expect(appSrc).toContain("mobileTab === 'offline' && currentUser");
+    expect(appSrc).toContain('handleOpenMapStorage');
+    expect(appSrc).toContain('handleSearchFocusChange');
+    expect(appSrc).toContain('isMobilePlanningSheetVisible');
+    expect(appSrc).toContain("id: 'map-edit' as const");
+    expect(appSrc).toContain('data-testid="mobile-bottom-auth-btn"');
+    expect(appSrc).toContain('data-testid="mobile-coords-pill"');
+    expect(appSrc).toContain("mobileNavOverlay === 'record'");
+    expect(appSrc).not.toContain('בקרבתך');
+    expect(appSrc).not.toContain("id: 'explore' as const");
+    expect(appSrc).not.toContain("id: 'record' as const");
+    expect(appSrc).not.toContain("id: 'offline' as const");
+
+    const cssSrc = fs.readFileSync('src/index.css', 'utf-8');
+    expect(cssSrc).toContain('.navapp-mobile-planning .maplibregl-ctrl-bottom-right');
+    expect(cssSrc).toContain('bottom: 0.75rem !important;');
+  });
 });

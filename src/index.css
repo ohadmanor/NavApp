@@ -54,7 +54,11 @@ textarea {
 }
 
 .navapp-mobile-planning .maplibregl-ctrl-bottom-right {
-  bottom: 3.1rem !important;
-  right: 0.5rem !important;
+  bottom: 0.75rem !important;
+  right: 10.5rem !important;
   z-index: 15 !important;
+}
+
+.navapp-mobile-planning .maplibregl-ctrl-scale {
+  margin: 0 !important;
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Cloud, CloudOff, Loader2, LogOut, RefreshCw, X } from 'lucide-react';
+import { Cloud, CloudOff, HardDrive, Loader2, LogOut, RefreshCw, X } from 'lucide-react';
 import type { NavUser } from '../../core/firebase/AuthService';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
 
@@ -20,6 +20,8 @@ interface GoogleAccountButtonProps {
   onSignInGoogle: () => void;
   onSignOutGoogle: () => void;
   onSyncNow?: () => void;
+  onOpenMapStorage?: () => void;
+  isOfflineReady?: boolean;
 }
 
 export interface GoogleAccountMenuCardProps {
@@ -32,9 +34,11 @@ export interface GoogleAccountMenuCardProps {
   onSyncNow?: () => void;
   onSignOutGoogle: () => void;
   onClose: () => void;
+  onOpenMapStorage?: () => void;
+  isOfflineReady?: boolean;
 }
 
-const GoogleGIcon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
+export const GoogleGIcon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
   <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
     <path
       fill="#4285F4"
@@ -78,6 +82,8 @@ export const GoogleAccountMenuCard: React.FC<GoogleAccountMenuCardProps> = ({
   onSyncNow,
   onSignOutGoogle,
   onClose,
+  onOpenMapStorage,
+  isOfflineReady = false,
 }) => {
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const t = getSurfaceTheme(theme);
@@ -149,6 +155,29 @@ export const GoogleAccountMenuCard: React.FC<GoogleAccountMenuCardProps> = ({
       </div>
 
       <div className="space-y-1.5">
+        {onOpenMapStorage && (
+          <button
+            type="button"
+            data-testid="user-menu-offline-maps-btn"
+            onClick={() => {
+              onClose();
+              onOpenMapStorage();
+            }}
+            className={`w-full py-1.5 px-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-colors ${t.pillBtn}`}
+          >
+            <span className="flex items-center gap-1.5 min-w-0">
+              <HardDrive className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+              <span className="truncate">
+                {isOfflineReady ? 'מפות אופליין / ייבוא (מוכן)' : 'מפות אופליין / ייבוא'}
+              </span>
+            </span>
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                isOfflineReady ? 'bg-emerald-500' : isOnline ? 'bg-sky-500' : 'bg-amber-500'
+              }`}
+            />
+          </button>
+        )}
         {onSyncNow && (
           <button
             type="button"
@@ -193,6 +222,8 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
   onSignInGoogle,
   onSignOutGoogle,
   onSyncNow,
+  onOpenMapStorage,
+  isOfflineReady = false,
 }) => {
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = controlledIsMenuOpen !== undefined ? controlledIsMenuOpen : uncontrolledIsMenuOpen;
@@ -322,6 +353,8 @@ export const GoogleAccountButton: React.FC<GoogleAccountButtonProps> = ({
             onSyncNow={onSyncNow}
             onSignOutGoogle={onSignOutGoogle}
             onClose={() => setMenuOpen(false)}
+            onOpenMapStorage={onOpenMapStorage}
+            isOfflineReady={isOfflineReady}
           />
         </div>
       )}

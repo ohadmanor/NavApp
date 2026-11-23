@@ -28,6 +28,8 @@ import {
   FolderTree,
   Radio,
   UploadCloud,
+  ChevronDown,
+  Pencil,
   X,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
@@ -46,7 +48,7 @@ import {
   type MapStyleId,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
-import { PoiManager, getPoiSortPriority, type DeletedPoiUndoSnapshot } from './core/pois/PoiManager';
+import { PoiManager, type DeletedPoiUndoSnapshot } from './core/pois/PoiManager';
 import {
   POI_CATEGORY_ZOOM_RULES,
   buildPoiIconExpression,
@@ -198,7 +200,11 @@ import {
   UserLocationIconBadge,
 } from './components/map/UserIconPickerSheet';
 import { SearchBar } from './components/search/SearchBar';
-import { GoogleAccountButton, GoogleAccountMenuCard } from './components/auth/GoogleAccountButton';
+import {
+  GoogleAccountButton,
+  GoogleAccountMenuCard,
+  GoogleGIcon,
+} from './components/auth/GoogleAccountButton';
 const TrailAnnotationsPanel = React.lazy(() =>
   import('./components/map/TrailAnnotationsPanel').then((m) => ({
     default: m.TrailAnnotationsPanel,
@@ -272,7 +278,7 @@ const LAYER_SECTION_BUTTONS: Array<{
   { id: 'pois', title: 'נקודות עניין (POI)', Icon: MapPinned },
 ];
 
-type MobileTab = 'explore' | 'routes' | 'planning-db' | 'record' | 'offline';
+type MobileTab = 'explore' | 'routes' | 'planning-db' | 'map-edit' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
 type MobileOverlayMode =
   | 'poi'
@@ -282,7 +288,7 @@ type MobileOverlayMode =
   | 'user-icon'
   | 'google-account'
   | null;
-type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'user-icon' | 'google-account' | null;
+type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'record' | 'user-icon' | 'google-account' | null;
 
 const LAST_AUTH_UID_STORAGE_KEY = 'navapp.lastAuthUid.v1';
 const PINNED_ROUTES_STORAGE_KEY = 'navapp.pinnedBackgroundRoutes.v1';
@@ -532,6 +538,8 @@ export const App: React.FC = () => {
 
   // UI Shell States (Desktop vs Mobile Planning/Navigating)
   const [desktopDrawer, setDesktopDrawer] = useState<DesktopDrawerMode>(null);
+  const [desktopTopMenu, setDesktopTopMenu] = useState<'trails' | 'map-edit' | null>(null);
+  const desktopTopMenuRef = useRef<HTMLDivElement | null>(null);
   const [isStorageOpen, setIsStorageOpen] = useState(false);
   const [layerSheetSection, setLayerSheetSection] = useState<LayerSheetSection | null>(null);
   const [mobileLayerSection, setMobileLayerSection] = useState<LayerSheetSection>('layers');
@@ -2239,14 +2247,14 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Recording elapsed timer
+  // Recording elapsed timer (active only while navigating)
   useEffect(() => {
-    if (!isRecordingTrack || isRecordingPaused) return;
+    if (!isNavigationActive || !isRecordingTrack || isRecordingPaused) return;
     const timer = window.setInterval(() => {
       setRecordElapsedSeconds((s) => s + 1);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [isRecordingTrack, isRecordingPaused]);
+  }, [isNavigationActive, isRecordingTrack, isRecordingPaused]);
 
   const syncHeadingUi = useCallback((resolved: number | null, perfNowMs = performance.now()) => {
     liveHeadingRef.current = resolved;
@@ -2524,7 +2532,12 @@ export const App: React.FC = () => {
           );
         }
 
-        if (isRecordingTrackRef.current && !isRecordingPausedRef.current && ingest.accepted) {
+        if (
+          isNavigationActiveRef.current &&
+          isRecordingTrackRef.current &&
+          !isRecordingPausedRef.current &&
+          ingest.accepted
+        ) {
           const recLon = ingest.kalmanLon;
           const recLat = ingest.kalmanLat;
           const nextPt: [number, number] = [Number(recLon.toFixed(6)), Number(recLat.toFixed(6))];
@@ -5087,13 +5100,47 @@ export const App: React.FC = () => {
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [mobileSpeedDial]);
 
+  // Close desktop top dropdown menus ('מסלולים' / 'עריכת מפה') on outside click or Escape.
+  useEffect(() => {
+    if (!desktopTopMenu) return;
+    const handlePointerDown = (ev: PointerEvent) => {
+      if (
+        desktopTopMenuRef.current &&
+        ev.target instanceof Node &&
+        !desktopTopMenuRef.current.contains(ev.target)
+      ) {
+        setDesktopTopMenu(null);
+      }
+    };
+    const handleKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setDesktopTopMenu(null);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [desktopTopMenu]);
+
+  const toggleDesktopTopMenu = useCallback((menu: 'trails' | 'map-edit') => {
+    setLayerSheetSection(null);
+    setIsUserIconPickerOpen(false);
+    setIsGoogleMenuOpen(false);
+    setDesktopTopMenu((prev) => (prev === menu ? null : menu));
+  }, []);
+
   const toggleDesktopLayerSection = useCallback((sectionId: LayerSheetSection) => {
+    setDesktopTopMenu(null);
     setIsUserIconPickerOpen(false);
     setIsGoogleMenuOpen(false);
     setLayerSheetSection((prev) => (prev === sectionId ? null : sectionId));
   }, []);
 
   const toggleDesktopUserIconPicker = useCallback(() => {
+    setDesktopTopMenu(null);
     setLayerSheetSection(null);
     setIsGoogleMenuOpen(false);
     setIsUserIconPickerOpen((prev) => !prev);
@@ -5101,6 +5148,7 @@ export const App: React.FC = () => {
 
   const handleDesktopGoogleMenuOpenChange = useCallback((open: boolean) => {
     if (open) {
+      setDesktopTopMenu(null);
       setLayerSheetSection(null);
       setIsUserIconPickerOpen(false);
     }
@@ -5108,6 +5156,7 @@ export const App: React.FC = () => {
   }, []);
 
   const openShareLocationModal = useCallback(() => {
+    setDesktopTopMenu(null);
     setLayerSheetSection(null);
     setIsUserIconPickerOpen(false);
     setIsGoogleMenuOpen(false);
@@ -5213,75 +5262,20 @@ export const App: React.FC = () => {
     }
   }, [isMobile, desktopDrawer, mobileDisplayMode, mobilePlanningOverlay, mobileTab]);
 
-  // Nearest POIs for Mobile Planning Peek Strip
   const referenceCoord = userLocation ?? { lon: cursorCoords.lon, lat: cursorCoords.lat };
-  const isNearbyStripVisible =
+  const isMobilePlanningSheetVisible =
     isMobile &&
     mobileDisplayMode === 'planning' &&
-    mobileTab === 'explore' &&
-    !mobilePlanningOverlay;
-  const nearbyRefLon = Math.round(referenceCoord.lon * 1000) / 1000;
-  const nearbyRefLat = Math.round(referenceCoord.lat * 1000) / 1000;
-
-  const nearbyPois = useMemo(() => {
-    if (!isNearbyStripVisible || pois.length === 0 || !visibility.pois) return [];
-    const cosLat = Math.cos((nearbyRefLat * Math.PI) / 180);
-    const maxCandidates = 40;
-    const candidates: Array<{ poi: PoiRecord; approxDistSq: number }> = [];
-    let worstDistSq = Infinity;
-
-    for (let i = 0; i < pois.length; i++) {
-      const p = pois[i];
-      if (p.visibility === 'private' && visibility.poiPrivate === false) continue;
-      if (p.category === 'water' && !visibility.poiWater) continue;
-      if (p.category === 'heritage' && !visibility.poiHeritage) continue;
-      if (p.category === 'campsite' && !visibility.poiCampsites) continue;
-      if (p.category === 'offroad' && !visibility.poiOffroad) continue;
-      if (p.category === 'peak' && !visibility.poiPeaks) continue;
-      if (p.category === 'user' && !(visibility.poiUser ?? true)) continue;
-
-      const dLon = (p.lon - nearbyRefLon) * cosLat;
-      const dLat = p.lat - nearbyRefLat;
-      const distSq = dLon * dLon + dLat * dLat;
-      if (candidates.length < maxCandidates) {
-        candidates.push({ poi: p, approxDistSq: distSq });
-        if (candidates.length === maxCandidates) {
-          candidates.sort((a, b) => a.approxDistSq - b.approxDistSq);
-          worstDistSq = candidates[maxCandidates - 1].approxDistSq;
-        }
-      } else if (distSq < worstDistSq) {
-        candidates[maxCandidates - 1] = { poi: p, approxDistSq: distSq };
-        candidates.sort((a, b) => a.approxDistSq - b.approxDistSq);
-        worstDistSq = candidates[maxCandidates - 1].approxDistSq;
-      }
-    }
-
-    const refPt = turf.point([nearbyRefLon, nearbyRefLat]);
-    return candidates
-      .map(({ poi }) => ({
-        poi,
-        distKm: turf.distance(refPt, turf.point([poi.lon, poi.lat]), { units: 'kilometers' }),
-      }))
-      .sort((a, b) =>
-        Math.abs(a.distKm - b.distKm) < 0.02
-          ? getPoiSortPriority(a.poi) - getPoiSortPriority(b.poi)
-          : a.distKm - b.distKm
-      )
-      .slice(0, 10);
-  }, [
-    isNearbyStripVisible,
-    pois,
-    nearbyRefLon,
-    nearbyRefLat,
-    visibility.pois,
-    visibility.poiWater,
-    visibility.poiHeritage,
-    visibility.poiCampsites,
-    visibility.poiOffroad,
-    visibility.poiPeaks,
-    visibility.poiUser,
-    visibility.poiPrivate,
-  ]);
+    ((mobilePlanningOverlay === 'poi' && Boolean(selectedPoi)) ||
+      (mobilePlanningOverlay === 'google-account' && Boolean(currentUser)) ||
+      mobilePlanningOverlay === 'user-icon' ||
+      mobilePlanningOverlay === 'layers' ||
+      mobilePlanningOverlay === 'add-poi' ||
+      mobilePlanningOverlay === 'plan-route' ||
+      mobileTab === 'routes' ||
+      mobileTab === 'planning-db' ||
+      mobileTab === 'map-edit' ||
+      (mobileTab === 'offline' && Boolean(currentUser)));
 
   const handleFlyTo = useCallback(
     (lon: number, lat: number, zoom = 14) => {
@@ -5602,6 +5596,11 @@ export const App: React.FC = () => {
   };
 
   const handleToggleDesktopFreeNavigation = () => {
+    setDesktopTopMenu(null);
+    setLayerSheetSection(null);
+    setIsUserIconPickerOpen(false);
+    setIsGoogleMenuOpen(false);
+    setMobileSpeedDial(null);
     if (isNavigationActive) {
       handleStopRouteNavigation();
       return;
@@ -5609,6 +5608,10 @@ export const App: React.FC = () => {
     void NavigationHeadingService.requestCompassPermissionIfNeeded();
     applyLocationTransition('activate-tracking');
     setIsFreeNavigation(true);
+    if (isMobile) {
+      setMobileDisplayMode('navigating');
+      setMobileNavOverlay(null);
+    }
     showToast('מצב ניווט הופעל • מעקב רציף 3D כיוון תנועה');
   };
 
@@ -7220,13 +7223,18 @@ export const App: React.FC = () => {
     [routes]
   );
 
-  const handleStartOrResumeRecording = () => {
-    if (!isRecordingTrack) {
+  const handleStartOrResumeRecording = useCallback(() => {
+    if (!isNavigationActiveRef.current) {
+      showToast('הקלטה פעילה רק בזמן ניווט');
+      return;
+    }
+    if (!isRecordingTrackRef.current) {
       const latestFrame = navSmootherRef.current?.getLatestFrame();
+      const curLoc = userLocationRef.current;
       const startPt: [number, number] = latestFrame
         ? [Number(latestFrame.kalmanLon.toFixed(6)), Number(latestFrame.kalmanLat.toFixed(6))]
-        : userLocation
-          ? [userLocation.lon, userLocation.lat]
+        : curLoc
+          ? [curLoc.lon, curLoc.lat]
           : [Number(cursorCoords.lon.toFixed(5)), Number(cursorCoords.lat.toFixed(5))];
       setRecordedCoords([startPt]);
       setRecordedDistanceKm(0);
@@ -7240,50 +7248,118 @@ export const App: React.FC = () => {
       setIsRecordingPaused(false);
       showToast('הקלטת מסלול נמשכת');
     }
-  };
+  }, [cursorCoords.ele, cursorCoords.lat, cursorCoords.lon, showToast]);
 
-  const handleSaveRecordedTrack = async () => {
-    if (recordedCoords.length < 2) {
-      showToast('נדרשות לפחות 2 נקודות תנועה לשמירת מסלול');
+  const handleSaveRecordedTrack = useCallback(
+    async (options?: { suppressDrawerOpen?: boolean; toastOverride?: string }) => {
+      const coordsSnapshot = recordedCoordsRef.current;
+      if (coordsSnapshot.length < 2) {
+        showToast('נדרשות לפחות 2 נקודות תנועה לשמירת מסלול');
+        return;
+      }
+      const user = currentUserRef.current;
+      const saved = await RouteManager.createAndSaveRoute({
+        name: `הקלטת שטח ${new Date().toLocaleTimeString('he-IL', {
+          hour: '2-digit',
+          minute: '2-digit',
+        })}`,
+        coordinates: coordsSnapshot,
+        sourceFormat: 'drawn',
+        color: '#0ea5e9',
+        ownerUid: user?.uid ?? null,
+        ownerEmail: user?.email ?? null,
+        ownerDisplayName: user?.displayName ?? null,
+      });
+      setRoutes((prev) => [...prev, RouteManager.splitRouteRecord(saved).summary]);
+      setActiveRoute(saved);
+      setIsRecordingTrack(false);
+      setIsRecordingPaused(false);
+      setRecordedCoords([]);
+      setRecordElapsedSeconds(0);
+      if (!options?.suppressDrawerOpen) {
+        if (isMobileRef.current) {
+          setMobileDisplayMode('planning');
+          setMobileTab('routes');
+        } else {
+          setDesktopDrawer('routes');
+        }
+      }
+      showToast(options?.toastOverride || `המסלול "${saved.name}" נשמר למכשיר!`);
+    },
+    [showToast]
+  );
+
+  const handleDiscardRecordedTrack = useCallback(
+    (options?: { silent?: boolean }) => {
+      lastRecordedEleRef.current = null;
+      setIsRecordingTrack(false);
+      setIsRecordingPaused(false);
+      setRecordedCoords([]);
+      setRecordedDistanceKm(0);
+      setRecordedAscentMeters(0);
+      setRecordElapsedSeconds(0);
+      if (!options?.silent) {
+        showToast('ההקלטה בוטלה');
+      }
+    },
+    [showToast]
+  );
+
+  // Enforce: track recording is active ONLY while navigation is active.
+  useEffect(() => {
+    if (isNavigationActive) return;
+    setDesktopDrawer((prev) => (prev === 'record' ? null : prev));
+    setMobileNavOverlay((prev) => (prev === 'record' ? null : prev));
+    if (isRecordingTrackRef.current) {
+      if (recordedCoordsRef.current.length >= 2) {
+        void handleSaveRecordedTrack({
+          suppressDrawerOpen: true,
+          toastOverride: 'הניווט הופסק — הקלטת המסלול נשמרה אוטומטית',
+        });
+      } else {
+        handleDiscardRecordedTrack({ silent: true });
+      }
+    }
+  }, [isNavigationActive, handleDiscardRecordedTrack, handleSaveRecordedTrack]);
+
+  const openMapEditRoadMode = useCallback(
+    (subMode: 'edit-road' | 'add-road') => {
+      setDesktopTopMenu(null);
+      if (!currentUserRef.current) {
+        showToast('יש להתחבר עם Google כדי לערוך דרכים וסימון שבילים');
+        void handleSignInGoogle();
+        return;
+      }
+      setIsPickingPoiLocation(false);
+      setDesktopDrawer(null);
+      setMobilePlanningOverlay(null);
+      setMobileNavOverlay(null);
+      if (isMobileRef.current) {
+        setMobileTab('explore');
+      }
+      setMobileSheetExpanded(false);
+      setIsTrailMarkingMode(true);
+      switchTrailSubMode(subMode);
+    },
+    [handleSignInGoogle, showToast, switchTrailSubMode]
+  );
+
+  const openTrailsPlanningDb = useCallback(() => {
+    setDesktopTopMenu(null);
+    if (!currentUserRef.current) {
+      showToast('יש להתחבר עם Google לגישה למאגר תכנון המסלולים');
+      void handleSignInGoogle();
       return;
     }
-    const saved = await RouteManager.createAndSaveRoute({
-      name: `הקלטת שטח ${new Date().toLocaleTimeString('he-IL', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })}`,
-      coordinates: recordedCoords,
-      sourceFormat: 'drawn',
-      color: '#0ea5e9',
-      ownerUid: currentUser?.uid ?? null,
-      ownerEmail: currentUser?.email ?? null,
-      ownerDisplayName: currentUser?.displayName ?? null,
-    });
-    setRoutes((prev) => [...prev, RouteManager.splitRouteRecord(saved).summary]);
-    setActiveRoute(saved);
-    setIsRecordingTrack(false);
-    setIsRecordingPaused(false);
-    setRecordedCoords([]);
-    setRecordElapsedSeconds(0);
-    if (isMobile) {
+    if (isMobileRef.current) {
       setMobileDisplayMode('planning');
-      setMobileTab('routes');
+      setMobilePlanningOverlay(null);
+      setMobileTab('planning-db');
+      setMobileSheetExpanded(true);
     } else {
-      setDesktopDrawer('routes');
+      setDesktopDrawer((prev) => (prev === 'planning-db' ? null : 'planning-db'));
     }
-    showToast(`המסלול "${saved.name}" נשמר למכשיר!`);
-  };
-
-  const handleDiscardRecordedTrack = () => {
-    lastRecordedEleRef.current = null;
-    setIsRecordingTrack(false);
-    setIsRecordingPaused(false);
-    setRecordedCoords([]);
-    setRecordedDistanceKm(0);
-    setRecordedAscentMeters(0);
-    setRecordElapsedSeconds(0);
-    showToast('ההקלטה בוטלה');
-  };
+  }, [handleSignInGoogle, showToast]);
 
   const handleCopyGrid = (text: string) => {
     navigator.clipboard?.writeText(text).catch(() => {});
@@ -7311,11 +7387,25 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  const handleOpenMobileOffline = useCallback(() => {
-    setMobileDisplayMode('planning');
-    setMobileTab('offline');
-    setMobilePlanningOverlay(null);
-  }, []);
+  const handleOpenMapStorage = useCallback(() => {
+    setDesktopTopMenu(null);
+    setLayerSheetSection(null);
+    setIsUserIconPickerOpen(false);
+    setIsGoogleMenuOpen(false);
+    setMobileSpeedDial(null);
+    if (!currentUserRef.current) {
+      showToast('ניהול מפות אופליין וייבוא זמין למשתמשים מחוברים בלבד');
+      void handleSignInGoogle();
+      return;
+    }
+    if (isMobileRef.current) {
+      setMobileDisplayMode('planning');
+      setMobilePlanningOverlay(null);
+      setMobileTab('offline');
+    } else {
+      setIsStorageOpen(true);
+    }
+  }, [handleSignInGoogle, showToast]);
 
   const handleToggleDesktopRoutes = useCallback(() => {
     setDesktopDrawer((prev) => (prev === 'routes' ? null : 'routes'));
@@ -7330,8 +7420,9 @@ export const App: React.FC = () => {
       setSelectedPlanningTrailId(null);
       setSendToPlanningRouteTarget(null);
       setShowPlanningFolderOnMap(false);
+      setIsStorageOpen(false);
       setDesktopDrawer((prev) => (prev === 'planning-db' ? null : prev));
-      setMobileTab((prev) => (prev === 'planning-db' ? 'explore' : prev));
+      setMobileTab((prev) => (prev === 'planning-db' || prev === 'offline' ? 'explore' : prev));
       return;
     }
 
@@ -7641,6 +7732,14 @@ export const App: React.FC = () => {
   const isSearchingPending =
     searchQuery.trim().length > 0 && searchQuery.trim() !== executedSearchQuery.trim();
 
+  const handleSearchFocusChange = useCallback((focused: boolean) => {
+    setIsSearchFocused(focused);
+    if (focused && isMobileRef.current) {
+      setMobileTab('explore');
+      setMobilePlanningOverlay(null);
+    }
+  }, []);
+
   const renderSearchBar = (compactMobile: boolean, navigationBox = false) => (
     <SearchBar
       compactMobile={compactMobile}
@@ -7658,14 +7757,14 @@ export const App: React.FC = () => {
       activeSearchIndex={activeSearchIndex}
       onChangeActiveSearchIndex={setActiveSearchIndex}
       isSearchFocused={isSearchFocused}
-      onChangeSearchFocused={setIsSearchFocused}
+      onChangeSearchFocused={handleSearchFocusChange}
       onClearSearch={handleClearSearch}
       onSelectResult={handleSelectSearchResultStable}
       onRebuildIndex={handleRebuildSearchIndex}
       hasOsmInfo={Boolean(osmInfo)}
       isOfflineReady={isOfflineReady}
       isOnline={isOnline}
-      onOpenMobileOffline={handleOpenMobileOffline}
+      onOpenMobileOffline={handleOpenMapStorage}
       onToggleDesktopRoutes={handleToggleDesktopRoutes}
     />
   );
@@ -7800,7 +7899,7 @@ export const App: React.FC = () => {
     );
   };
 
-  const renderLocationModeButton = (mobile = false) => {
+  const renderLocationModeButton = (mobile = false, grouped = false) => {
     const label =
       locationMode === 'none'
         ? 'מיקום שלי: כבוי — לחץ לקפיצה למיקום'
@@ -7810,10 +7909,16 @@ export const App: React.FC = () => {
 
     const btnCls =
       locationMode === 'once'
-        ? 'bg-sky-600 hover:bg-sky-500 border-sky-400 text-white ring-2 ring-sky-400/35'
+        ? grouped
+          ? 'bg-sky-600 hover:bg-sky-500 text-white'
+          : 'bg-sky-600 hover:bg-sky-500 border-sky-400 text-white ring-2 ring-sky-400/35'
         : locationMode === 'tracking'
-          ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400 text-white ring-2 ring-emerald-400/35'
-          : t.pillBtn;
+          ? grouped
+            ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+            : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400 text-white ring-2 ring-emerald-400/35'
+          : grouped
+            ? 'hover:bg-black/5'
+            : t.pillBtn;
 
     const iconCls =
       locationMode === 'none'
@@ -7827,17 +7932,124 @@ export const App: React.FC = () => {
     return (
       <button
         type="button"
-        onClick={handleLocateMe}
+        onClick={() => {
+          setDesktopTopMenu(null);
+          setLayerSheetSection(null);
+          setMobileSpeedDial(null);
+          handleLocateMe();
+        }}
         data-location-mode={locationMode}
         aria-label={label}
         aria-pressed={locationMode !== 'none'}
         title={label}
         className={`${
-          mobile ? 'w-10 h-10 rounded-full' : 'w-10 h-10 rounded-xl'
-        } border shadow-lg flex items-center justify-center transition-all shrink-0 ${btnCls}`}
+          grouped
+            ? 'w-10 h-10 flex items-center justify-center transition-all shrink-0'
+            : `${mobile ? 'w-10 h-10 rounded-full' : 'w-10 h-10 rounded-xl'} border shadow-lg flex items-center justify-center transition-all shrink-0`
+        } ${btnCls}`}
       >
         <LocateFixed className={`w-[18px] h-[18px] ${iconCls}`} />
       </button>
+    );
+  };
+
+  const renderLocationNavGroup = (mobile = false, locationButtonEl: React.ReactNode) => {
+    const isRecordUiOpen = mobile
+      ? mobileNavOverlay === 'record'
+      : desktopDrawer === 'record';
+
+    return (
+      <div
+        dir="ltr"
+        data-testid="location-nav-group"
+        className="flex items-end gap-1.5"
+      >
+        {/* Connected vertical capsule matching Style / Layers / POI: My Location + Navigation (icon-only) */}
+        <div
+          className={`w-10 flex flex-col border shadow-lg overflow-hidden shrink-0 ${
+            mobile ? 'rounded-full' : 'rounded-xl'
+          } ${t.pillBtn}`}
+        >
+          {locationButtonEl}
+          <div className="h-px bg-current opacity-15" />
+          <button
+            type="button"
+            data-testid="nav-toggle-btn"
+            onClick={handleToggleDesktopFreeNavigation}
+            aria-pressed={isNavigationActive}
+            aria-label={isNavigationActive ? 'צא ממצב ניווט' : 'ניווט חי'}
+            className={`w-10 h-10 flex items-center justify-center transition-colors shrink-0 ${
+              isNavigationActive ? 'bg-emerald-600 text-white' : 'hover:bg-black/5'
+            }`}
+            title={
+              isNavigationActive
+                ? 'צא ממצב ניווט'
+                : 'התחל מצב ניווט חי (כיוון מפה + שמירת מסך דולק)'
+            }
+          >
+            <Navigation
+              className={`w-[18px] h-[18px] ${
+                isNavigationActive ? 'text-white' : 'text-emerald-500'
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Record spans out next to Navigate ONLY while Navigation is active */}
+        {isNavigationActive && (
+          <button
+            type="button"
+            data-testid="record-toggle-btn"
+            onClick={() => {
+              setDesktopTopMenu(null);
+              setLayerSheetSection(null);
+              setIsUserIconPickerOpen(false);
+              setIsGoogleMenuOpen(false);
+              setMobileSpeedDial(null);
+              if (mobile) {
+                setMobileNavOverlay((prev) => (prev === 'record' ? null : 'record'));
+              } else {
+                setDesktopDrawer((prev) => (prev === 'record' ? null : 'record'));
+              }
+            }}
+            aria-pressed={isRecordUiOpen || isRecordingTrack}
+            aria-label="הקלטת מסלול GPS"
+            className={`h-10 border shadow-lg flex items-center justify-center gap-1.5 text-xs font-semibold transition-all shrink-0 ${
+              mobile ? 'rounded-full' : 'rounded-xl'
+            } ${isRecordingTrack ? 'px-2.5' : 'w-10'} ${
+              isRecordUiOpen || isRecordingTrack
+                ? 'bg-rose-600 border-rose-500 text-white'
+                : t.pillBtn
+            }`}
+            title="הקלטת מסלול GPS (זמינה בזמן ניווט)"
+          >
+            <span
+              className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                isRecordUiOpen || isRecordingTrack
+                  ? 'border-white'
+                  : 'border-rose-500'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isRecordingTrack && !isRecordingPaused
+                    ? 'bg-white animate-pulse'
+                    : isRecordingTrack
+                      ? 'bg-amber-300'
+                      : isRecordUiOpen
+                        ? 'bg-white'
+                        : 'bg-rose-500'
+                }`}
+              />
+            </span>
+            {isRecordingTrack && (
+              <span dir="ltr" className="tabular-nums">
+                {formatDuration(recordElapsedSeconds)}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
     );
   };
 
@@ -7952,6 +8164,15 @@ export const App: React.FC = () => {
               >
                 <UploadCloud className="h-3.5 w-3.5 text-sky-500" />
                 <span>OSM{pendingOsmSyncCount > 0 ? ` (${pendingOsmSyncCount})` : ''}</span>
+              </button>
+              <button
+                type="button"
+                onClick={exitTrailMarkingMode}
+                className={`shrink-0 rounded-lg p-1.5 transition-colors ${t.hoverRow} ${t.muted}`}
+                title="סיום מצב עריכת דרכים"
+                aria-label="סיום מצב עריכת דרכים"
+              >
+                <X className="h-3.5 w-3.5" />
               </button>
             </div>
           )}
@@ -8189,7 +8410,7 @@ export const App: React.FC = () => {
                       onSelectRoute={handleSelectRoute}
                       onStartNavigation={handleStartRouteNavigation}
                       onStopNavigation={handleStopRouteNavigation}
-                      onOpenImporter={() => setIsStorageOpen(true)}
+                      onOpenImporter={currentUser ? handleOpenMapStorage : undefined}
                       onOpenRoutePlanner={() => setDesktopDrawer('plan-route')}
                       onDeleteRoute={handleDeleteRoute}
                       onShareRoute={handleOpenShareModal}
@@ -8277,8 +8498,8 @@ export const App: React.FC = () => {
                       pointsCount={recordedCoords.length}
                       onStartOrResume={handleStartOrResumeRecording}
                       onPause={() => setIsRecordingPaused(true)}
-                      onSaveRoute={handleSaveRecordedTrack}
-                      onDiscard={handleDiscardRecordedTrack}
+                      onSaveRoute={() => void handleSaveRecordedTrack()}
+                      onDiscard={() => handleDiscardRecordedTrack()}
                       onDropWaypoint={() => openAddPoiPanelAt({ lon: cursorCoords.lon, lat: cursorCoords.lat, ele: cursorCoords.ele })}
                       onClose={() => setDesktopDrawer(null)}
                     />
@@ -8317,10 +8538,400 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            {/* Top-Left (RTL End): Active Nav Alert + Orientation Switch + Offline Readiness + Quick Action Pills */}
-            <div className="absolute top-3 left-3 z-30 max-w-[calc(100vw-408px)] flex flex-wrap items-center gap-2 pointer-events-auto">
-              {isNavigatingRoute && activeRoute ? (
+            {/* Top-Left (RTL End): Trails Menu + Map Edit Menu + Offline Status + Active Route Banner */}
+            <div
+              dir="ltr"
+              className="absolute top-3 left-3 z-30 max-w-[calc(100vw-408px)] flex flex-wrap items-center gap-2 pointer-events-auto"
+            >
+              {/* Grouped Dropdown Menus: מסלולים + עריכת מפה */}
+              <div
+                ref={desktopTopMenuRef}
+                dir="rtl"
+                className="relative flex items-center gap-1.5"
+              >
+                {(() => {
+                  const isTrailsActive =
+                    desktopTopMenu === 'trails' ||
+                    desktopDrawer === 'routes' ||
+                    desktopDrawer === 'planning-db' ||
+                    desktopDrawer === 'plan-route';
+                  return (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        data-testid="menu-trails-btn"
+                        aria-expanded={desktopTopMenu === 'trails'}
+                        aria-haspopup="menu"
+                        onClick={() => toggleDesktopTopMenu('trails')}
+                        className={`px-3 py-2 rounded-full border text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors ${
+                          desktopDrawer === 'plan-route' && desktopTopMenu !== 'trails'
+                            ? 'bg-blue-600 border-blue-500 text-white'
+                            : isTrailsActive
+                              ? 'bg-emerald-600 border-emerald-500 text-white'
+                              : t.panel
+                        }`}
+                      >
+                        <RouteIcon
+                          className={`w-3.5 h-3.5 ${
+                            isTrailsActive ? 'text-white' : 'text-emerald-500'
+                          }`}
+                        />
+                        <span>מסלולים</span>
+                        {unseenSharedCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-violet-600 text-white text-[10px] font-bold leading-none">
+                            +{unseenSharedCount}
+                          </span>
+                        )}
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform ${
+                            desktopTopMenu === 'trails' ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      {desktopTopMenu === 'trails' && (
+                        <div
+                          role="menu"
+                          data-testid="menu-trails-dropdown"
+                          className={`absolute top-full left-0 mt-1.5 w-64 rounded-2xl border p-1.5 shadow-2xl z-40 space-y-1 ${t.panel}`}
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setDesktopTopMenu(null);
+                              setDesktopDrawer((prev) => (prev === 'routes' ? null : 'routes'));
+                            }}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition-colors ${
+                              desktopDrawer === 'routes' ? 'bg-emerald-600 text-white' : t.hoverRow
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <RouteIcon
+                                className={`w-4 h-4 shrink-0 ${
+                                  desktopDrawer === 'routes' ? 'text-white' : 'text-emerald-500'
+                                }`}
+                              />
+                              <span className="min-w-0">
+                                <span className="font-bold block">המסלולים שלי</span>
+                                <span
+                                  className={`text-[11px] block truncate ${
+                                    desktopDrawer === 'routes' ? 'text-emerald-100' : t.muted
+                                  }`}
+                                >
+                                  ניהול, משותפים ופרופיל גובה
+                                </span>
+                              </span>
+                            </span>
+                            {unseenSharedCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-violet-600 text-white text-[10px] font-bold shrink-0">
+                                +{unseenSharedCount}
+                              </span>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setDesktopTopMenu(null);
+                              setDesktopDrawer((prev) =>
+                                prev === 'plan-route' ? null : 'plan-route'
+                              );
+                            }}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${
+                              desktopDrawer === 'plan-route' ? 'bg-blue-600 text-white' : t.hoverRow
+                            }`}
+                          >
+                            <PenTool
+                              className={`w-4 h-4 shrink-0 ${
+                                desktopDrawer === 'plan-route' ? 'text-white' : 'text-blue-500'
+                              }`}
+                            />
+                            <span className="min-w-0">
+                              <span className="font-bold block">תכנון מסלול</span>
+                              <span
+                                className={`text-[11px] block truncate ${
+                                  desktopDrawer === 'plan-route' ? 'text-blue-100' : t.muted
+                                }`}
+                              >
+                                בניית מסלול רגלי, אופניים או 4x4
+                              </span>
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => openTrailsPlanningDb()}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${
+                              desktopDrawer === 'planning-db'
+                                ? 'bg-emerald-600 text-white'
+                                : t.hoverRow
+                            }`}
+                          >
+                            <FolderTree
+                              className={`w-4 h-4 shrink-0 ${
+                                desktopDrawer === 'planning-db'
+                                  ? 'text-white'
+                                  : 'text-emerald-500'
+                              }`}
+                            />
+                            <span className="min-w-0">
+                              <span className="font-bold block">מאגר תכנון</span>
+                              <span
+                                className={`text-[11px] block truncate ${
+                                  desktopDrawer === 'planning-db' ? 'text-emerald-100' : t.muted
+                                }`}
+                              >
+                                {currentUser ? 'תיקיות וספריית מסלולים' : 'דורש התחברות Google'}
+                              </span>
+                            </span>
+                          </button>
+
+                          {currentUser && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => handleOpenMapStorage()}
+                              className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${t.hoverRow}`}
+                            >
+                              <Download className="w-4 h-4 shrink-0 text-sky-500" />
+                              <span className="min-w-0">
+                                <span className="font-bold block">ייבוא GPX / KML</span>
+                                <span className={`text-[11px] block truncate ${t.muted}`}>
+                                  ייבוא קבצי מסלולים ונקודות
+                                </span>
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {(() => {
+                  const isMapEditActive =
+                    desktopTopMenu === 'map-edit' ||
+                    isPickingPoiLocation ||
+                    isAddingPoiMode ||
+                    desktopDrawer === 'add-poi' ||
+                    isTrailMarkingMode ||
+                    isOsmSyncOpen;
+                  return (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        data-testid="menu-map-edit-btn"
+                        aria-expanded={desktopTopMenu === 'map-edit'}
+                        aria-haspopup="menu"
+                        onClick={() => toggleDesktopTopMenu('map-edit')}
+                        className={`px-3 py-2 rounded-full border text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors ${
+                          isPickingPoiLocation || isAddingPoiMode
+                            ? 'bg-sky-600 border-sky-500 text-white'
+                            : isMapEditActive
+                              ? 'bg-emerald-600 border-emerald-500 text-white'
+                              : t.panel
+                        }`}
+                      >
+                        <Pencil
+                          className={`w-3.5 h-3.5 ${
+                            isMapEditActive ? 'text-white' : 'text-amber-500'
+                          }`}
+                        />
+                        <span>עריכת מפה</span>
+                        {pendingOsmSyncCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-sky-600 text-white text-[10px] font-bold leading-none">
+                            {pendingOsmSyncCount}
+                          </span>
+                        )}
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform ${
+                            desktopTopMenu === 'map-edit' ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      {desktopTopMenu === 'map-edit' && (
+                        <div
+                          role="menu"
+                          data-testid="menu-map-edit-dropdown"
+                          className={`absolute top-full left-0 mt-1.5 w-64 rounded-2xl border p-1.5 shadow-2xl z-40 space-y-1 ${t.panel}`}
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setDesktopTopMenu(null);
+                              startAddPoiPick();
+                            }}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${
+                              isPickingPoiLocation || isAddingPoiMode
+                                ? 'bg-sky-600 text-white'
+                                : t.hoverRow
+                            }`}
+                          >
+                            <Plus
+                              className={`w-4 h-4 shrink-0 ${
+                                isPickingPoiLocation || isAddingPoiMode
+                                  ? 'text-white'
+                                  : 'text-sky-500'
+                              }`}
+                            />
+                            <span className="min-w-0">
+                              <span className="font-bold block">הוסף נקודה (POI)</span>
+                              <span
+                                className={`text-[11px] block truncate ${
+                                  isPickingPoiLocation || isAddingPoiMode
+                                    ? 'text-sky-100'
+                                    : t.muted
+                                }`}
+                              >
+                                בחירת מיקום במפה להוספת נקודה
+                              </span>
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => openMapEditRoadMode('edit-road')}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${
+                              isTrailMarkingMode && trailSubMode === 'edit-road'
+                                ? 'bg-emerald-600 text-white'
+                                : t.hoverRow
+                            }`}
+                          >
+                            <MapPin
+                              className={`w-4 h-4 shrink-0 ${
+                                isTrailMarkingMode && trailSubMode === 'edit-road'
+                                  ? 'text-white'
+                                  : 'text-rose-500'
+                              }`}
+                            />
+                            <span className="min-w-0">
+                              <span className="font-bold block">עריכת דרך / סימון שבילים</span>
+                              <span
+                                className={`text-[11px] block truncate ${
+                                  isTrailMarkingMode && trailSubMode === 'edit-road'
+                                    ? 'text-emerald-100'
+                                    : t.muted
+                                }`}
+                              >
+                                {currentUser
+                                  ? 'עריכת דרך קיימת וסימון שבילים'
+                                  : 'דורש התחברות Google'}
+                              </span>
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => openMapEditRoadMode('add-road')}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${
+                              isTrailMarkingMode && trailSubMode === 'add-road'
+                                ? 'bg-emerald-600 text-white'
+                                : t.hoverRow
+                            }`}
+                          >
+                            <PenTool
+                              className={`w-4 h-4 shrink-0 ${
+                                isTrailMarkingMode && trailSubMode === 'add-road'
+                                  ? 'text-white'
+                                  : 'text-emerald-500'
+                              }`}
+                            />
+                            <span className="min-w-0">
+                              <span className="font-bold block">הוספת דרך חדשה</span>
+                              <span
+                                className={`text-[11px] block truncate ${
+                                  isTrailMarkingMode && trailSubMode === 'add-road'
+                                    ? 'text-emerald-100'
+                                    : t.muted
+                                }`}
+                              >
+                                {currentUser
+                                  ? 'שרטוט דרך או שביל חדש במפה'
+                                  : 'דורש התחברות Google'}
+                              </span>
+                            </span>
+                          </button>
+
+                          {activeRoute && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setDesktopTopMenu(null);
+                                void handleEditRouteInPlanner(activeRoute);
+                              }}
+                              className={`w-full text-right px-3 py-2 rounded-xl flex items-center gap-2 text-xs transition-colors ${t.hoverRow}`}
+                            >
+                              <RouteIcon className="w-4 h-4 shrink-0 text-blue-500" />
+                              <span className="min-w-0">
+                                <span className="font-bold block truncate">
+                                  עריכת מסלול: {activeRoute.name}
+                                </span>
+                                <span className={`text-[11px] block truncate ${t.muted}`}>
+                                  עריכת תוואי המסלול הפעיל
+                                </span>
+                              </span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setDesktopTopMenu(null);
+                              setIsOsmSyncFullPage(false);
+                              setIsOsmSyncOpen(true);
+                            }}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition-colors ${t.hoverRow}`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <UploadCloud className="w-4 h-4 shrink-0 text-sky-500" />
+                              <span className="min-w-0">
+                                <span className="font-bold block">סנכרון ל-OpenStreetMap</span>
+                                <span className={`text-[11px] block truncate ${t.muted}`}>
+                                  העלאה וניהול שינויים קהילתיים
+                                </span>
+                              </span>
+                            </span>
+                            {pendingOsmSyncCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-sky-600 text-white text-[10px] font-bold shrink-0">
+                                {pendingOsmSyncCount}
+                              </span>
+                            )}
+                          </button>
+
+                          {isTrailMarkingMode && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setDesktopTopMenu(null);
+                                exitTrailMarkingMode();
+                              }}
+                              className="w-full text-right px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-bold text-rose-500 hover:bg-rose-500/10 transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5 shrink-0" />
+                              <span>סיום מצב עריכת דרכים</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Active Route Navigation Status Pill (Alert + Remaining Distance + Stop) */}
+              {isNavigatingRoute && activeRoute && (
                 <div
+                  dir="rtl"
                   className={`px-3.5 py-2 rounded-full border shadow-xl text-xs font-bold flex items-center gap-2 ${
                     offRouteWarning !== null
                       ? 'bg-red-600 border-red-400 text-white animate-pulse'
@@ -8349,157 +8960,7 @@ export const App: React.FC = () => {
                     סיים
                   </button>
                 </div>
-              ) : isFreeNavigation ? (
-                <div className="px-3.5 py-2 rounded-full border shadow-xl text-xs font-bold flex items-center gap-2 bg-emerald-600 border-emerald-400 text-white">
-                  <Navigation className="w-4 h-4" />
-                  <span>
-                    מצב ניווט פעיל
-                    {isScreenWakeLockActive ? ' • מסך דולק' : ''}
-                  </span>
-                  <button
-                    onClick={handleStopRouteNavigation}
-                    className="px-2 py-0.5 rounded-full bg-white/20 hover:bg-white/30 text-xs"
-                  >
-                    סיים
-                  </button>
-                </div>
-              ) : null}
-
-              {/* Compact Offline Status Pill */}
-              <button
-                onClick={() => setIsStorageOpen(true)}
-                className={`px-3 py-2 rounded-full border text-xs font-semibold flex items-center gap-2 transition-colors ${t.panel}`}
-                title="ניהול מפות אופליין וייבוא GPX/KML"
-              >
-                <span
-                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                    isOfflineReady ? 'bg-emerald-500' : isOnline ? 'bg-sky-500' : 'bg-amber-500'
-                  }`}
-                />
-                <HardDrive className="w-3.5 h-3.5 text-sky-500" />
-                <span>
-                  {isOfflineReady
-                    ? '100% אופליין מוכן'
-                    : isOnline
-                      ? 'מפות אופליין / ייבוא'
-                      : 'מצב אופליין'}
-                </span>
-              </button>
-
-              {/* Quick Mode Pills */}
-              <div className={`flex items-center gap-1 rounded-full p-1 border ${t.panel}`}>
-                <button
-                  onClick={handleToggleDesktopFreeNavigation}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                    isNavigationActive ? 'bg-emerald-600 text-white' : t.hoverRow
-                  }`}
-                  title={isNavigationActive ? 'צא ממצב ניווט' : 'התחל מצב ניווט חי (כיוון מפה + שמירת מסך דולק)'}
-                >
-                  <Navigation
-                    className={`w-3.5 h-3.5 ${isNavigationActive ? 'text-white' : 'text-emerald-500'}`}
-                  />
-                  <span>ניווט</span>
-                </button>
-
-                <button
-                  onClick={() => setDesktopDrawer(desktopDrawer === 'routes' ? null : 'routes')}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors relative ${
-                    desktopDrawer === 'routes' ? 'bg-emerald-600 text-white' : t.hoverRow
-                  }`}
-                >
-                  <RouteIcon className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>מסלולים</span>
-                  {unseenSharedCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-violet-600 text-white text-[10px] font-bold leading-none">
-                      +{unseenSharedCount}
-                    </span>
-                  )}
-                </button>
-
-                {currentUser && (
-                  <button
-                    onClick={() =>
-                      setDesktopDrawer(desktopDrawer === 'planning-db' ? null : 'planning-db')
-                    }
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                      desktopDrawer === 'planning-db' ? 'bg-emerald-600 text-white' : t.hoverRow
-                    }`}
-                  >
-                    <FolderTree
-                      className={`w-3.5 h-3.5 ${
-                        desktopDrawer === 'planning-db' ? 'text-white' : 'text-emerald-500'
-                      }`}
-                    />
-                    <span>מאגר תכנון</span>
-                  </button>
-                )}
-
-                <button
-                  onClick={() =>
-                    setDesktopDrawer(desktopDrawer === 'plan-route' ? null : 'plan-route')
-                  }
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                    desktopDrawer === 'plan-route' ? 'bg-blue-600 text-white' : t.hoverRow
-                  }`}
-                >
-                  <PenTool
-                    className={`w-3.5 h-3.5 ${
-                      desktopDrawer === 'plan-route' ? 'text-white' : 'text-blue-500'
-                    }`}
-                  />
-                  <span>תכנון מסלול</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={startAddPoiPick}
-                  aria-pressed={isPickingPoiLocation || isAddingPoiMode}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                    isPickingPoiLocation || isAddingPoiMode
-                      ? 'bg-sky-600 text-white'
-                      : t.hoverRow
-                  }`}
-                  title="הוסף נקודה (לחץ ואז בחר מיקום במפה)"
-                >
-                  <Plus
-                    className={`w-3.5 h-3.5 ${
-                      isPickingPoiLocation || isAddingPoiMode ? 'text-white' : 'text-sky-500'
-                    }`}
-                  />
-                  <span>הוסף נקודה</span>
-                </button>
-
-                <button
-                  onClick={() => setDesktopDrawer(desktopDrawer === 'record' ? null : 'record')}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                    desktopDrawer === 'record' || isRecordingTrack
-                      ? 'bg-rose-600 text-white'
-                      : t.hoverRow
-                  }`}
-                >
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full ${
-                      isRecordingTrack ? 'bg-white animate-pulse' : 'bg-rose-500'
-                    }`}
-                  />
-                  <span>
-                    {isRecordingTrack ? formatDuration(recordElapsedSeconds) : 'הקלטה'}
-                  </span>
-                </button>
-
-                {currentUser && (
-                  <button
-                    onClick={toggleTrailMarkingMode}
-                    aria-pressed={isTrailMarkingMode}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors ${
-                      isTrailMarkingMode ? 'bg-emerald-600 text-white' : t.hoverRow
-                    }`}
-                  >
-                    <MapPin className="w-3.5 h-3.5 text-rose-500" />
-                    <span>סימון שבילים</span>
-                  </button>
-                )}
-              </div>
+              )}
             </div>
 
             {/* Live Snap-to-Highway Indicator Banner (Desktop Planning Mode) */}
@@ -8524,9 +8985,11 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* GROUP 1 — Bottom-Left (RTL End): Map Layers & Map Operations */}
-            <div className="absolute bottom-4 left-4 z-20 flex items-end gap-2.5 pointer-events-auto">
-              <div className="flex flex-col items-center gap-1.5">
+            {/* GROUP 1 — Bottom-Left (RTL End): Combined My Location + Navigate (-> Record) on Top, above Layers, North, Zoom */}
+            <div dir="ltr" className="absolute bottom-4 left-4 z-20 flex items-end gap-2.5 pointer-events-auto">
+              <div className="flex flex-col items-start gap-1.5">
+                {renderLocationNavGroup(false, renderLocationModeButton(false, true))}
+
                 {/* Connected Layers Sub-Capsule (Style / Layers / POI) */}
                 <div className={`flex flex-col rounded-xl border shadow-lg overflow-hidden ${t.pillBtn}`}>
                   {LAYER_SECTION_BUTTONS.map(({ id, title, Icon }, idx) => (
@@ -8580,8 +9043,6 @@ export const App: React.FC = () => {
                     −
                   </button>
                 </div>
-
-                {renderLocationModeButton(false)}
               </div>
             </div>
 
@@ -8601,6 +9062,8 @@ export const App: React.FC = () => {
                 onSignInGoogle={handleSignInGoogle}
                 onSignOutGoogle={handleSignOutGoogle}
                 onSyncNow={handleSyncPendingNow}
+                onOpenMapStorage={handleOpenMapStorage}
+                isOfflineReady={isOfflineReady}
               />
 
               <button
@@ -8802,7 +9265,7 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Mobile map controls: COLLAPSED single slim column on left (Group 1, Group 2, GPS, + Search/Orientation in Nav). */}
+            {/* Mobile map controls: Combined My Location + Navigate (-> Record) on TOP, then Search (Nav), Group 1, Group 2, Orientation. */}
             <div
               ref={mobileControlsRef}
               dir="ltr"
@@ -8814,6 +9277,9 @@ export const App: React.FC = () => {
                   : 'top-[4.5rem]'
               }`}
             >
+              {/* Combined 3-State My Location + Navigate (expands to Record while navigating) on top of ALL icons */}
+              {renderLocationNavGroup(true, renderLocationModeButton(true, true))}
+
               {/* Navigating mode has no search pill: this icon opens the search box next to it. */}
               {mobileDisplayMode === 'navigating' && (
                 <button
@@ -9053,23 +9519,28 @@ export const App: React.FC = () => {
                 );
               })()}
 
-              {/* 3-State My Location (Off / Once Blue / Tracking Green) & Zero-to-North (2D North / 2D POV / 3D POV) */}
-              {renderLocationModeButton(true)}
+              {/* Zero-to-North (2D North / 2D POV / 3D POV) */}
               {renderNorthModeButton(true)}
             </div>
 
-            {/* Mobile Planning Mode Compact HUD Pill (Hidden in Navigating mode since telemetry bar already shows it!) */}
+            {/* Mobile Planning Mode Compact HUD Pill (single line alongside bottom-right distance scale) */}
             {mobileDisplayMode === 'planning' && (
               <button
+                type="button"
                 onClick={() => handleCopyGrid(milCoords.idfGrid8Digit)}
-                className={`absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-full border shadow-lg text-xs font-mono pointer-events-auto ${t.panel}`}
+                dir="rtl"
+                data-testid="mobile-coords-pill"
+                className={`absolute bottom-3 right-3 z-20 px-2.5 py-1 rounded-full border shadow-lg text-[11px] font-mono pointer-events-auto inline-flex items-center gap-1.5 whitespace-nowrap ${t.panel}`}
               >
-                <span className="text-emerald-500 font-bold">
+                <span className="text-emerald-500 font-bold tabular-nums">
                   {cursorCoords.ele !== null ? `${cursorCoords.ele}m` : '---'}
-                </span>{' '}
-                •{' '}
-                <span className="text-amber-500 font-bold">
-                  נ.צ. <span dir="ltr">{milCoords.idfGrid8Digit}</span>
+                </span>
+                <span className="opacity-30">•</span>
+                <span className="text-amber-500 font-bold inline-flex items-center gap-1">
+                  <span className="font-sans">נ.צ.</span>
+                  <span dir="ltr" className="tabular-nums">
+                    {milCoords.idfGrid8Digit}
+                  </span>
                 </span>
               </button>
             )}
@@ -9090,7 +9561,7 @@ export const App: React.FC = () => {
       {isMobile && mobileDisplayMode === 'navigating' && isNavSearchOpen && (
         <div
           className={`absolute right-3 left-[3.75rem] z-[45] pt-safe pointer-events-none ${
-            isNavigatingRoute && activeRoute ? 'top-[5.25rem]' : 'top-[4rem]'
+            isNavigatingRoute && activeRoute ? 'top-[11rem]' : 'top-[9.75rem]'
           }`}
         >
           <div className="pointer-events-auto pt-px">{renderSearchBar(true, true)}</div>
@@ -9100,7 +9571,8 @@ export const App: React.FC = () => {
       {/* ================= MOBILE BOTTOM AREA ================= */}
       {isMobile && mobileDisplayMode === 'planning' && (
         <>
-          {/* Planning Expandable Bottom Sheet */}
+          {/* Planning Expandable Bottom Sheet (hidden in default map view; no Nearby strip) */}
+          {isMobilePlanningSheetVisible && (
           <div className={`relative z-30 rounded-t-3xl border-t shadow-2xl shrink-0 ${t.panel}`}>
             <div className="relative w-full">
               <div
@@ -9156,6 +9628,8 @@ export const App: React.FC = () => {
                 onSyncNow={handleSyncPendingNow}
                 onSignOutGoogle={handleSignOutGoogle}
                 onClose={() => setMobilePlanningOverlay(null)}
+                onOpenMapStorage={handleOpenMapStorage}
+                isOfflineReady={isOfflineReady}
               />
             ) : mobilePlanningOverlay === 'user-icon' ? (
               <UserIconPickerSheet
@@ -9289,105 +9763,202 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               )
-            ) : mobileTab === 'planning-db' && currentUser ? (
-              <div className="max-h-[65vh] overflow-y-auto">
-                <Suspense fallback={null}>
-                  <PlanningTrailDbDrawer
-                    theme={theme}
-                    isMobile
-                    folders={planningFolders}
-                    trails={planningTrails}
-                    selectedTrailId={selectedPlanningTrailId}
-                    onSelectTrail={handleSelectPlanningTrail}
-                    onCreateFolder={handleCreatePlanningFolder}
-                    onRenameFolder={handleRenamePlanningFolder}
-                    onDeleteFolder={handleDeletePlanningFolder}
-                    onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
-                    onEditTrailOnMap={handleEditPlanningTrailOnMap}
-                    onDeleteTrail={handleDeletePlanningTrail}
-                    onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
-                    onClose={() => setMobileTab('explore')}
-                  />
-                </Suspense>
+            ) : mobileTab === 'routes' || mobileTab === 'planning-db' ? (
+              <div className="max-h-[64vh] flex flex-col">
+                {/* Unified מסלולים Sub-Menu: המסלולים שלי / תכנון מסלול / מאגר תכנון */}
+                <div className="px-3 pt-1 pb-2 border-b border-current/10 flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setMobileTab('routes')}
+                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors ${
+                      mobileTab === 'routes' ? 'bg-emerald-600 text-white' : t.subCard
+                    }`}
+                  >
+                    <RouteIcon className="w-3.5 h-3.5" />
+                    <span>המסלולים שלי</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileDisplayMode('planning');
+                      setMobilePlanningOverlay('plan-route');
+                      exitTrailMarkingMode();
+                      setMobileSheetExpanded(true);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors ${t.subCard}`}
+                  >
+                    <PenTool className="w-3.5 h-3.5 text-blue-500" />
+                    <span>תכנון מסלול</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openTrailsPlanningDb()}
+                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors ${
+                      mobileTab === 'planning-db' ? 'bg-emerald-600 text-white' : t.subCard
+                    }`}
+                  >
+                    <FolderTree className="w-3.5 h-3.5" />
+                    <span>מאגר תכנון</span>
+                  </button>
+                </div>
+
+                {mobileTab === 'planning-db' && currentUser ? (
+                  <div className="overflow-y-auto flex-1">
+                    <Suspense fallback={null}>
+                      <PlanningTrailDbDrawer
+                        theme={theme}
+                        isMobile
+                        folders={planningFolders}
+                        trails={planningTrails}
+                        selectedTrailId={selectedPlanningTrailId}
+                        onSelectTrail={handleSelectPlanningTrail}
+                        onCreateFolder={handleCreatePlanningFolder}
+                        onRenameFolder={handleRenamePlanningFolder}
+                        onDeleteFolder={handleDeletePlanningFolder}
+                        onUpdateTrailMetadata={handleUpdatePlanningTrailMetadata}
+                        onEditTrailOnMap={handleEditPlanningTrailOnMap}
+                        onDeleteTrail={handleDeletePlanningTrail}
+                        onSendTrailToActiveRoutes={handleSendPlanningTrailToActiveRoutes}
+                        onClose={() => setMobileTab('explore')}
+                      />
+                    </Suspense>
+                  </div>
+                ) : (
+                  <div className="overflow-y-auto flex-1">
+                    <Suspense fallback={null}>
+                      <ElevationProfileDrawer
+                        route={activeRoute}
+                        routes={routes}
+                        pois={pois}
+                        theme={theme}
+                        embedded
+                        isNavigating={isNavigatingRoute}
+                        routeDisplayMode={resolvedRouteDisplay.mode}
+                        backgroundRouteIds={pinnedBackgroundRouteIds}
+                        unseenSharedCount={unseenSharedCount}
+                        onSelectRoute={handleSelectRoute}
+                        onStartNavigation={handleStartRouteNavigation}
+                        onStopNavigation={handleStopRouteNavigation}
+                        onOpenImporter={currentUser ? handleOpenMapStorage : undefined}
+                        onOpenRoutePlanner={() => {
+                          setMobileDisplayMode('planning');
+                          setMobilePlanningOverlay('plan-route');
+                          setMobileSheetExpanded(true);
+                        }}
+                        onDeleteRoute={handleDeleteRoute}
+                        onShareRoute={handleOpenShareModal}
+                        onViewSharedTab={() => setUnseenSharedCount(0)}
+                        onDuplicateSharedRoute={handleDuplicateSharedRoute}
+                        onDismissSharedRoute={handleDismissSharedRoute}
+                        onRenameRoute={handleRenameRoute}
+                        onChangeRouteColor={handleChangeRouteColor}
+                        onToggleRouteVisibility={handleToggleRouteVisibility}
+                        onToggleBackgroundRoute={handleToggleBackgroundRoute}
+                        onClearBackgroundRoutes={handleClearBackgroundRoutes}
+                        onReverseRoute={handleReverseRoute}
+                        onEditRouteInPlanner={handleEditRouteInPlanner}
+                        onSendToPlanningDb={
+                          currentUser ? (r) => setSendToPlanningRouteTarget(r) : undefined
+                        }
+                        onClose={() => setMobileTab('explore')}
+                        onHoverPoint={handleHoverElevationChart}
+                        onSelectPoint={(pt) =>
+                          handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
+                        }
+                        onFlyToRoute={handleFlyToRoute}
+                        onFitAllRoutes={() => {
+                          const visibleTargets = [
+                            ...(resolvedRouteDisplay.activeRouteToDisplay
+                              ? [resolvedRouteDisplay.activeRouteToDisplay]
+                              : []),
+                            ...resolvedRouteDisplay.backgroundRoutesToDisplay,
+                          ];
+                          fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
+                        }}
+                      />
+                    </Suspense>
+                  </div>
+                )}
               </div>
-            ) : mobileTab === 'routes' ? (
-              <div className="max-h-[60vh] overflow-y-auto">
-                <Suspense fallback={null}>
-                  <ElevationProfileDrawer
-                  route={activeRoute}
-                  routes={routes}
-                  pois={pois}
-                  theme={theme}
-                  embedded
-                  isNavigating={isNavigatingRoute}
-                  routeDisplayMode={resolvedRouteDisplay.mode}
-                  backgroundRouteIds={pinnedBackgroundRouteIds}
-                  unseenSharedCount={unseenSharedCount}
-                  onSelectRoute={handleSelectRoute}
-                  onStartNavigation={handleStartRouteNavigation}
-                  onStopNavigation={handleStopRouteNavigation}
-                  onOpenImporter={() => {
-                    setMobileTab('offline');
-                    setMobilePlanningOverlay(null);
-                  }}
-                  onOpenRoutePlanner={() => {
-                    setMobileDisplayMode('planning');
-                    setMobilePlanningOverlay('plan-route');
-                    setMobileSheetExpanded(true);
-                  }}
-                  onDeleteRoute={handleDeleteRoute}
-                  onShareRoute={handleOpenShareModal}
-                  onViewSharedTab={() => setUnseenSharedCount(0)}
-                  onDuplicateSharedRoute={handleDuplicateSharedRoute}
-                  onDismissSharedRoute={handleDismissSharedRoute}
-                  onRenameRoute={handleRenameRoute}
-                  onChangeRouteColor={handleChangeRouteColor}
-                  onToggleRouteVisibility={handleToggleRouteVisibility}
-                  onToggleBackgroundRoute={handleToggleBackgroundRoute}
-                  onClearBackgroundRoutes={handleClearBackgroundRoutes}
-                  onReverseRoute={handleReverseRoute}
-                  onEditRouteInPlanner={handleEditRouteInPlanner}
-                  onSendToPlanningDb={
-                    currentUser ? (r) => setSendToPlanningRouteTarget(r) : undefined
-                  }
-                  onClose={() => setMobileTab('explore')}
-                  onHoverPoint={handleHoverElevationChart}
-                  onSelectPoint={(pt) =>
-                    handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
-                  }
-                  onFlyToRoute={handleFlyToRoute}
-                  onFitAllRoutes={() => {
-                    const visibleTargets = [
-                      ...(resolvedRouteDisplay.activeRouteToDisplay
-                        ? [resolvedRouteDisplay.activeRouteToDisplay]
-                        : []),
-                      ...resolvedRouteDisplay.backgroundRoutesToDisplay,
-                    ];
-                    fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
-                  }}
-                />
-                </Suspense>
+            ) : mobileTab === 'map-edit' ? (
+              <div dir="rtl" className="p-3.5 space-y-2 max-h-[58vh] overflow-y-auto">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold flex items-center gap-1.5">
+                    <Pencil className="w-4 h-4 text-amber-500" />
+                    <span>עריכת מפה</span>
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setMobileTab('explore')}
+                    className={`p-1 rounded-lg ${t.hoverRow}`}
+                    title="סגור"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileTab('explore');
+                      startAddPoiPick();
+                    }}
+                    className={`w-full text-right p-2.5 rounded-xl border flex items-center gap-2.5 text-xs font-bold ${t.subCard}`}
+                  >
+                    <Plus className="w-4 h-4 text-sky-500 shrink-0" />
+                    <span>הוסף נקודה (POI) על המפה</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openMapEditRoadMode('edit-road')}
+                    className={`w-full text-right p-2.5 rounded-xl border flex items-center gap-2.5 text-xs font-bold ${t.subCard}`}
+                  >
+                    <MapPin className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>עריכת דרך / סימון שבילים</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openMapEditRoadMode('add-road')}
+                    className={`w-full text-right p-2.5 rounded-xl border flex items-center gap-2.5 text-xs font-bold ${t.subCard}`}
+                  >
+                    <PenTool className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <span>הוספת דרך חדשה</span>
+                  </button>
+                  {activeRoute && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileTab('explore');
+                        void handleEditRouteInPlanner(activeRoute);
+                      }}
+                      className={`w-full text-right p-2.5 rounded-xl border flex items-center gap-2.5 text-xs font-bold ${t.subCard}`}
+                    >
+                      <RouteIcon className="w-4 h-4 text-blue-500 shrink-0" />
+                      <span className="truncate">עריכת מסלול פעיל: {activeRoute.name}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileTab('explore');
+                      setIsOsmSyncFullPage(false);
+                      setIsOsmSyncOpen(true);
+                    }}
+                    className={`w-full text-right p-2.5 rounded-xl border flex items-center justify-between gap-2 text-xs font-bold ${t.subCard}`}
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <UploadCloud className="w-4 h-4 text-sky-500 shrink-0" />
+                      <span>סנכרון ל-OpenStreetMap</span>
+                    </span>
+                    {pendingOsmSyncCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-sky-600 text-white text-[10px] font-bold">
+                        {pendingOsmSyncCount}
+                      </span>
+                    )}
+                  </button>
+                </div>
               </div>
-            ) : mobileTab === 'record' ? (
-              <div className="max-h-[60vh] overflow-y-auto">
-                <TrackRecorderPanel
-                  theme={theme}
-                  isRecording={isRecordingTrack}
-                  isPaused={isRecordingPaused}
-                  elapsedSeconds={recordElapsedSeconds}
-                  distanceKm={recordedDistanceKm}
-                  ascentMeters={recordedAscentMeters}
-                  currentElevation={cursorCoords.ele}
-                  pointsCount={recordedCoords.length}
-                  onStartOrResume={handleStartOrResumeRecording}
-                  onPause={() => setIsRecordingPaused(true)}
-                  onSaveRoute={handleSaveRecordedTrack}
-                  onDiscard={handleDiscardRecordedTrack}
-                  onDropWaypoint={() => openAddPoiPanelAt({ lon: cursorCoords.lon, lat: cursorCoords.lat, ele: cursorCoords.ele })}
-                  onClose={() => setMobileTab('explore')}
-                />
-              </div>
-            ) : mobileTab === 'offline' ? (
+            ) : mobileTab === 'offline' && currentUser ? (
               <Suspense fallback={null}>
                 <MapStorageModal
                   isOpen
@@ -9407,97 +9978,16 @@ export const App: React.FC = () => {
                   onPoisAndRoutesImported={handleImportedData}
                 />
               </Suspense>
-            ) : (
-              /* Explore Peek Sheet: Quick Nearby POIs + 1-Tap Route Planner & Navigating Mode */
-              <div className="px-4 pb-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setMobileSheetExpanded(!mobileSheetExpanded)}
-                    className="text-xs font-bold flex items-center gap-1"
-                  >
-                    <span>בקרבתך ({nearbyPois.length})</span>
-                  </button>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      onClick={() => {
-                        setMobileDisplayMode('planning');
-                        setMobilePlanningOverlay('plan-route');
-                        exitTrailMarkingMode();
-                        setMobileSheetExpanded(true);
-                      }}
-                      className="px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
-                    >
-                      <PenTool className="w-3 h-3" />
-                      <span>תכנון</span>
-                    </button>
-                    {currentUser && (
-                      <button
-                        onClick={toggleTrailMarkingMode}
-                        aria-pressed={isTrailMarkingMode}
-                        className={`px-2.5 py-1 rounded-full text-white text-xs font-bold flex items-center gap-1 shadow-sm ${
-                          isTrailMarkingMode ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'
-                        }`}
-                      >
-                        <MapPin className="w-3 h-3" />
-                        <span>סימון שבילים</span>
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        void NavigationHeadingService.requestCompassPermissionIfNeeded();
-                        applyLocationTransition('activate-tracking');
-                        setMobileDisplayMode('navigating');
-                        setMobileNavOverlay(null);
-                      }}
-                      className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm"
-                    >
-                      <Navigation className="w-3 h-3" />
-                      <span>ניווט</span>
-                    </button>
-                  </div>
-                </div>
-
-                {mobileSheetExpanded &&
-                  (nearbyPois.length > 0 ? (
-                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-0.5">
-                      {nearbyPois.map(({ poi, distKm }) => (
-                          <button
-                            key={poi.id}
-                            onClick={() => handleSelectPoi(poi)}
-                            className={`shrink-0 w-44 text-right p-2.5 rounded-2xl border hover:border-emerald-500 transition-all space-y-1 ${t.subCard}`}
-                          >
-                            <div className="flex items-center justify-between text-xs">
-                              <PoiCategoryIcon
-                                category={poi.category}
-                                subcategory={poi.subcategory}
-                                size={18}
-                              />
-                              <span className={`font-mono ${t.muted}`}>{distKm.toFixed(1)} ק״מ</span>
-                            </div>
-                            <div className="text-xs font-bold truncate" dir="auto">
-                              {poi.nameHe}
-                            </div>
-                            <div className={`text-xs font-mono ${t.muted}`}>
-                              גובה {poi.ele !== null ? `${poi.ele}m` : '---'}
-                            </div>
-                          </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className={`text-xs py-2 ${t.muted}`}>טוען נקודות עניין באזור...</div>
-                  ))}
-              </div>
-            )}
+            ) : null}
             </div>
           </div>
+          )}
 
-          {/* Mobile Bottom 4-Tab Menu Bar (ONLY in Planning Mode!) */}
+          {/* Mobile Bottom Menu Bar (Planning Mode: מסלולים, עריכת מפה, Login/Account — Map accessed via Search / closing sheet) */}
           <nav
             className={`h-16 border-t px-2 flex items-center justify-around shrink-0 z-40 pb-safe ${t.navBar}`}
           >
             {[
-              { id: 'explore' as const, label: 'מפה', icon: <MapIcon className="w-5 h-5" /> },
               {
                 id: 'routes' as const,
                 label: 'מסלולים',
@@ -9512,38 +10002,25 @@ export const App: React.FC = () => {
                   </span>
                 ),
               },
-              ...(currentUser
-                ? [
-                    {
-                      id: 'planning-db' as const,
-                      label: 'מאגר תכנון',
-                      icon: <FolderTree className="w-5 h-5" />,
-                    },
-                  ]
-                : []),
               {
-                id: 'record' as const,
-                label: 'הקלטה',
-                icon: (
-                  <span className="relative flex items-center justify-center w-5 h-5">
-                    <span
-                      className={`w-3.5 h-3.5 rounded-full border-2 border-current flex items-center justify-center ${
-                        isRecordingTrack ? 'text-rose-500' : ''
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                    </span>
-                  </span>
-                ),
+                id: 'map-edit' as const,
+                label: 'עריכת מפה',
+                icon: <Pencil className="w-5 h-5" />,
               },
-              { id: 'offline' as const, label: 'אופליין', icon: <HardDrive className="w-5 h-5" /> },
             ].map((tab) => {
-              const active = mobileTab === tab.id && !mobilePlanningOverlay;
+              const active =
+                (tab.id === 'routes'
+                  ? mobileTab === 'routes' || mobileTab === 'planning-db'
+                  : mobileTab === tab.id) && !mobilePlanningOverlay;
               return (
                 <button
                   key={tab.id}
                   onClick={() => {
-                    setMobileTab(tab.id);
+                    setMobileTab((prev) =>
+                      prev === tab.id || (tab.id === 'routes' && prev === 'planning-db')
+                        ? 'explore'
+                        : tab.id
+                    );
                     setMobilePlanningOverlay(null);
                     exitTrailMarkingMode();
                   }}
@@ -9556,6 +10033,60 @@ export const App: React.FC = () => {
                 </button>
               );
             })}
+
+            <button
+              type="button"
+              data-testid="mobile-bottom-auth-btn"
+              disabled={isAuthBusy}
+              onClick={() => {
+                setMobileSpeedDial(null);
+                exitTrailMarkingMode();
+                if (currentUser) {
+                  setMobileTab('explore');
+                  setMobileSheetExpanded(true);
+                  setMobilePlanningOverlay((prev) =>
+                    prev === 'google-account' ? null : 'google-account'
+                  );
+                } else {
+                  void handleSignInGoogle();
+                }
+              }}
+              className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 text-xs font-bold transition-colors ${
+                mobilePlanningOverlay === 'google-account'
+                  ? 'text-emerald-500'
+                  : ''
+              }`}
+              title={
+                currentUser
+                  ? `${currentUser.displayName || currentUser.email || 'חשבון Google'} (אופליין / התנתקות)`
+                  : 'התחבר עם Google'
+              }
+            >
+              {currentUser ? (
+                <span className="relative inline-flex items-center justify-center">
+                  {currentUser.photoURL ? (
+                    <img
+                      src={currentUser.photoURL}
+                      alt={currentUser.displayName || 'Google'}
+                      referrerPolicy="no-referrer"
+                      className="w-5 h-5 rounded-full object-cover border border-emerald-500/60"
+                    />
+                  ) : (
+                    <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center">
+                      {(currentUser.displayName || currentUser.email || 'G').trim().charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                  <span
+                    className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border ${
+                      theme === 'topo-dark' ? 'border-slate-900' : 'border-white'
+                    } ${isOnline ? 'bg-emerald-500' : 'bg-amber-400'}`}
+                  />
+                </span>
+              ) : (
+                <GoogleGIcon className="w-5 h-5" />
+              )}
+              <span>{currentUser ? 'חשבון' : 'התחבר'}</span>
+            </button>
           </nav>
         </>
       )}
@@ -9585,6 +10116,8 @@ export const App: React.FC = () => {
               onSyncNow={handleSyncPendingNow}
               onSignOutGoogle={handleSignOutGoogle}
               onClose={() => setMobileNavOverlay(null)}
+              onOpenMapStorage={handleOpenMapStorage}
+              isOfflineReady={isOfflineReady}
             />
           ) : mobileNavOverlay === 'user-icon' ? (
             <UserIconPickerSheet
@@ -9666,6 +10199,31 @@ export const App: React.FC = () => {
               onDismissSharedPoi={handleDismissSharedPoi}
               onNotify={showToast}
             />
+          ) : mobileNavOverlay === 'record' ? (
+            <div className="max-h-[60vh] overflow-y-auto">
+              <TrackRecorderPanel
+                theme={theme}
+                isRecording={isRecordingTrack}
+                isPaused={isRecordingPaused}
+                elapsedSeconds={recordElapsedSeconds}
+                distanceKm={recordedDistanceKm}
+                ascentMeters={recordedAscentMeters}
+                currentElevation={cursorCoords.ele}
+                pointsCount={recordedCoords.length}
+                onStartOrResume={handleStartOrResumeRecording}
+                onPause={() => setIsRecordingPaused(true)}
+                onSaveRoute={() => void handleSaveRecordedTrack()}
+                onDiscard={() => handleDiscardRecordedTrack()}
+                onDropWaypoint={() =>
+                  openAddPoiPanelAt({
+                    lon: cursorCoords.lon,
+                    lat: cursorCoords.lat,
+                    ele: cursorCoords.ele,
+                  })
+                }
+                onClose={() => setMobileNavOverlay(null)}
+              />
+            </div>
           ) : (
             /* Slim Single-Row Navigation Telemetry Strip */
             <div className="px-3.5 py-2.5 flex items-center justify-between gap-2">
@@ -9701,6 +10259,33 @@ export const App: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMobileNavOverlay((prev) => (prev === 'record' ? null : 'record'))
+                  }
+                  className={`px-2.5 h-9 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
+                    isRecordingTrack
+                      ? 'bg-rose-600 border-rose-500 text-white'
+                      : t.pillBtn
+                  }`}
+                  title="פאנל הקלטת מסלול (שמירה / השהייה)"
+                  aria-label="פרטי הקלטה"
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isRecordingTrack && !isRecordingPaused
+                        ? 'bg-white animate-pulse'
+                        : isRecordingTrack
+                          ? 'bg-amber-300'
+                          : 'bg-rose-500'
+                    }`}
+                  />
+                  <span dir="ltr" className="tabular-nums">
+                    {isRecordingTrack ? formatDuration(recordElapsedSeconds) : 'הקלטה'}
+                  </span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => {
@@ -9750,8 +10335,8 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Desktop Modal: Offline Maps Manager & KML/GPX Importer */}
-      {!isMobile && isStorageOpen && (
+      {/* Desktop Modal: Offline Maps Manager & KML/GPX Importer (Logged-in users only) */}
+      {!isMobile && currentUser && isStorageOpen && (
         <Suspense fallback={null}>
           <MapStorageModal
             isOpen
