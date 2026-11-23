@@ -257,6 +257,28 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         )
       );
 
+      // Alice CAN create a header-only override and reject invalid empty headers
+      await assertSucceeds(
+        aliceDb.doc('poi_overrides/or-header-1').set(
+          makeOverrideDoc('or-header-1', 'alice-uid', {
+            deleted: false,
+            category: null,
+            subcategory: null,
+            nameHe: 'תחילת מעלה ברוש',
+          })
+        )
+      );
+      await assertFails(
+        aliceDb.doc('poi_overrides/or-header-empty').set(
+          makeOverrideDoc('or-header-empty', 'alice-uid', {
+            deleted: false,
+            category: null,
+            subcategory: null,
+            nameHe: '',
+          })
+        )
+      );
+
       // Nabi deletes user-poi-b, restores bundled-1, and deletes bundled-1 override doc
       await assertSucceeds(nabiUpperDb.doc('global_pois/user-poi-b').delete());
       await assertSucceeds(

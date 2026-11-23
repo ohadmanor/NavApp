@@ -81,6 +81,7 @@ export interface PoiOverrideRecord {
   deleted?: boolean;
   category?: PoiCategory | null;
   subcategory?: string | null;
+  nameHe?: string | null;
   updatedByUid?: string;
   updatedAt: string;
 }

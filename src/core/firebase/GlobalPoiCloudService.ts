@@ -137,6 +137,7 @@ export interface FirestorePoiOverrideDoc {
   deleted: boolean;
   category: PoiCategory | null;
   subcategory: string | null;
+  nameHe?: string | null;
   updatedByUid: string;
   updatedAt: string;
 }
@@ -233,12 +234,21 @@ export function toFirestorePoiOverride(
   const subcategory = hasCat
     ? normalizeSubcategoryForCategory(override.category!, override.subcategory)
     : null;
+  const trimmedNameHe =
+    typeof override.nameHe === 'string' ? override.nameHe.trim().slice(0, 200) : '';
+  const nameEntry =
+    trimmedNameHe.length > 0
+      ? { nameHe: trimmedNameHe }
+      : override.nameHe === null
+        ? { nameHe: null }
+        : {};
 
   return {
     id: toSafeFirestorePoiId(override.id),
     deleted: Boolean(override.deleted),
     category,
     subcategory,
+    ...nameEntry,
     updatedByUid: (override.updatedByUid || actorUid).slice(0, 128),
     updatedAt: String(override.updatedAt || new Date().toISOString()).slice(0, 64),
   };
@@ -252,6 +262,14 @@ export function fromFirestorePoiOverride(
   if (typeof data.updatedAt !== 'string' || !data.updatedAt.trim()) return null;
   const deleted = Boolean(data.deleted);
   const hasCat = isValidPoiCategory(data.category);
+  const trimmedNameHe =
+    typeof data.nameHe === 'string' ? data.nameHe.trim().slice(0, 200) : '';
+  const nameEntry =
+    trimmedNameHe.length > 0
+      ? { nameHe: trimmedNameHe }
+      : data.nameHe === null
+        ? { nameHe: null }
+        : {};
   return {
     id: String(data.id || id),
     deleted,
@@ -262,6 +280,7 @@ export function fromFirestorePoiOverride(
           typeof data.subcategory === 'string' ? data.subcategory : undefined
         )
       : null,
+    ...nameEntry,
     updatedByUid: typeof data.updatedByUid === 'string' ? data.updatedByUid : undefined,
     updatedAt: data.updatedAt,
   };
@@ -393,6 +412,56 @@ export class GlobalPoiCloudService {
     }
   }
 
+  private static async publishGlobalOverrideDoc(params: {
+    poiId: string;
+    isUserPoi: boolean;
+    poi?: PoiRecord;
+    updatedPoi?: PoiRecord;
+    override: PoiOverrideRecord;
+    actor: NavUser;
+    permissionErrorMessage: string;
+  }): Promise<{ synced: boolean; queuedOffline: boolean }> {
+    const { poiId, isUserPoi, poi, updatedPoi, override, actor, permissionErrorMessage } = params;
+    const services = getFirebaseServices();
+    if (!services || !isOnlineNow()) {
+      enqueuePendingOverride({
+        override,
+        actorUid: actor.uid,
+        ...(isUserPoi && updatedPoi ? { userPoiUpdate: updatedPoi } : {}),
+        queuedAt: new Date().toISOString(),
+      });
+      return { synced: false, queuedOffline: true };
+    }
+
+    const safeId = toSafeFirestorePoiId(poiId);
+    try {
+      if (isUserPoi && updatedPoi) {
+        const docPayload = toFirestoreGlobalPoi(
+          updatedPoi,
+          actor.uid,
+          poi?.createdByUid ?? updatedPoi.createdByUid,
+          poi?.createdAt ?? updatedPoi.createdAt
+        );
+        await setDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId), docPayload);
+      } else {
+        const docPayload = toFirestorePoiOverride(override, actor.uid);
+        await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId), docPayload);
+      }
+      return { synced: true, queuedOffline: false };
+    } catch (err) {
+      if (isPermissionDeniedError(err)) {
+        throw new Error(permissionErrorMessage);
+      }
+      enqueuePendingOverride({
+        override,
+        actorUid: actor.uid,
+        ...(isUserPoi && updatedPoi ? { userPoiUpdate: updatedPoi } : {}),
+        queuedAt: new Date().toISOString(),
+      });
+      return { synced: false, queuedOffline: true };
+    }
+  }
+
   static async publishCategoryOverride(
     poi: PoiRecord,
     updatedPoi: PoiRecord,
@@ -404,53 +473,30 @@ export class GlobalPoiCloudService {
     const actor = user!;
     const updatedAt = updatedPoi.updatedAt || new Date().toISOString();
     const isUserPoi = poi.id.startsWith('user-poi-');
+    const savedOv = isUserPoi ? undefined : await PoiManager.getOverride(poi.id).catch(() => undefined);
+    const preservedName =
+      typeof savedOv?.nameHe === 'string' && savedOv.nameHe.trim()
+        ? savedOv.nameHe.trim().slice(0, 200)
+        : undefined;
     const override: PoiOverrideRecord = {
       id: poi.id,
       deleted: false,
       category: updatedPoi.category,
       subcategory: updatedPoi.subcategory,
+      ...(preservedName !== undefined ? { nameHe: preservedName } : {}),
       updatedByUid: actor.uid,
       updatedAt,
     };
 
-    const services = getFirebaseServices();
-    if (!services || !isOnlineNow()) {
-      enqueuePendingOverride({
-        override,
-        actorUid: actor.uid,
-        ...(isUserPoi ? { userPoiUpdate: updatedPoi } : {}),
-        queuedAt: new Date().toISOString(),
-      });
-      return { synced: false, queuedOffline: true };
-    }
-
-    const safeId = toSafeFirestorePoiId(poi.id);
-    try {
-      if (isUserPoi) {
-        const docPayload = toFirestoreGlobalPoi(
-          updatedPoi,
-          actor.uid,
-          poi.createdByUid,
-          poi.createdAt
-        );
-        await setDoc(doc(services.firestore, GLOBAL_POIS_COLLECTION, safeId), docPayload);
-      } else {
-        const docPayload = toFirestorePoiOverride(override, actor.uid);
-        await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId), docPayload);
-      }
-      return { synced: true, queuedOffline: false };
-    } catch (err) {
-      if (isPermissionDeniedError(err)) {
-        throw new Error('אין הרשאה לעדכן את קטגוריית הנקודה.');
-      }
-      enqueuePendingOverride({
-        override,
-        actorUid: actor.uid,
-        ...(isUserPoi ? { userPoiUpdate: updatedPoi } : {}),
-        queuedAt: new Date().toISOString(),
-      });
-      return { synced: false, queuedOffline: true };
-    }
+    return this.publishGlobalOverrideDoc({
+      poiId: poi.id,
+      isUserPoi,
+      poi,
+      updatedPoi,
+      override,
+      actor,
+      permissionErrorMessage: 'אין הרשאה לעדכן את קטגוריית הנקודה.',
+    });
   }
 
   static async publishCategoryReset(
@@ -464,41 +510,95 @@ export class GlobalPoiCloudService {
       return { synced: true, queuedOffline: false };
     }
     const actor = user!;
+    const savedOv = await PoiManager.getOverride(poiId).catch(() => undefined);
+    const preservedName =
+      typeof savedOv?.nameHe === 'string' && savedOv.nameHe.trim()
+        ? savedOv.nameHe.trim().slice(0, 200)
+        : undefined;
     const override: PoiOverrideRecord = {
       id: poiId,
       deleted: false,
       category: null,
       subcategory: null,
+      ...(preservedName !== undefined ? { nameHe: preservedName } : {}),
       updatedByUid: actor.uid,
       updatedAt: new Date().toISOString(),
     };
 
-    const services = getFirebaseServices();
-    if (!services || !isOnlineNow()) {
-      enqueuePendingOverride({
-        override,
-        actorUid: actor.uid,
-        queuedAt: new Date().toISOString(),
-      });
-      return { synced: false, queuedOffline: true };
-    }
+    return this.publishGlobalOverrideDoc({
+      poiId,
+      isUserPoi: false,
+      override,
+      actor,
+      permissionErrorMessage: 'אין הרשאה לאפס את קטגוריית הנקודה.',
+    });
+  }
 
-    try {
-      const safeId = toSafeFirestorePoiId(poiId);
-      const docPayload = toFirestorePoiOverride(override, actor.uid);
-      await setDoc(doc(services.firestore, POI_OVERRIDES_COLLECTION, safeId), docPayload);
-      return { synced: true, queuedOffline: false };
-    } catch (err) {
-      if (isPermissionDeniedError(err)) {
-        throw new Error('אין הרשאה לאפס את קטגוריית הנקודה.');
-      }
-      enqueuePendingOverride({
-        override,
-        actorUid: actor.uid,
-        queuedAt: new Date().toISOString(),
-      });
-      return { synced: false, queuedOffline: true };
+  static async publishHeaderOverride(
+    poi: PoiRecord,
+    updatedPoi: PoiRecord,
+    user: NavUser | null | undefined
+  ): Promise<{ synced: boolean; queuedOffline: boolean }> {
+    if (!canUserAddOrEditPoi(user)) {
+      throw new Error('נדרשת התחברות עם Google כדי לשנות כותרת במפה הגלובלית.');
     }
+    const actor = user!;
+    const updatedAt = updatedPoi.updatedAt || new Date().toISOString();
+    const isUserPoi = poi.id.startsWith('user-poi-');
+    const savedOv = isUserPoi ? undefined : await PoiManager.getOverride(poi.id).catch(() => undefined);
+    const hasCat = isValidPoiCategory(savedOv?.category);
+    const trimmedName = String(updatedPoi.nameHe || updatedPoi.name || '').trim().slice(0, 200);
+    const override: PoiOverrideRecord = {
+      id: poi.id,
+      deleted: false,
+      category: hasCat ? savedOv!.category! : null,
+      subcategory: hasCat ? normalizeSubcategoryForCategory(savedOv!.category!, savedOv?.subcategory) : null,
+      nameHe: trimmedName,
+      updatedByUid: actor.uid,
+      updatedAt,
+    };
+
+    return this.publishGlobalOverrideDoc({
+      poiId: poi.id,
+      isUserPoi,
+      poi,
+      updatedPoi,
+      override,
+      actor,
+      permissionErrorMessage: 'אין הרשאה לעדכן את כותרת הנקודה.',
+    });
+  }
+
+  static async publishHeaderReset(
+    poiId: string,
+    user: NavUser | null | undefined
+  ): Promise<{ synced: boolean; queuedOffline: boolean }> {
+    if (!canUserAddOrEditPoi(user)) {
+      throw new Error('נדרשת התחברות עם Google כדי לאפס כותרת במפה הגלובלית.');
+    }
+    if (poiId.startsWith('user-poi-') || poiId.startsWith('import-')) {
+      return { synced: true, queuedOffline: false };
+    }
+    const actor = user!;
+    const savedOv = await PoiManager.getOverride(poiId).catch(() => undefined);
+    const hasCat = isValidPoiCategory(savedOv?.category);
+    const override: PoiOverrideRecord = {
+      id: poiId,
+      deleted: false,
+      category: hasCat ? savedOv!.category! : null,
+      subcategory: hasCat ? normalizeSubcategoryForCategory(savedOv!.category!, savedOv?.subcategory) : null,
+      nameHe: null,
+      updatedByUid: actor.uid,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return this.publishGlobalOverrideDoc({
+      poiId,
+      isUserPoi: false,
+      override,
+      actor,
+      permissionErrorMessage: 'אין הרשאה לאפס את כותרת הנקודה.',
+    });
   }
 
   static async deleteGlobalPoi(

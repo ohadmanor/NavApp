@@ -263,8 +263,64 @@ export class PoiManager {
   private static overriddenPoiIds = new Set<string>();
   private static originalBaseById = new Map<
     string,
-    { category: PoiCategory; subcategory: string; priority?: number }
+    {
+      category: PoiCategory;
+      subcategory: string;
+      priority?: number;
+      name: string;
+      nameHe: string;
+      nameEn: string;
+    }
   >();
+
+  private static captureOriginalBase(poi: PoiRecord): void {
+    if (poi.visibility === 'private') return;
+    if (!PoiManager.originalBaseById.has(poi.id)) {
+      PoiManager.originalBaseById.set(poi.id, {
+        category: poi.category,
+        subcategory: poi.subcategory,
+        priority: poi.priority,
+        name: poi.name,
+        nameHe: poi.nameHe,
+        nameEn: poi.nameEn,
+      });
+    }
+  }
+
+  private static applyHeaderNameToRecord(rec: PoiRecord, nextNameHe: string): void {
+    const prevNameHe = rec.nameHe;
+    rec.nameHe = nextNameHe;
+    rec.name = nextNameHe;
+    if (!/[\u0590-\u05FF]/.test(nextNameHe) || !rec.nameEn || rec.nameEn === prevNameHe) {
+      rec.nameEn = nextNameHe;
+    }
+  }
+
+  private static applyOverrideToPoiRecord(rec: PoiRecord, ov: PoiOverrideRecord): void {
+    const hasCatOverride = isValidPoiCategory(ov.category);
+    const trimmedNameHe = typeof ov.nameHe === 'string' ? ov.nameHe.trim().slice(0, 200) : '';
+    const hasNameOverride = trimmedNameHe.length > 0;
+    if (hasCatOverride) {
+      const nextCat = ov.category!;
+      const nextSub = normalizeSubcategoryForCategory(nextCat, ov.subcategory);
+      rec.category = nextCat;
+      rec.subcategory = nextSub;
+      rec.waterStatus = nextCat === 'water' ? rec.waterStatus : null;
+      rec.difficulty4x4 = nextCat === 'offroad' ? rec.difficulty4x4 : null;
+      rec.priority = getPoiSortPriority({
+        ...rec,
+        category: nextCat,
+        subcategory: nextSub,
+        priority: rec.id.startsWith('il-poi-') ? rec.priority : undefined,
+      });
+    }
+    if (hasNameOverride) {
+      PoiManager.applyHeaderNameToRecord(rec, trimmedNameHe);
+    }
+    if ((hasCatOverride || hasNameOverride) && ov.updatedAt) {
+      rec.updatedAt = ov.updatedAt;
+    }
+  }
 
   private static mergeWithOffroadCache(
     dbPois: PoiRecord[],
@@ -275,7 +331,8 @@ export class PoiManager {
     PoiManager.overriddenPoiIds.clear();
     for (const ov of overrides) {
       overrideMap.set(ov.id, ov);
-      if (!ov.deleted && isValidPoiCategory(ov.category)) {
+      const hasNameOverride = typeof ov.nameHe === 'string' && ov.nameHe.trim().length > 0;
+      if (!ov.deleted && (isValidPoiCategory(ov.category) || hasNameOverride)) {
         PoiManager.overriddenPoiIds.add(ov.id);
       }
     }
@@ -291,13 +348,7 @@ export class PoiManager {
 
     for (const rawPoi of dbPois) {
       const copy = { ...normalizeLegacyPoiRecord(rawPoi) };
-      if (!PoiManager.originalBaseById.has(copy.id)) {
-        PoiManager.originalBaseById.set(copy.id, {
-          category: copy.category,
-          subcategory: copy.subcategory,
-          priority: copy.priority,
-        });
-      }
+      PoiManager.captureOriginalBase(copy);
 
       const ov = overrideMap.get(copy.id);
       const isDeleted = Boolean(ov?.deleted);
@@ -308,20 +359,8 @@ export class PoiManager {
           lon: copy.lon,
           lat: copy.lat,
         });
-      } else if (ov && isValidPoiCategory(ov.category)) {
-        const nextCat = ov.category;
-        const nextSub = normalizeSubcategoryForCategory(nextCat, ov.subcategory);
-        copy.category = nextCat;
-        copy.subcategory = nextSub;
-        copy.waterStatus = nextCat === 'water' ? copy.waterStatus : null;
-        copy.difficulty4x4 = nextCat === 'offroad' ? copy.difficulty4x4 : null;
-        copy.priority = getPoiSortPriority({
-          ...copy,
-          category: nextCat,
-          subcategory: nextSub,
-          priority: copy.id.startsWith('il-poi-') ? copy.priority : undefined,
-        });
-        if (ov.updatedAt) copy.updatedAt = ov.updatedAt;
+      } else if (ov) {
+        PoiManager.applyOverrideToPoiRecord(copy, ov);
       }
 
       const idx = combinedRaw.length;
@@ -332,7 +371,9 @@ export class PoiManager {
       }
 
       if (copy.id.startsWith('osm-') || copy.id.startsWith('il-poi-')) {
-        const baseCat = PoiManager.originalBaseById.get(copy.id)?.category || copy.category;
+        const baseSnap = PoiManager.originalBaseById.get(copy.id);
+        const baseCat = baseSnap?.category || copy.category;
+        const baseName = baseSnap?.nameHe || copy.nameHe || copy.name;
         const gk = `${Math.floor(copy.lon / step)},${Math.floor(copy.lat / step)}`;
         let bucket = canonicalGrid.get(gk);
         if (!bucket) {
@@ -341,7 +382,7 @@ export class PoiManager {
         }
         bucket.push({
           index: idx,
-          normName: normalizePoiNameForMerge(copy.nameHe || copy.name),
+          normName: normalizePoiNameForMerge(baseName),
           baseCategory: baseCat,
           deleted: isDeleted,
         });
@@ -350,13 +391,7 @@ export class PoiManager {
 
     for (const orRaw of PoiManager.offroadPoisCache) {
       const orPoiBase = normalizeLegacyPoiRecord(orRaw);
-      if (!PoiManager.originalBaseById.has(orPoiBase.id)) {
-        PoiManager.originalBaseById.set(orPoiBase.id, {
-          category: orPoiBase.category,
-          subcategory: orPoiBase.subcategory,
-          priority: orPoiBase.priority,
-        });
-      }
+      PoiManager.captureOriginalBase(orPoiBase);
 
       const ov = overrideMap.get(orPoiBase.id);
       if (ov?.deleted) {
@@ -374,20 +409,8 @@ export class PoiManager {
       }
 
       const orPoi = { ...orPoiBase };
-      if (ov && isValidPoiCategory(ov.category)) {
-        const nextCat = ov.category;
-        const nextSub = normalizeSubcategoryForCategory(nextCat, ov.subcategory);
-        orPoi.category = nextCat;
-        orPoi.subcategory = nextSub;
-        orPoi.waterStatus = nextCat === 'water' ? orPoi.waterStatus : null;
-        orPoi.difficulty4x4 = nextCat === 'offroad' ? orPoi.difficulty4x4 : null;
-        orPoi.priority = getPoiSortPriority({
-          ...orPoi,
-          category: nextCat,
-          subcategory: nextSub,
-          priority: undefined,
-        });
-        if (ov.updatedAt) orPoi.updatedAt = ov.updatedAt;
+      if (ov) {
+        PoiManager.applyOverrideToPoiRecord(orPoi, ov);
       }
 
       const gx = Math.floor(orPoi.lon / step);
@@ -552,11 +575,7 @@ export class PoiManager {
         const changedOrMissing: PoiRecord[] = [];
         for (const r of records) {
           osmNextIds.add(r.id);
-          PoiManager.originalBaseById.set(r.id, {
-            category: r.category,
-            subcategory: r.subcategory,
-            priority: r.priority,
-          });
+          PoiManager.captureOriginalBase(r);
           const prev = existingById.get(r.id);
           if (
             !prev ||
@@ -603,11 +622,7 @@ export class PoiManager {
                 defaultSource: 'Off-Road.io (קהילת השטח)',
                 basePriority: 220,
               });
-              PoiManager.originalBaseById.set(rec.id, {
-                category: rec.category,
-                subcategory: rec.subcategory,
-                priority: rec.priority,
-              });
+              PoiManager.captureOriginalBase(rec);
               parsedOffroad.push(rec);
               // Yield periodically so hydrating ~62k off-road POIs never freezes map rendering
               if (i > 0 && i % 5000 === 0) {
@@ -668,21 +683,21 @@ export class PoiManager {
   ): Promise<PoiRecord> {
     const updatedAt = new Date().toISOString();
     const isPrivate = poi.visibility === 'private';
-    if (!isPrivate && !PoiManager.originalBaseById.has(poi.id)) {
-      PoiManager.originalBaseById.set(poi.id, {
-        category: poi.category,
-        subcategory: poi.subcategory,
-        priority: poi.priority,
-      });
-    }
+    PoiManager.captureOriginalBase(poi);
 
     const normalizedSub = normalizeSubcategoryForCategory(nextCategory, nextSubcategory);
     if (!isPrivate) {
+      const prevOv = await db.poiOverrides.get(poi.id).catch(() => undefined);
+      const preservedNameHe =
+        typeof prevOv?.nameHe === 'string' && prevOv.nameHe.trim()
+          ? prevOv.nameHe.trim().slice(0, 200)
+          : undefined;
       await db.poiOverrides.put({
         id: poi.id,
         deleted: false,
         category: nextCategory,
         subcategory: normalizedSub,
+        ...(preservedNameHe ? { nameHe: preservedNameHe } : {}),
         ...(updatedByUid ? { updatedByUid } : {}),
         updatedAt,
       });
@@ -733,57 +748,208 @@ export class PoiManager {
     return updated;
   }
 
-  static async resetPoiOverride(
+  static async updatePoiHeader(
+    poi: PoiRecord,
+    nextNameHe: string,
+    updatedByUid?: string
+  ): Promise<PoiRecord> {
+    const trimmed = String(nextNameHe || '').trim().slice(0, 200);
+    if (!trimmed) {
+      throw new Error('כותרת הנקודה אינה יכולה להיות ריקה');
+    }
+    const updatedAt = new Date().toISOString();
+    const isPrivate = poi.visibility === 'private';
+    PoiManager.captureOriginalBase(poi);
+
+    if (!isPrivate) {
+      const prevOv = await db.poiOverrides.get(poi.id).catch(() => undefined);
+      const hasPrevCat = isValidPoiCategory(prevOv?.category);
+      await db.poiOverrides.put({
+        id: poi.id,
+        deleted: false,
+        category: hasPrevCat ? prevOv!.category! : null,
+        subcategory: hasPrevCat
+          ? normalizeSubcategoryForCategory(prevOv!.category!, prevOv?.subcategory)
+          : null,
+        nameHe: trimmed,
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
+      });
+      PoiManager.deletedSignatures.delete(poi.id);
+      PoiManager.overriddenPoiIds.add(poi.id);
+    }
+
+    const updated: PoiRecord = {
+      ...poi,
+      ...(updatedByUid ? { updatedByUid } : {}),
+      updatedAt,
+    };
+    PoiManager.applyHeaderNameToRecord(updated, trimmed);
+
+    if (isPrivate || poi.id.startsWith('user-poi-') || poi.id.startsWith('import-')) {
+      await db.pois.put(updated);
+    }
+
+    const cachedIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poi.id);
+    if (cachedIdx >= 0) {
+      const nextCached: PoiRecord = {
+        ...PoiManager.offroadPoisCache[cachedIdx],
+        ...(updatedByUid ? { updatedByUid } : {}),
+        updatedAt,
+      };
+      PoiManager.applyHeaderNameToRecord(nextCached, trimmed);
+      PoiManager.offroadPoisCache[cachedIdx] = nextCached;
+    }
+
+    return updated;
+  }
+
+  private static async resetPoiOverrideField(
     poiId: string,
+    scope: 'category' | 'header',
     updatedByUid?: string
   ): Promise<PoiRecord | undefined> {
     const updatedAt = new Date().toISOString();
+    const prevOv = await db.poiOverrides.get(poiId).catch(() => undefined);
+    const hasPrevCat = isValidPoiCategory(prevOv?.category);
+    const prevNameHe =
+      typeof prevOv?.nameHe === 'string' && prevOv.nameHe.trim()
+        ? prevOv.nameHe.trim().slice(0, 200)
+        : null;
+
+    const nextCat = scope === 'category' ? null : hasPrevCat ? prevOv!.category! : null;
+    const nextSub =
+      nextCat !== null
+        ? normalizeSubcategoryForCategory(nextCat, prevOv?.subcategory)
+        : null;
+    const nextNameHe = scope === 'header' ? null : prevNameHe;
+
     if (poiId.startsWith('user-poi-') || poiId.startsWith('import-')) {
       await db.poiOverrides.delete(poiId);
     } else {
       await db.poiOverrides.put({
         id: poiId,
         deleted: false,
-        category: null,
-        subcategory: null,
+        category: nextCat,
+        subcategory: nextSub,
+        ...(scope === 'header' ? { nameHe: null } : nextNameHe ? { nameHe: nextNameHe } : {}),
         ...(updatedByUid ? { updatedByUid } : {}),
         updatedAt,
       });
     }
     PoiManager.deletedSignatures.delete(poiId);
-    PoiManager.overriddenPoiIds.delete(poiId);
+    if (nextCat !== null || nextNameHe !== null) {
+      PoiManager.overriddenPoiIds.add(poiId);
+    } else {
+      PoiManager.overriddenPoiIds.delete(poiId);
+    }
 
     const base = PoiManager.originalBaseById.get(poiId);
     const dbRec = await db.pois.get(poiId);
-    if (dbRec && base && (poiId.startsWith('user-poi-') || poiId.startsWith('import-'))) {
-      const restored: PoiRecord = {
-        ...dbRec,
-        category: base.category,
-        subcategory: base.subcategory,
-        priority: base.priority,
-        ...(updatedByUid ? { updatedByUid } : {}),
-        updatedAt,
-      };
-      await db.pois.put(restored);
-      return restored;
+    if (dbRec) {
+      const normalized = normalizeLegacyPoiRecord(dbRec);
+      if (base) {
+        if (scope === 'category') {
+          normalized.category = base.category;
+          normalized.subcategory = base.subcategory;
+          normalized.priority = base.priority;
+        } else {
+          normalized.name = base.name;
+          normalized.nameHe = base.nameHe;
+          normalized.nameEn = base.nameEn;
+        }
+        if (updatedByUid) normalized.updatedByUid = updatedByUid;
+        normalized.updatedAt = updatedAt;
+        if (poiId.startsWith('user-poi-') || poiId.startsWith('import-')) {
+          await db.pois.put(normalized);
+        }
+      }
+      if (nextCat !== null || nextNameHe !== null) {
+        PoiManager.applyOverrideToPoiRecord(normalized, {
+          id: poiId,
+          deleted: false,
+          category: nextCat,
+          subcategory: nextSub,
+          nameHe: nextNameHe,
+          updatedAt,
+        });
+      }
+      return normalized;
     }
 
-    if (dbRec) {
-      return normalizeLegacyPoiRecord(dbRec);
-    }
     const cached = PoiManager.offroadPoisCache.find((p) => p.id === poiId);
     if (cached && base) {
       const idx = PoiManager.offroadPoisCache.findIndex((p) => p.id === poiId);
       const restored: PoiRecord = {
         ...cached,
-        category: base.category,
-        subcategory: base.subcategory,
-        priority: base.priority,
+        ...(scope === 'category'
+          ? {
+              category: base.category,
+              subcategory: base.subcategory,
+              priority: base.priority,
+            }
+          : {
+              name: base.name,
+              nameHe: base.nameHe,
+              nameEn: base.nameEn,
+            }),
       };
+      if (nextCat !== null || nextNameHe !== null) {
+        PoiManager.applyOverrideToPoiRecord(restored, {
+          id: poiId,
+          deleted: false,
+          category: nextCat,
+          subcategory: nextSub,
+          nameHe: nextNameHe,
+          updatedAt,
+        });
+      }
       if (idx >= 0) PoiManager.offroadPoisCache[idx] = restored;
       return restored;
     }
     return cached ? normalizeLegacyPoiRecord(cached) : undefined;
+  }
+
+  static async resetPoiOverride(
+    poiId: string,
+    updatedByUid?: string
+  ): Promise<PoiRecord | undefined> {
+    return PoiManager.resetPoiOverrideField(poiId, 'category', updatedByUid);
+  }
+
+  static async resetPoiHeaderOverride(
+    poiId: string,
+    updatedByUid?: string
+  ): Promise<PoiRecord | undefined> {
+    return PoiManager.resetPoiOverrideField(poiId, 'header', updatedByUid);
+  }
+
+  static async rollbackPoiUpdate(
+    prevPoi: PoiRecord,
+    prevOverride?: PoiOverrideRecord
+  ): Promise<void> {
+    const isPrivate = prevPoi.visibility === 'private';
+    if (!isPrivate) {
+      if (prevOverride) {
+        await db.poiOverrides.put(prevOverride).catch(() => undefined);
+        const hasName = typeof prevOverride.nameHe === 'string' && prevOverride.nameHe.trim().length > 0;
+        if (!prevOverride.deleted && (isValidPoiCategory(prevOverride.category) || hasName)) {
+          PoiManager.overriddenPoiIds.add(prevPoi.id);
+        } else {
+          PoiManager.overriddenPoiIds.delete(prevPoi.id);
+        }
+      } else {
+        await db.poiOverrides.delete(prevPoi.id).catch(() => undefined);
+        PoiManager.overriddenPoiIds.delete(prevPoi.id);
+      }
+    }
+    if (isPrivate || prevPoi.id.startsWith('user-poi-') || prevPoi.id.startsWith('import-')) {
+      await db.pois.put(prevPoi).catch(() => undefined);
+    }
+    const cachedIdx = PoiManager.offroadPoisCache.findIndex((p) => p.id === prevPoi.id);
+    if (cachedIdx >= 0) {
+      PoiManager.offroadPoisCache[cachedIdx] = { ...prevPoi };
+    }
   }
 
   static async deletePoi(poi: PoiRecord, updatedByUid?: string): Promise<DeletedPoiUndoSnapshot> {
@@ -819,6 +985,9 @@ export class PoiManager {
         deleted: true,
         category: previousOverride?.category ?? null,
         subcategory: previousOverride?.subcategory ?? null,
+        ...(typeof previousOverride?.nameHe === 'string' && previousOverride.nameHe.trim()
+          ? { nameHe: previousOverride.nameHe.trim() }
+          : {}),
         ...(updatedByUid ? { updatedByUid } : {}),
         updatedAt,
       });
@@ -996,7 +1165,8 @@ export class PoiManager {
         remote.updatedAt > local.updatedAt ||
         Boolean(remote.deleted) !== Boolean(local.deleted) ||
         (remote.category ?? null) !== (local.category ?? null) ||
-        (remote.subcategory ?? null) !== (local.subcategory ?? null);
+        (remote.subcategory ?? null) !== (local.subcategory ?? null) ||
+        (remote.nameHe ?? null) !== (local.nameHe ?? null);
       if (differs && (!local || remote.updatedAt >= local.updatedAt)) {
         ovToPut.push(remote);
       }

@@ -240,7 +240,9 @@ export function sanitizePoiOverrides(raw: unknown): PoiOverrideRecord[] {
     const updatedAt = rec.updatedAt.trim();
     const deleted = typeof rec.deleted === 'boolean' ? rec.deleted : undefined;
     const hasCat = isValidPoiCategory(rec.category);
-    if (!deleted && !hasCat) continue;
+    const trimmedName = typeof rec.nameHe === 'string' ? rec.nameHe.trim().slice(0, 200) : '';
+    const hasName = trimmedName.length > 0;
+    if (!deleted && !hasCat && !hasName) continue;
 
     const clean: PoiOverrideRecord = {
       id,
@@ -251,6 +253,7 @@ export function sanitizePoiOverrides(raw: unknown): PoiOverrideRecord[] {
             subcategory: normalizeSubcategoryForCategory(rec.category!, rec.subcategory),
           }
         : {}),
+      ...(hasName ? { nameHe: trimmedName } : {}),
       updatedAt,
     };
     const prev = byId.get(id);

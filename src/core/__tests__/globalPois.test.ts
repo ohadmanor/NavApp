@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PoiOverrideRecord, PoiRecord } from '../db/NavDatabase';
 import {
@@ -1004,5 +1005,147 @@ describe('GlobalPoiCloudService', () => {
       vectorCategory: getVectorPoiLayerCategory('name-water-point'),
     });
     expect(matched?.id).toBe('osm-n1734276790');
+  });
+
+  it('allows updating and resetting POI headers independently of category overrides and syncs to Firestore', async () => {
+    const { PoiManager } = await import('../pois/PoiManager');
+    const { GlobalPoiCloudService } = await import('../firebase/GlobalPoiCloudService');
+    const { sanitizePoiOverrides } = await import('../preferences/UserStateSyncService');
+
+    const regularUser = {
+      uid: 'editor-uid',
+      email: 'editor@example.com',
+      displayName: 'Editor',
+      photoURL: null,
+    };
+
+    const bundledOffroad: PoiRecord = {
+      id: 'or-brosh-1',
+      name: 'תחילת מעלה ברוש. מעלה יחסית נוח ולא אתגרי, למעט הצורך לעלות את הגובה לעיר (כ 250 מטר)',
+      nameHe:
+        'תחילת מעלה ברוש. מעלה יחסית נוח ולא אתגרי, למעט הצורך לעלות את הגובה לעיר (כ 250 מטר)',
+      nameEn: 'Maale Brosh Start',
+      category: 'offroad',
+      subcategory: 'offroad_ascent',
+      lon: 34.815,
+      lat: 30.825,
+      ele: 611,
+      waterStatus: null,
+      difficulty4x4: 'עבירות קשה / מכשול שטח',
+      descHe: 'עלייה לרוחב הרכס',
+      descEn: '',
+      source: 'Off-Road.io (קהילת השטח)',
+      wikipedia: null,
+      userNotes: '',
+    };
+    await mockDb.pois.put(bundledOffroad);
+
+    // 1. Update header only on bundled POI
+    const renamed = await PoiManager.updatePoiHeader(
+      bundledOffroad,
+      'תחילת מעלה ברוש',
+      regularUser.uid
+    );
+    expect(renamed.nameHe).toBe('תחילת מעלה ברוש');
+    expect(renamed.name).toBe('תחילת מעלה ברוש');
+    expect(PoiManager.getOverriddenPoiIdsSnapshot()).toContain('or-brosh-1');
+
+    const pubHeader = await GlobalPoiCloudService.publishHeaderOverride(
+      bundledOffroad,
+      renamed,
+      regularUser
+    );
+    expect(pubHeader).toEqual({ synced: true, queuedOffline: false });
+    expect(firestoreStore.docs.get('poi_overrides/or-brosh-1')).toMatchObject({
+      id: 'or-brosh-1',
+      deleted: false,
+      category: null,
+      subcategory: null,
+      nameHe: 'תחילת מעלה ברוש',
+      updatedByUid: 'editor-uid',
+    });
+
+    // 2. Subsequent category update preserves the custom header both locally and in Firestore
+    const recategorized = await PoiManager.updatePoiCategory(
+      renamed,
+      'heritage',
+      'viewpoint',
+      regularUser.uid
+    );
+    expect(recategorized.nameHe).toBe('תחילת מעלה ברוש');
+    await GlobalPoiCloudService.publishCategoryOverride(renamed, recategorized, regularUser);
+    expect(firestoreStore.docs.get('poi_overrides/or-brosh-1')).toMatchObject({
+      category: 'heritage',
+      subcategory: 'viewpoint',
+      nameHe: 'תחילת מעלה ברוש',
+    });
+
+    // 3. Reload from IndexedDB applies both overrides
+    await mockDb.pois.put(bundledOffroad);
+    const reloaded = (await PoiManager.getAllPois()).find((p) => p.id === 'or-brosh-1')!;
+    expect(reloaded.nameHe).toBe('תחילת מעלה ברוש');
+    expect(reloaded.category).toBe('heritage');
+
+    // 4. Resetting header restores original base title while keeping category override
+    const headerReset = await PoiManager.resetPoiHeaderOverride('or-brosh-1', regularUser.uid);
+    expect(headerReset?.nameHe).toBe(bundledOffroad.nameHe);
+    expect(headerReset?.category).toBe('heritage');
+    await GlobalPoiCloudService.publishHeaderReset('or-brosh-1', regularUser);
+    expect(firestoreStore.docs.get('poi_overrides/or-brosh-1')).toMatchObject({
+      category: 'heritage',
+      subcategory: 'viewpoint',
+      nameHe: null,
+    });
+
+    // 5. Updating header on a user-poi-* updates global_pois doc directly
+    const userPoi: PoiRecord = {
+      id: 'user-poi-custom-1',
+      name: 'שם ישן',
+      nameHe: 'שם ישן',
+      nameEn: 'Old Name',
+      category: 'water',
+      subcategory: 'water_spring',
+      lon: 35.1,
+      lat: 31.2,
+      ele: 150,
+      waterStatus: 'מלא',
+      difficulty4x4: null,
+      descHe: '',
+      descEn: '',
+      source: 'User Field Report (דיווח מטייל)',
+      wikipedia: null,
+      userNotes: '',
+      createdByUid: regularUser.uid,
+      createdAt: '2026-02-01T10:00:00.000Z',
+    };
+    await mockDb.pois.put(userPoi);
+    const updatedUserPoi = await PoiManager.updatePoiHeader(
+      userPoi,
+      'Maale New Name',
+      regularUser.uid
+    );
+    await GlobalPoiCloudService.publishHeaderOverride(userPoi, updatedUserPoi, regularUser);
+    expect(firestoreStore.docs.get('global_pois/user-poi-custom-1')).toMatchObject({
+      name: 'Maale New Name',
+      nameHe: 'Maale New Name',
+      nameEn: 'Maale New Name',
+      createdByUid: regularUser.uid,
+      createdAt: '2026-02-01T10:00:00.000Z',
+    });
+
+    // 6. sanitizePoiOverrides preserves nameHe-only overrides & Inspector exposes header edit controls
+    expect(
+      sanitizePoiOverrides([
+        { id: 'or-brosh-1', deleted: false, category: null, nameHe: 'כותרת חדשה', updatedAt: '2026-02-02T10:00:00.000Z' },
+      ])
+    ).toEqual([
+      { id: 'or-brosh-1', deleted: false, nameHe: 'כותרת חדשה', updatedAt: '2026-02-02T10:00:00.000Z' },
+    ]);
+
+    const sheetSrc = fs.readFileSync('src/components/pois/PoiInspectorSheet.tsx', 'utf-8');
+    expect(sheetSrc).toContain('data-testid="poi-edit-header-btn"');
+    expect(sheetSrc).toContain('data-testid="poi-header-input"');
+    expect(sheetSrc).toContain('data-testid="poi-save-header-btn"');
+    expect(sheetSrc).toContain('data-testid="poi-reset-header-btn"');
   });
 });

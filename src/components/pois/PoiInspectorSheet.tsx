@@ -18,8 +18,10 @@ import {
   Share2,
   Users,
   EyeOff,
+  Pencil,
+  Check,
 } from 'lucide-react';
-import { db, type PoiCategory, type PoiRecord } from '../../core/db/NavDatabase';
+import { type PoiCategory, type PoiRecord } from '../../core/db/NavDatabase';
 import type { NavUser } from '../../core/firebase/AuthService';
 import { GlobalPoiCloudService } from '../../core/firebase/GlobalPoiCloudService';
 import { PrivatePoiCloudService } from '../../core/firebase/PrivatePoiCloudService';
@@ -122,6 +124,10 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   const [draftSubcategory, setDraftSubcategory] = useState<string>('heritage_site');
   const [hasCategoryOverride, setHasCategoryOverride] = useState(false);
   const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [isEditingHeader, setIsEditingHeader] = useState(false);
+  const [draftNameHe, setDraftNameHe] = useState('');
+  const [hasNameOverride, setHasNameOverride] = useState(false);
+  const [isSavingHeader, setIsSavingHeader] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
@@ -134,6 +140,8 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
     setSavedBanner(false);
     setSampledDemEle(poi.ele);
     setIsEditingCategory(false);
+    setIsEditingHeader(false);
+    setDraftNameHe(poi.nameHe || poi.name || '');
     setConfirmDelete(false);
     setConfirmPromote(false);
     setDraftCategory(poi.category);
@@ -145,15 +153,22 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
     });
     if (isPrivatePoi(poi)) {
       setHasCategoryOverride(false);
+      setHasNameOverride(false);
     } else {
       PoiManager.getOverride(poi.id)
         .then((ov) => {
           if (active) {
             setHasCategoryOverride(Boolean(ov && !ov.deleted && ov.category));
+            setHasNameOverride(
+              Boolean(ov && !ov.deleted && typeof ov.nameHe === 'string' && ov.nameHe.trim())
+            );
           }
         })
         .catch(() => {
-          if (active) setHasCategoryOverride(false);
+          if (active) {
+            setHasCategoryOverride(false);
+            setHasNameOverride(false);
+          }
         });
     }
     return () => {
@@ -169,7 +184,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
     ? poi.nameHe
     : hasHebrew(poi.name)
       ? poi.name
-      : poi.nameEn || poi.nameHe || poi.name;
+      : poi.nameHe || poi.nameEn || poi.name;
   const displayDesc = hasHebrew(poi.descHe) ? poi.descHe : poi.descEn || poi.descHe || '';
   const meta = POI_CATEGORY_META[poi.category] || POI_CATEGORY_META.heritage;
   const symbolSpec = getPoiSymbolSpec(poi.category, poi.subcategory);
@@ -234,16 +249,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             : `הנקודה הועברה לקטגוריית ${POI_CATEGORY_SPECS[draftCategory].labelHe}`
         );
       } catch (err: any) {
-        if (!isPrivate) {
-          if (prevOverride) {
-            await db.poiOverrides.put(prevOverride).catch(() => undefined);
-          } else {
-            await db.poiOverrides.delete(poi.id).catch(() => undefined);
-          }
-        }
-        if (isPrivate || poi.id.startsWith('user-poi-')) {
-          await db.pois.put(poi).catch(() => undefined);
-        }
+        await PoiManager.rollbackPoiUpdate(poi, prevOverride);
         onNotify?.(err?.message || 'עדכון הקטגוריה בשרת נכשל');
       }
     } finally {
@@ -270,13 +276,68 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
           );
         }
       } catch (err: any) {
-        if (prevOverride) {
-          await db.poiOverrides.put(prevOverride).catch(() => undefined);
-        }
+        await PoiManager.rollbackPoiUpdate(poi, prevOverride);
         onNotify?.(err?.message || 'איפוס הקטגוריה בשרת נכשל');
       }
     } finally {
       setIsSavingCategory(false);
+    }
+  };
+
+  const handleSaveHeaderChange = async () => {
+    const trimmed = draftNameHe.trim().slice(0, 200);
+    if (!trimmed || isSavingHeader || !canEditCategory || !currentUser) return;
+    setIsSavingHeader(true);
+    const prevOverride = isPrivate
+      ? undefined
+      : await PoiManager.getOverride(poi.id).catch(() => undefined);
+    try {
+      const updated = await PoiManager.updatePoiHeader(poi, trimmed, currentUser.uid);
+      try {
+        const syncRes = isPrivate
+          ? await PrivatePoiCloudService.publishPrivatePoi(updated, currentUser)
+          : await GlobalPoiCloudService.publishHeaderOverride(poi, updated, currentUser);
+        setHasNameOverride(!isPrivate && !poi.id.startsWith('user-poi-'));
+        setIsEditingHeader(false);
+        onPoiUpdated(updated);
+        onNotify?.(
+          syncRes.queuedOffline
+            ? 'כותרת הנקודה עודכנה מקומית ותסונכרן בחיבור לרשת'
+            : 'כותרת הנקודה עודכנה'
+        );
+      } catch (err: any) {
+        await PoiManager.rollbackPoiUpdate(poi, prevOverride);
+        onNotify?.(err?.message || 'עדכון כותרת הנקודה בשרת נכשל');
+      }
+    } finally {
+      setIsSavingHeader(false);
+    }
+  };
+
+  const handleResetHeader = async () => {
+    if (isSavingHeader || !canEditCategory || !currentUser) return;
+    setIsSavingHeader(true);
+    const prevOverride = await PoiManager.getOverride(poi.id).catch(() => undefined);
+    try {
+      const restored = await PoiManager.resetPoiHeaderOverride(poi.id, currentUser.uid);
+      try {
+        const syncRes = await GlobalPoiCloudService.publishHeaderReset(poi.id, currentUser);
+        setHasNameOverride(false);
+        setIsEditingHeader(false);
+        if (restored) {
+          onPoiUpdated(restored);
+          onNotify?.(
+            syncRes.queuedOffline
+              ? 'הכותרת אופסה לברירת המחדל (יסונכרן בחיבור לרשת)'
+              : 'הכותרת אופסה לברירת המחדל'
+          );
+        }
+      } catch (err: any) {
+        await PoiManager.rollbackPoiUpdate(poi, prevOverride);
+        onNotify?.(err?.message || 'איפוס הכותרת בשרת נכשל');
+      }
+    } finally {
+      setIsSavingHeader(false);
     }
   };
 
@@ -388,15 +449,130 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
                 <span>גלובלי</span>
               </span>
             )}
-            {hasCategoryOverride && (
+            {(hasCategoryOverride || hasNameOverride) && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 border border-amber-500/35 text-amber-500">
                 עודכן ע״י המשתמש
               </span>
             )}
           </div>
-          <h3 className="text-base font-bold leading-snug" dir="auto">
-            {displayName}
-          </h3>
+          {isEditingHeader && canEditCategory ? (
+            <div className="space-y-1.5 pt-0.5">
+              <textarea
+                data-testid="poi-header-input"
+                rows={2}
+                maxLength={200}
+                autoFocus
+                dir="auto"
+                value={draftNameHe}
+                onChange={(e) => setDraftNameHe(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSaveHeaderChange();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setIsEditingHeader(false);
+                  }
+                }}
+                placeholder="הזן כותרת חדשה לנקודה..."
+                className={`w-full rounded-xl border px-2.5 py-1.5 text-sm font-bold leading-snug resize-none focus:outline-none focus:border-emerald-500 ${t.fieldBox}`}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                {hasNameOverride && !isPrivate && !poi.id.startsWith('user-poi-') ? (
+                  <button
+                    type="button"
+                    data-testid="poi-reset-header-btn"
+                    disabled={isSavingHeader}
+                    onClick={handleResetHeader}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-500 hover:underline disabled:opacity-50"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>איפוס לכותרת מקורית</span>
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingHeader(false)}
+                    className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.pillBtn}`}
+                  >
+                    ביטול
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="poi-save-header-btn"
+                    disabled={
+                      isSavingHeader || !draftNameHe.trim() || draftNameHe.trim() === displayName
+                    }
+                    onClick={handleSaveHeaderChange}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{isSavingHeader ? 'שומר...' : 'שמור כותרת'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <div className="flex items-start gap-1.5">
+                <h3 className="text-base font-bold leading-snug flex-1 min-w-0" dir="auto">
+                  {displayName}
+                </h3>
+                {!isSharedWithMe && (
+                  <button
+                    type="button"
+                    data-testid="poi-edit-header-btn"
+                    onClick={() => {
+                      setDraftNameHe(displayName);
+                      setIsEditingHeader((prev) => !prev);
+                      setIsEditingCategory(false);
+                      setConfirmDelete(false);
+                      setConfirmPromote(false);
+                    }}
+                    className={`p-1 rounded-lg border transition-colors shrink-0 ${t.pillBtn}`}
+                    title={canEditCategory ? 'שנה כותרת נקודה' : 'התחבר כדי לשנות כותרת'}
+                    aria-label="שנה כותרת נקודה"
+                  >
+                    {canEditCategory ? (
+                      <Pencil className="w-3.5 h-3.5 text-sky-500" />
+                    ) : (
+                      <Lock className="w-3.5 h-3.5 text-amber-500" />
+                    )}
+                  </button>
+                )}
+              </div>
+              {isEditingHeader && !canEditCategory && (
+                <div className={`p-2.5 rounded-xl border space-y-2 text-xs ${t.subCard}`}>
+                  <p className="font-semibold leading-relaxed">
+                    שינוי כותרת הנקודה מתעדכן גלובלית במפה ופתוח למשתמשים מחוברים בלבד.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    {onSignInGoogle && (
+                      <button
+                        type="button"
+                        disabled={isAuthBusy}
+                        onClick={onSignInGoogle}
+                        className="flex-1 py-1.5 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                      >
+                        <LogIn className="w-3.5 h-3.5" />
+                        <span>{isAuthBusy ? 'מתחבר...' : 'התחבר עם Google כדי לערוך'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingHeader(false)}
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold ${t.pillBtn}`}
+                    >
+                      סגור
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <p className={`text-xs truncate ${t.muted}`}>
             {poi.nameEn && poi.nameEn !== displayName ? `${poi.nameEn} • ` : ''}
             {poi.source}

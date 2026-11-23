@@ -181,6 +181,7 @@ service cloud.firestore {
           'deleted',
           'category',
           'subcategory',
+          'nameHe',
           'updatedByUid',
           'updatedAt'
         ]) &&
@@ -198,6 +199,7 @@ service cloud.firestore {
         data.deleted is bool &&
         (data.category == null || (data.category is string && validPoiCategory(data.category))) &&
         (data.subcategory == null || (data.subcategory is string && data.subcategory.size() <= 64)) &&
+        (!('nameHe' in data) || data.nameHe == null || (data.nameHe is string && data.nameHe.size() > 0 && data.nameHe.size() <= 200)) &&
         data.updatedByUid is string &&
         data.updatedByUid.size() > 0 &&
         data.updatedByUid.size() <= 128 &&
@@ -728,7 +730,10 @@ service cloud.firestore {
         request.resource.data.updatedByUid == request.auth.uid &&
         (request.resource.data.deleted == true
           ? isPoiDeleteAdmin()
-          : signedIn() && request.resource.data.category != null);
+          : signedIn() && (
+              request.resource.data.category != null ||
+              ('nameHe' in request.resource.data && request.resource.data.nameHe != null)
+            ));
       allow update: if validPoiOverride(request.resource.data, poiId) &&
         request.resource.data.updatedByUid == request.auth.uid &&
         ((request.resource.data.deleted == true || resource.data.deleted == true)
