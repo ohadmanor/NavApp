@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { db } from '../db/NavDatabase';
+import { communityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
+import {
+  TRAIL_OVERLAY_BOOT_STORAGE_KEY,
+  TrailAnnotationsCloudService,
+} from '../firebase/TrailAnnotationsCloudService';
 import {
   globalPixelToLonLat,
   TILE_EXTENT,
@@ -10,12 +16,21 @@ import {
   detectTrailColorFromProps,
   detectTrailNameFromProps,
   detectTrailNumberFromProps,
+  getTrailGeometryCacheId,
   parseTrailWayId,
   trailWayIdFromMvtId,
   validateTrailAnnotationInput,
+  type TrailAnnotationRecord,
+  type TrailGeometryCacheRecord,
 } from '../trails/TrailAnnotationTypes';
+import { computeRoadBounds, type CommunityRoadRecord } from '../trails/CommunityRoadTypes';
 import { PMTilesSearchService } from '../search/PMTilesSearchService';
 import { findIsraelTrailMatch } from '../trails/IsraelTrailsService';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function createWay(
   featureId: string,
@@ -187,5 +202,176 @@ describe('community trail annotation identity and geometry', () => {
 
     const israelSearch = service.search('11420', { filter: 'routes' });
     expect(israelSearch.some((r) => r.id.startsWith('israel-trail:') && r.ref.includes('11420'))).toBe(true);
+  });
+
+  it('bootstraps trail overlay synchronously from boot storage, emits Dexie cache before remote sync, and resolves community:road:* from Dexie', async () => {
+    const storeMap = new Map<string, string>();
+    const memoryStorage: Storage = {
+      get length() {
+        return storeMap.size;
+      },
+      clear: () => storeMap.clear(),
+      getItem: (key: string) => storeMap.get(key) ?? null,
+      key: (idx: number) => Array.from(storeMap.keys())[idx] ?? null,
+      removeItem: (key: string) => {
+        storeMap.delete(key);
+      },
+      setItem: (key: string, value: string) => {
+        storeMap.set(key, value);
+      },
+    };
+    vi.stubGlobal('window', { localStorage: memoryStorage });
+
+    const service = new TrailAnnotationsCloudService();
+    memoryStorage.setItem(
+      TRAIL_OVERLAY_BOOT_STORAGE_KEY,
+      JSON.stringify({
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              id: 'boot-15129',
+              geometry: { type: 'MultiLineString', coordinates: [[[34.98, 30.94], [34.99, 30.95]]] },
+              properties: { trailId: 't-15129', wayId: 'osm:way:555', number: '15129', color: '#2563eb' },
+            },
+          ],
+        },
+        searchItems: [
+          {
+            id: 't-15129',
+            name: 'חוצה מכתש גדול',
+            number: '15129',
+            color: '#2563eb',
+            description: '',
+            lon: 34.98,
+            lat: 30.94,
+          },
+        ],
+      })
+    );
+    const boot = service.getBootOverlaySnapshot();
+    expect(boot.geojson.features).toHaveLength(1);
+    expect(boot.searchItems[0].number).toBe('15129');
+
+    const cachedAnn: TrailAnnotationRecord = {
+      id: 't-15129',
+      schemaVersion: 1,
+      wayIds: ['osm:way:555'],
+      color: '#2563eb',
+      name: 'חוצה מכתש גדול',
+      number: '15129',
+      description: '',
+      status: 'active',
+      revision: 2,
+      lastHistoryId: '2-h',
+      geometryPath: 'trail_annotations/t-15129/geometry/2-h.json',
+      selectionReleaseId: 'release-1',
+      createdByUid: 'u1',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedByUid: 'u1',
+      updatedAt: '2026-01-02T00:00:00Z',
+    };
+    const geomMap = new Map<string, TrailGeometryCacheRecord>([
+      [
+        getTrailGeometryCacheId('release-1', 'osm:way:555'),
+        {
+          id: getTrailGeometryCacheId('release-1', 'osm:way:555'),
+          wayId: 'osm:way:555',
+          releaseId: 'release-1',
+          geometry: { type: 'MultiLineString', coordinates: [[[34.981, 30.941], [34.991, 30.951]]] },
+          layer: 0,
+          highwayClass: 'track',
+          highwaySubclass: 'grade3',
+        },
+      ],
+    ]);
+
+    vi.spyOn(db.trailAnnotations, 'toArray').mockResolvedValue([cachedAnn]);
+    vi.spyOn(db.trailGeometryCache, 'get').mockImplementation((async (id: string) =>
+      geomMap.get(id)) as any);
+    vi.spyOn(db.trailGeometryCache, 'where').mockImplementation((() => ({
+      equals: () => ({ toArray: async () => [] }),
+    })) as any);
+
+    let resolveRemote!: (val: { annotations: TrailAnnotationRecord[]; source: 'server' }) => void;
+    vi.spyOn(service, 'loadPublishedAnnotations').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRemote = resolve;
+        })
+    );
+
+    const emittedCoords: number[][] = [];
+    const syncPromise = service.bootstrapAndSyncOverlay('release-1', (overlay) => {
+      const feat = overlay.geojson.features[0] as GeoJSON.Feature<GeoJSON.MultiLineString> | undefined;
+      if (feat?.geometry?.coordinates?.[0]?.[0]) {
+        emittedCoords.push([...feat.geometry.coordinates[0][0]]);
+      }
+    });
+
+    // Wait briefly for Dexie cached phase to complete while remote fetch is still pending
+    await new Promise((r) => setTimeout(r, 20));
+    expect(emittedCoords).toHaveLength(1);
+    expect(emittedCoords[0][0]).toBeCloseTo(34.981, 4);
+
+    // Update cached geometry and settle remote fetch -> emits refreshed coordinates & persists boot storage
+    geomMap.set(getTrailGeometryCacheId('release-1', 'osm:way:555'), {
+      id: getTrailGeometryCacheId('release-1', 'osm:way:555'),
+      wayId: 'osm:way:555',
+      releaseId: 'release-1',
+      geometry: { type: 'MultiLineString', coordinates: [[[34.989, 30.949], [34.999, 30.959]]] },
+      layer: 0,
+      highwayClass: 'track',
+      highwaySubclass: 'grade3',
+    });
+    resolveRemote({ annotations: [{ ...cachedAnn, revision: 3 }], source: 'server' });
+    await syncPromise;
+
+    expect(emittedCoords).toHaveLength(2);
+    expect(emittedCoords[1][0]).toBeCloseTo(34.989, 4);
+    expect((service.getBootOverlaySnapshot().geojson.features[0] as any).geometry.coordinates[0][0][0]).toBeCloseTo(
+      34.989,
+      4
+    );
+
+    // Verify HighwayWayGeometryService resolves community:road:* from Dexie even when memory cache is empty
+    vi.spyOn(communityRoadsCloudService, 'getCachedRoads').mockReturnValue([]);
+    const dexieRoad: CommunityRoadRecord = {
+      id: 'road-15129',
+      schemaVersion: 1,
+      kind: 'new',
+      coordinates: [
+        [34.985, 30.942],
+        [34.995, 30.952],
+      ],
+      bounds: computeRoadBounds([
+        [34.985, 30.942],
+        [34.995, 30.952],
+      ]),
+      highwayClass: 'track',
+      name: 'שביל 15129',
+      description: '',
+      oneway: 0,
+      allow4x4: true,
+      allowFoot: true,
+      allowBicycle: true,
+      anchors: [],
+      status: 'active',
+      revision: 1,
+      lastHistoryId: '1-r',
+      createdByUid: 'u1',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedByUid: 'u1',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    vi.spyOn(db.communityRoads, 'get').mockResolvedValue(dexieRoad);
+    const resolvedCommunity = await new HighwayWayGeometryService(new TileRoadGraphBuilder()).resolveWayAt(
+      'community:road:road-15129',
+      0,
+      0,
+      'release-1'
+    );
+    expect(resolvedCommunity.geometry.coordinates[0][0]).toEqual([34.985, 30.942]);
   });
 });

@@ -8,6 +8,7 @@ import {
   type DecodedWay,
 } from './TileRoadGraphBuilder';
 import { evaluateEdgeAccess } from './RoutingProfiles';
+import { isRemovedOsmRoad } from '../trails/CommunityRoadTypes';
 
 export interface RoadSnapCandidate {
   coord: [number, number];
@@ -63,11 +64,16 @@ function getWayLabel(way: DecodedWay): string {
   return label;
 }
 
+/** Max ground distance at which a road-editor point snaps onto an existing road segment. */
+export const ROAD_SEGMENT_SNAP_METERS = 2;
+/** Max ground distance at which a road-editor point snaps onto an existing road vertex. */
+export const ROAD_VERTEX_SNAP_METERS = 2;
+
 export async function snapPointToExistingRoads(
   lon: number,
   lat: number,
-  maxRadiusMeters = 35,
-  vertexSnapMeters = 8,
+  maxRadiusMeters = ROAD_SEGMENT_SNAP_METERS,
+  vertexSnapMeters = ROAD_VERTEX_SNAP_METERS,
   excludeCommunityRoadId?: string | null,
   excludeOsmWayId?: string | null
 ): Promise<RoadSnapCandidate | null> {
@@ -95,6 +101,8 @@ export async function snapPointToExistingRoads(
     if (way.points.length >= 2) candidateWays.push(way);
   }
   for (const road of activeCommunityRoads) {
+    // Removed roads keep their OSM way excluded above but are not something to snap onto
+    if (isRemovedOsmRoad(road)) continue;
     candidateWays.push({
       featureId: `community:road:${road.id}`,
       layer: 0,

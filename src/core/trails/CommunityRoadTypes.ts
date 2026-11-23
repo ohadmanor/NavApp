@@ -110,6 +110,12 @@ export interface CommunityRoadSnapshot {
   trailNumber?: string;
   trailName?: string;
   status: CommunityRoadStatus;
+  /**
+   * Tombstone for a whole OSM way (`kind === 'osm-override'` only): the way is hidden from the map,
+   * routing and snapping, and nothing is drawn in its place. The geometry is kept so it can be restored.
+   * Differs from `status: 'deleted'`, which discards the override and brings the original OSM way back.
+   */
+  removed?: boolean;
 }
 
 export interface CommunityRoadRecord extends CommunityRoadSnapshot {
@@ -314,4 +320,144 @@ export function validateCommunityRoadInput(input: {
     return `סוג פני השטח מוגבל ל-${COMMUNITY_ROAD_LIMITS.maxSurfaceLength} תווים.`;
   }
   return null;
+}
+
+/** True for an active tombstone that removes a whole OSM way from the map and routing. */
+export function isRemovedOsmRoad(
+  road: Pick<CommunityRoadRecord, 'status' | 'kind' | 'removed'>
+): boolean {
+  return road.status === 'active' && road.kind === 'osm-override' && road.removed === true;
+}
+
+/**
+ * Extracts deduplicated positive numeric OSM way IDs overridden by active `osm-override` community roads
+ * (including removed-road tombstones, whose OSM way must stay hidden).
+ */
+export function extractOverriddenOsmWayIds(
+  roads: ReadonlyArray<Pick<CommunityRoadRecord, 'status' | 'kind' | 'sourceOsmWayId'>>
+): number[] {
+  const ids = new Set<number>();
+  for (const road of roads) {
+    if (road.status !== 'active' || road.kind !== 'osm-override' || !road.sourceOsmWayId) {
+      continue;
+    }
+    const raw = road.sourceOsmWayId.replace('osm:way:', '');
+    const id = Number(raw);
+    if (Number.isSafeInteger(id) && id > 0) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids).sort((a, b) => a - b);
+}
+
+const TRAIL_COLOUR_NAME_BY_HEX: Record<string, string> = {
+  '#dc2626': 'red',
+  '#2563eb': 'blue',
+  '#16a34a': 'green',
+  '#334155': 'black',
+};
+
+/**
+ * Tags a community road the way the base vector tiles tag an OSM highway (`class`, `subclass`,
+ * `colour`), so the base-map road layers can draw it exactly like the roads around it.
+ */
+export function toBaseMapRoadTags(
+  road: Pick<CommunityRoadSnapshot, 'highwayClass' | 'trailColor'>
+): { class: string; subclass?: string; colour?: string } {
+  const colourName = TRAIL_COLOUR_NAME_BY_HEX[road.trailColor || ''];
+  const colour = colourName ? { colour: colourName } : {};
+  switch (road.highwayClass) {
+    case 'unclassified':
+    case 'residential':
+    case 'living_street':
+      return { class: 'minor', subclass: road.highwayClass, ...colour };
+    case 'path':
+    case 'footway':
+    case 'cycleway':
+    case 'bridleway':
+    case 'steps':
+    case 'pedestrian':
+      return { class: 'path', subclass: road.highwayClass, ...colour };
+    default:
+      return { class: road.highwayClass, ...colour };
+  }
+}
+
+/**
+ * Converts active community road records into the GeoJSON FeatureCollection rendered by MapLibre.
+ */
+export function buildCommunityRoadsGeoJSON(
+  roads: readonly CommunityRoadRecord[]
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const road of roads) {
+    if (road.status !== 'active' || road.coordinates.length < 2) continue;
+    if (isRemovedOsmRoad(road)) continue;
+    features.push({
+      type: 'Feature',
+      properties: {
+        ...toBaseMapRoadTags(road),
+        roadId: road.id,
+        kind: road.kind,
+        highwayClass: road.highwayClass,
+        tracktype: road.tracktype || '',
+        name: road.name || '',
+        trailColor: road.trailColor || '',
+        trailNumber: road.trailNumber || '',
+        trailName: road.trailName || '',
+      },
+      geometry: {
+        type: 'LineString',
+        coordinates: road.coordinates,
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Removed OSM roads as line features (`role: 'removed-road'`), drawn as ghosts in road-edit mode so
+ * they can be selected and restored.
+ */
+export function buildRemovedRoadFeatures(
+  roads: readonly CommunityRoadRecord[],
+  excludeRoadId?: string | null
+): GeoJSON.Feature[] {
+  const features: GeoJSON.Feature[] = [];
+  for (const road of roads) {
+    if (!isRemovedOsmRoad(road) || road.coordinates.length < 2 || road.id === excludeRoadId) continue;
+    features.push({
+      type: 'Feature',
+      properties: { role: 'removed-road', roadId: road.id },
+      geometry: { type: 'LineString', coordinates: road.coordinates },
+    });
+  }
+  return features;
+}
+
+/**
+ * Filters out community-trail annotation features whose underlying way is superseded by an active community road.
+ */
+export function filterTrailOverlayByCommunityRoads(
+  trailOverlay: GeoJSON.FeatureCollection,
+  roads: ReadonlyArray<Pick<CommunityRoadRecord, 'id' | 'status' | 'kind' | 'sourceOsmWayId'>>
+): GeoJSON.FeatureCollection {
+  const overriddenTrailWayIds = new Set<string>();
+  for (const road of roads) {
+    if (road.status !== 'active') continue;
+    overriddenTrailWayIds.add(`community:road:${road.id}`);
+    if (road.kind === 'osm-override' && road.sourceOsmWayId) {
+      overriddenTrailWayIds.add(road.sourceOsmWayId);
+    }
+  }
+  if (overriddenTrailWayIds.size === 0) {
+    return trailOverlay;
+  }
+  return {
+    type: 'FeatureCollection',
+    features: trailOverlay.features.filter((f) => {
+      const wid = f.properties?.wayId;
+      return typeof wid !== 'string' || !overriddenTrailWayIds.has(wid);
+    }),
+  };
 }

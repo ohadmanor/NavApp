@@ -120,6 +120,12 @@ export interface CommunityRoadSnapshot {
   allowBicycle: boolean;
   anchors: RoadConnectionAnchor[];
   status: CommunityRoadStatus;
+  /**
+   * Removed-road tombstone (`osm-override` only): the whole OSM way is hidden from the map, routing
+   * and snapping and nothing is drawn in its place. Unlike `status: 'deleted'`, which discards the
+   * override and brings the original OSM way back. Never synced to OSM.
+   */
+  removed?: boolean;
 }
 
 export interface CommunityRoadRecord extends CommunityRoadSnapshot {
@@ -155,7 +161,8 @@ Bump Dexie schema from `version(8)` to `version(9)`:
 Follow the exact pattern of [`TrailAnnotationsCloudService.ts`](../../src/core/firebase/TrailAnnotationsCloudService.ts):
 - `loadCommunityRoads()`: Fetch newest active/deleted records from Firestore (with Dexie fallback when offline) and maintain an in-memory spatial cache (`CommunityRoadRecord[]`) accessible synchronously/asynchronously by both the map overlay and `TileRoadGraphBuilder`.
 - `saveCommunityRoad(...)`: Transactional create/update with `expectedRevision` optimistic locking (`TrailAnnotationConflictError`-equivalent conflict handling) + immutable `history` event.
-- `deleteCommunityRoad(...)`: Soft delete (`status: 'deleted'`) with audit history.
+- `deleteCommunityRoad(...)`: Soft delete (`status: 'deleted'`) with audit history. For an `osm-override` this discards the override, so the original OSM way returns.
+- `removeOsmRoad(...)`: Deletes a whole OSM way from the app by saving an `osm-override` tombstone (`removed: true`). The road editor's "מחק דרך" button uses it for OSM roads; removed roads show as dashed red ghost lines in road-edit mode and can be restored from there.
 - `loadCommunityRoadHistory(roadId, cursor)`: Paginated audit log.
 
 ---
@@ -205,14 +212,10 @@ To connect `community_roads` cleanly:
 
 ### 5.1 MapLibre Layers in [`App.tsx`](../../src/App.tsx)
 
-Add a dedicated GeoJSON source `community-roads-src` and layers placed **below** `community-trails-casing` and `saved-routes-line`:
-- `community-roads-casing`: subtle dark/light casing for contrast.
-- `community-roads-line`: styled with a `match` expression on `highwayClass`:
-  - `track`: dashed brown/ochre line (`#92400e` / `#d97706`)
-  - `path` / `footway`: fine dotted line
-  - `cycleway`: dashed teal/blue line
-  - `service` / `unclassified`: solid light road fill with casing
-- `community-roads-label`: optional symbol layer showing `name` at zoom ≥ 14.
+Add a dedicated GeoJSON source `community-roads-src`. Community roads and OSM overrides must look exactly like the base map, so they have no style of their own (see [`communityTrailLayers.ts`](../../src/core/style/communityTrailLayers.ts)):
+- **Line layers**: one copy of every base highway line layer (`casing-track`, `track-right`, `path-path`, `road-minor`, …), named `community-roads-<base layer id>`, bound to `community-roads-src` and inserted directly above the layer it copies. The copies are made after theme / map-style / visibility styling, and live visibility and paint updates are routed to them through `getCommunityRoadBaseLayerId`, so they never drift from the base style. Bridge/tunnel variants are not copied.
+- **Feature tags**: `buildCommunityRoadsGeoJSON` tags each road like the base vector tiles do (`class`, `subclass`, `tracktype`, `colour`) via `toBaseMapRoadTags`, so the copied filters and paint expressions apply unchanged.
+- `community-roads-label`: symbol layer showing the trail number / trail name / `name` at zoom ≥ 13.
 - **Draft Preview Source (`community-road-draft-src`)**:
   - Dashed emerald/cyan preview line for the road currently being drawn, vertex circles, and a snap target indicator ring.
 
@@ -220,7 +223,7 @@ Add a dedicated GeoJSON source `community-roads-src` and layers placed **below**
 
 Update [`TrailAnnotationTypes.ts`](../../src/core/trails/TrailAnnotationTypes.ts) and [`HighwayWayGeometryService.ts`](../../src/core/trails/HighwayWayGeometryService.ts):
 - Extend `parseTrailWayId(wayId)` to accept both `osm:way:<id>` and `community:road:<uuid>`.
-- When `handleTrailMapClick` in `App.tsx` is in `סימון שבילים` select mode, include `community-roads-line` in the queried layers:
+- When `handleTrailMapClick` in `App.tsx` is in `סימון שבילים` select mode, include the community-road line layers (`COMMUNITY_ROADS_LINE_LAYER_IDS`) in the queried layers:
   - Clicking a community road lets the user choose **"עריכת הדרך"** (open `CommunityRoadEditor` to edit geometry/class/access/history) OR **"סימון שביל על דרך זו"** (create/edit a `trail_annotations` entry referencing `community:road:<id>`).
 
 ---

@@ -112,6 +112,8 @@ async function fetchRoadsAndTrails(db) {
   for (const rDoc of roadsSnap.docs) {
     const data = rDoc.data();
     if (data.status !== 'active') continue;
+    // Removed-road tombstones are app-only: never delete or modify the way in OpenStreetMap
+    if (data.removed === true) continue;
     const coordinates = (data.coordinates || []).map((pt) =>
       Array.isArray(pt) ? pt : [Number(pt.lon), Number(pt.lat)]
     );

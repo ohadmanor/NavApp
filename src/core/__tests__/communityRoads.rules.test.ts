@@ -239,5 +239,42 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect(finalDoc.revision).toBe(3);
       expect(finalDoc.osmSync.syncedRevision).toBe(2);
     });
+
+    it('allows a removed-road tombstone on an osm-override and rejects `removed` on a new road', async () => {
+      const aliceDb = testEnv.authenticatedContext('alice').firestore();
+      const createWithSnapshot = (roadId: string, historyId: string, snap: Record<string, unknown>) =>
+        aliceDb.runTransaction(async (tx) => {
+          tx.set(aliceDb.doc(`community_roads/${roadId}`), roadDocData(1, historyId, 'alice', snap));
+          tx.set(aliceDb.doc(`community_roads/${roadId}/history/${historyId}`), {
+            revision: 1,
+            operation: 'create',
+            actorUid: 'alice',
+            occurredAt: firebase.firestore.FieldValue.serverTimestamp(),
+            previous: null,
+            next: snap,
+            reason: 'הסרת דרך מהמפה',
+          });
+        });
+
+      await assertSucceeds(
+        createWithSnapshot(
+          ROAD_ID,
+          '1-create-removed',
+          roadSnapshot({ kind: 'osm-override', sourceOsmWayId: 'osm:way:777001', removed: true })
+        )
+      );
+
+      // Only an OSM way can be tombstoned, and the flag is only ever `true`
+      await assertFails(
+        createWithSnapshot('road-test-0002', '1-create-bad-kind', roadSnapshot({ removed: true }))
+      );
+      await assertFails(
+        createWithSnapshot(
+          'road-test-0003',
+          '1-create-bad-flag',
+          roadSnapshot({ kind: 'osm-override', sourceOsmWayId: 'osm:way:777002', removed: false })
+        )
+      );
+    });
   }
 );

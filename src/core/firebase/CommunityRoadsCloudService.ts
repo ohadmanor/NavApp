@@ -3,6 +3,7 @@ import {
   doc,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   runTransaction,
@@ -13,6 +14,7 @@ import {
 import { db } from '../db/NavDatabase';
 import {
   computeRoadBounds,
+  getDefaultAccessForHighwayClass,
   isCommunityHighwayClass,
   validateCommunityRoadInput,
   type CommunityHighwayClass,
@@ -34,8 +36,51 @@ import { AuthService, type NavUser } from './AuthService';
 import { getFirebaseServices } from './firebaseApp';
 
 const COMMUNITY_ROADS_COLLECTION = 'community_roads';
+export const COMMUNITY_ROADS_BOOT_STORAGE_KEY = 'navapp.communityRoadsBoot.v1';
 const MAX_PUBLIC_ROADS = 500;
 const MAX_HISTORY_PAGE_SIZE = 50;
+const MAX_BOOT_STORAGE_CHARS = 1_500_000;
+
+function readBootRoadsFromStorage(): CommunityRoadRecord[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(COMMUNITY_ROADS_BOOT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (r): r is CommunityRoadRecord =>
+        Boolean(r) &&
+        typeof r === 'object' &&
+        typeof r.id === 'string' &&
+        Array.isArray(r.coordinates) &&
+        r.coordinates.length >= 2 &&
+        isCommunityHighwayClass(r.highwayClass)
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeBootRoadsToStorage(roads: readonly CommunityRoadRecord[]): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    // Keep active roads plus any unsynced local mutations for synchronous frame-0 map startup
+    const compact = roads.filter(
+      (r) => r.status === 'active' || r.cloudSyncStatus === 'pending' || r.cloudSyncStatus === 'error'
+    );
+    let payload = JSON.stringify(compact);
+    if (payload.length > MAX_BOOT_STORAGE_CHARS) {
+      // Fall back to osm-override records first if total community roads ever grow very large
+      const overridesFirst = compact.filter((r) => r.kind === 'osm-override');
+      payload = JSON.stringify(overridesFirst);
+      if (payload.length > MAX_BOOT_STORAGE_CHARS) return;
+    }
+    window.localStorage.setItem(COMMUNITY_ROADS_BOOT_STORAGE_KEY, payload);
+  } catch {
+    // Ignore storage quota or restricted context errors
+  }
+}
 
 function requireFirestore() {
   const services = getFirebaseServices();
@@ -77,6 +122,8 @@ export interface SaveCommunityRoadInput {
   trailNumber?: string;
   trailName?: string;
   reason: string;
+  /** Save as a removed-road tombstone (see `CommunityRoadSnapshot.removed`). Omit to save a normal road. */
+  removed?: boolean;
 }
 
 export class CommunityRoadConflictError extends Error {
@@ -217,6 +264,7 @@ function normalizeCommunityRoad(id: string, value: DocumentData): CommunityRoadR
     trailNumber: typeof value.trailNumber === 'string' ? value.trailNumber : '',
     trailName: typeof value.trailName === 'string' ? value.trailName : '',
     status: value.status === 'deleted' ? 'deleted' : 'active',
+    ...(value.removed === true ? { removed: true } : {}),
     revision: value.revision,
     lastHistoryId: String(value.lastHistoryId || ''),
     createdByUid: String(value.createdByUid || ''),
@@ -248,6 +296,7 @@ function toSnapshot(road: CommunityRoadSnapshot): CommunityRoadSnapshot {
     trailNumber: road.trailNumber || '',
     trailName: road.trailName || '',
     status: road.status,
+    ...(road.removed ? { removed: true } : {}),
   };
 }
 
@@ -271,6 +320,7 @@ function encodeSnapshotForFirestore(snapshot: CommunityRoadSnapshot): Record<str
     trailNumber: snapshot.trailNumber || '',
     trailName: snapshot.trailName || '',
     status: snapshot.status,
+    ...(snapshot.removed ? { removed: true } : {}),
   };
 }
 
@@ -307,22 +357,40 @@ function normalizeHistorySnapshot(raw: unknown): CommunityRoadSnapshot | null {
     trailNumber: typeof obj.trailNumber === 'string' ? obj.trailNumber : '',
     trailName: typeof obj.trailName === 'string' ? obj.trailName : '',
     status: obj.status === 'deleted' ? 'deleted' : 'active',
+    ...(obj.removed === true ? { removed: true } : {}),
   };
 }
 
 export class CommunityRoadsCloudService {
   private memoryCache: CommunityRoadRecord[] = [];
+  private lastCacheJson = '';
   private listeners = new Set<(roads: CommunityRoadRecord[]) => void>();
   private syncInFlight = false;
+  private serverSynced = false;
+  private localMutated = false;
+  private loadInFlight: Promise<CommunityRoadLoadResult> | null = null;
 
   constructor() {
+    const bootRoads = readBootRoadsFromStorage();
+    if (bootRoads.length > 0) {
+      const sorted = this.sortRoads(bootRoads);
+      this.memoryCache = sorted;
+      this.lastCacheJson = JSON.stringify(sorted);
+    }
     void this.warmCacheFromDexie();
+  }
+
+  private sortRoads(roads: readonly CommunityRoadRecord[]): CommunityRoadRecord[] {
+    return roads
+      .slice()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
   }
 
   private async warmCacheFromDexie(): Promise<void> {
     try {
       const cached = await db.communityRoads.toArray();
-      if (cached.length > 0 && this.memoryCache.length === 0) {
+      if (this.serverSynced || this.localMutated) return;
+      if (cached.length > 0) {
         this.setMemoryCache(cached);
       }
     } catch {
@@ -330,11 +398,51 @@ export class CommunityRoadsCloudService {
     }
   }
 
-  private setMemoryCache(roads: CommunityRoadRecord[]): void {
-    this.memoryCache = roads.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  private setMemoryCache(roads: CommunityRoadRecord[], options?: { persistBoot?: boolean }): void {
+    const sorted = this.sortRoads(roads);
+    const nextJson = JSON.stringify(sorted);
+    if (nextJson === this.lastCacheJson) {
+      return;
+    }
+    this.memoryCache = sorted;
+    this.lastCacheJson = nextJson;
+    if (options?.persistBoot !== false) {
+      writeBootRoadsToStorage(sorted);
+    }
     for (const listener of this.listeners) {
       listener(this.memoryCache);
     }
+  }
+
+  private async reconcileServerRoads(
+    serverRoads: CommunityRoadRecord[],
+    serverWasTruncated: boolean
+  ): Promise<CommunityRoadRecord[]> {
+    const cached = await db.communityRoads.toArray().catch(() => this.memoryCache);
+    const mergedById = new Map<string, CommunityRoadRecord>();
+    for (const sRoad of serverRoads) {
+      mergedById.set(sRoad.id, sRoad);
+    }
+    const deletedOnServerIds: string[] = [];
+    for (const lRoad of cached) {
+      if (lRoad.cloudSyncStatus === 'pending' || lRoad.cloudSyncStatus === 'error') {
+        mergedById.set(lRoad.id, lRoad);
+      } else if (!mergedById.has(lRoad.id)) {
+        if (serverWasTruncated) {
+          mergedById.set(lRoad.id, lRoad);
+        } else {
+          deletedOnServerIds.push(lRoad.id);
+        }
+      }
+    }
+    const merged = Array.from(mergedById.values());
+    if (deletedOnServerIds.length > 0) {
+      await db.communityRoads.bulkDelete(deletedOnServerIds).catch(() => {});
+    }
+    await db.communityRoads.bulkPut(merged).catch(() => {});
+    this.serverSynced = true;
+    this.setMemoryCache(merged);
+    return this.memoryCache;
   }
 
   getCachedRoads(): CommunityRoadRecord[] {
@@ -468,11 +576,77 @@ export class CommunityRoadsCloudService {
   }
 
   async loadCommunityRoads(): Promise<CommunityRoadLoadResult> {
-    const cached = await db.communityRoads.toArray().catch(() => [] as CommunityRoadRecord[]);
-    if (!AuthService.isAvailable()) {
-      this.setMemoryCache(cached);
-      return { roads: this.memoryCache, source: 'cache' };
+    if (this.loadInFlight) {
+      return this.loadInFlight;
     }
+
+    const run = async (): Promise<CommunityRoadLoadResult> => {
+      const cached = await db.communityRoads.toArray().catch(() => [] as CommunityRoadRecord[]);
+      if (!this.serverSynced && !this.localMutated && cached.length > 0) {
+        // Emit cached Dexie records immediately so map/UI never blocks on network fetch
+        this.setMemoryCache(cached);
+      }
+      if (!AuthService.isAvailable()) {
+        this.setMemoryCache(cached);
+        return { roads: this.memoryCache, source: 'cache' };
+      }
+      try {
+        const firestore = requireFirestore();
+        const roadsQuery = query(
+          collection(firestore, COMMUNITY_ROADS_COLLECTION),
+          orderBy('updatedAt', 'desc'),
+          limit(MAX_PUBLIC_ROADS)
+        );
+        const snap = await getDocs(roadsQuery);
+        const serverRoads: CommunityRoadRecord[] = [];
+        let skippedInvalid = 0;
+        for (const docSnap of snap.docs) {
+          try {
+            serverRoads.push(normalizeCommunityRoad(docSnap.id, docSnap.data()));
+          } catch {
+            skippedInvalid += 1;
+          }
+        }
+        await this.reconcileServerRoads(serverRoads, snap.docs.length >= MAX_PUBLIC_ROADS);
+
+        // Push any pending local roads in the background
+        void this.syncPendingRoads();
+
+        return {
+          roads: this.memoryCache,
+          source: 'server',
+          warning: skippedInvalid > 0 ? `${skippedInvalid} רשומות דרך לא תקינות דולגו.` : undefined,
+        };
+      } catch {
+        if (!this.serverSynced && !this.localMutated && cached.length > 0) {
+          this.setMemoryCache(cached);
+        }
+        return {
+          roads: this.memoryCache,
+          source: 'cache',
+          warning: cached.length > 0 ? 'נטענו דרכים קהילתיות מהמטמון המקומי (אופליין).' : undefined,
+        };
+      }
+    };
+
+    const promise = run().finally(() => {
+      if (this.loadInFlight === promise) {
+        this.loadInFlight = null;
+      }
+    });
+    this.loadInFlight = promise;
+    return promise;
+  }
+
+  /**
+   * Subscribes to real-time Firestore community road updates so edits made on another device
+   * immediately update the map and local boot/Dexie caches.
+   */
+  subscribeCommunityRoads(): () => void {
+    if (!AuthService.isAvailable() || typeof onSnapshot !== 'function') {
+      return () => {};
+    }
+    let disposed = false;
     try {
       const firestore = requireFirestore();
       const roadsQuery = query(
@@ -480,56 +654,30 @@ export class CommunityRoadsCloudService {
         orderBy('updatedAt', 'desc'),
         limit(MAX_PUBLIC_ROADS)
       );
-      const snap = await getDocs(roadsQuery);
-      const serverRoads: CommunityRoadRecord[] = [];
-      let skippedInvalid = 0;
-      for (const docSnap of snap.docs) {
-        try {
-          serverRoads.push(normalizeCommunityRoad(docSnap.id, docSnap.data()));
-        } catch {
-          skippedInvalid += 1;
+      const unsub = onSnapshot(
+        roadsQuery,
+        (snap) => {
+          if (disposed) return;
+          const serverRoads: CommunityRoadRecord[] = [];
+          snap.docs.forEach((docSnap) => {
+            try {
+              serverRoads.push(normalizeCommunityRoad(docSnap.id, docSnap.data()));
+            } catch {
+              // Skip invalid remote docs
+            }
+          });
+          void this.reconcileServerRoads(serverRoads, snap.docs.length >= MAX_PUBLIC_ROADS);
+        },
+        (err) => {
+          console.warn('[CommunityRoadsCloudService] Snapshot warning:', err);
         }
-      }
-      // Preserve unsynced local edits; prune synced local records deleted on the server
-      const mergedById = new Map<string, CommunityRoadRecord>();
-      for (const sRoad of serverRoads) {
-        mergedById.set(sRoad.id, sRoad);
-      }
-      const deletedOnServerIds: string[] = [];
-      const serverWasTruncated = snap.docs.length >= MAX_PUBLIC_ROADS;
-      for (const lRoad of cached) {
-        if (lRoad.cloudSyncStatus === 'pending' || lRoad.cloudSyncStatus === 'error') {
-          mergedById.set(lRoad.id, lRoad);
-        } else if (!mergedById.has(lRoad.id)) {
-          if (serverWasTruncated) {
-            mergedById.set(lRoad.id, lRoad);
-          } else {
-            deletedOnServerIds.push(lRoad.id);
-          }
-        }
-      }
-      const merged = Array.from(mergedById.values());
-      if (deletedOnServerIds.length > 0) {
-        await db.communityRoads.bulkDelete(deletedOnServerIds).catch(() => {});
-      }
-      await db.communityRoads.bulkPut(merged).catch(() => {});
-      this.setMemoryCache(merged);
-
-      // Push any pending local roads in the background
-      void this.syncPendingRoads();
-
-      return {
-        roads: this.memoryCache,
-        source: 'server',
-        warning: skippedInvalid > 0 ? `${skippedInvalid} רשומות דרך לא תקינות דולגו.` : undefined,
+      );
+      return () => {
+        disposed = true;
+        unsub();
       };
     } catch {
-      this.setMemoryCache(cached);
-      return {
-        roads: this.memoryCache,
-        source: 'cache',
-        warning: cached.length > 0 ? 'נטענו דרכים קהילתיות מהמטמון המקומי (אופליין).' : undefined,
-      };
+      return () => {};
     }
   }
 
@@ -577,6 +725,7 @@ export class CommunityRoadsCloudService {
       trailNumber: (input.trailNumber || '').trim(),
       trailName: (input.trailName || '').trim(),
       status: 'active',
+      ...(input.removed && input.kind === 'osm-override' ? { removed: true } : {}),
       revision: nextRevision,
       lastHistoryId: existingLocal?.lastHistoryId || `${nextRevision}-local`,
       createdByUid: existingLocal?.createdByUid || uid,
@@ -587,6 +736,7 @@ export class CommunityRoadsCloudService {
     };
 
     // 1. Save locally FIRST — guaranteed immediate persistence & map update
+    this.localMutated = true;
     await db.communityRoads.put(localRecord);
     this.setMemoryCache([localRecord, ...this.memoryCache.filter((r) => r.id !== localRecord.id)]);
 
@@ -635,6 +785,7 @@ export class CommunityRoadsCloudService {
     };
 
     // 1. Save locally FIRST
+    this.localMutated = true;
     await db.communityRoads.put(deletedLocal);
     this.setMemoryCache([
       deletedLocal,
@@ -662,6 +813,53 @@ export class CommunityRoadsCloudService {
     }
 
     return deletedLocal;
+  }
+
+  /**
+   * Removes a whole OSM way from the map, routing and snapping by saving an `osm-override` tombstone
+   * (`removed: true`). Local-first like `saveCommunityRoad`. The way is never deleted from OpenStreetMap,
+   * and saving the record again without `removed` restores it.
+   */
+  async removeOsmRoad(params: {
+    roadId: string | null;
+    expectedRevision: number;
+    user: NavUser | null;
+    sourceOsmWayId: string;
+    coordinates: Array<[number, number]>;
+    highwayClass: CommunityHighwayClass;
+    name?: string;
+    reason?: string;
+  }): Promise<CommunityRoadRecord> {
+    // Prefer the saved override so unsaved form/geometry edits never end up in the tombstone
+    const existing = params.roadId
+      ? this.memoryCache.find((r) => r.id === params.roadId) ??
+        (await db.communityRoads.get(params.roadId).catch(() => undefined))
+      : undefined;
+    const highwayClass = existing?.highwayClass ?? params.highwayClass;
+    const defaults = getDefaultAccessForHighwayClass(highwayClass);
+    return this.saveCommunityRoad({
+      roadId: params.roadId,
+      expectedRevision: params.expectedRevision,
+      user: params.user,
+      kind: 'osm-override',
+      sourceOsmWayId: params.sourceOsmWayId,
+      coordinates: existing?.coordinates ?? params.coordinates,
+      highwayClass,
+      tracktype: existing?.tracktype ?? '',
+      surface: existing?.surface ?? '',
+      name: existing?.name ?? params.name ?? '',
+      description: existing?.description ?? '',
+      oneway: existing?.oneway ?? 0,
+      allow4x4: existing?.allow4x4 ?? defaults.allow4x4,
+      allowFoot: existing?.allowFoot ?? defaults.allowFoot,
+      allowBicycle: existing?.allowBicycle ?? defaults.allowBicycle,
+      anchors: existing?.anchors ?? [],
+      trailColor: existing?.trailColor ?? '',
+      trailNumber: existing?.trailNumber ?? '',
+      trailName: existing?.trailName ?? '',
+      reason: params.reason || 'הסרת דרך מהמפה',
+      removed: true,
+    });
   }
 
   /**

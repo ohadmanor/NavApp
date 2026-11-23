@@ -37,6 +37,7 @@ import { offlineDataFiles } from './core/pmtiles/OfflineDataFiles';
 import {
   buildIsraelOutdoorStyle,
   applyLayerVisibilityToMap,
+  applyHighwayOverrideFiltersToMap,
   buildPoiTieredLayerFilter,
   findFirstNonRttOverlayLayerId,
   getVectorPoiLayerCategory,
@@ -48,6 +49,15 @@ import {
   type MapStyleId,
   type OutdoorLayerVisibility,
 } from './core/style/israelOutdoorStyle';
+import {
+  COMMUNITY_ROADS_SOURCE_ID,
+  COMMUNITY_ROADS_LABEL_LAYER_ID,
+  COMMUNITY_ROADS_LINE_LAYER_IDS,
+  COMMUNITY_TRAILS_SOURCE_ID,
+  COMMUNITY_TRAILS_LAYER_IDS,
+  buildCommunityTrailLayerSpecs,
+  ensureCommunityRoadLayersOnMap,
+} from './core/style/communityTrailLayers';
 import { PoiManager, type DeletedPoiUndoSnapshot } from './core/pois/PoiManager';
 import {
   POI_CATEGORY_ZOOM_RULES,
@@ -205,11 +215,6 @@ import {
   GoogleAccountMenuCard,
   GoogleGIcon,
 } from './components/auth/GoogleAccountButton';
-const TrailAnnotationsPanel = React.lazy(() =>
-  import('./components/map/TrailAnnotationsPanel').then((m) => ({
-    default: m.TrailAnnotationsPanel,
-  }))
-);
 const CommunityRoadEditor = React.lazy(() =>
   import('./components/map/CommunityRoadEditor').then((m) => ({
     default: m.CommunityRoadEditor,
@@ -235,11 +240,18 @@ import {
 } from './core/firebase/TrailAnnotationsCloudService';
 import { communityRoadsCloudService } from './core/firebase/CommunityRoadsCloudService';
 import {
+  ROAD_SEGMENT_SNAP_METERS,
+  ROAD_VERTEX_SNAP_METERS,
   snapPointToExistingRoads,
   type RoadSnapCandidate,
 } from './core/routing/CommunityRoadSnapper';
 import {
+  buildCommunityRoadsGeoJSON,
+  buildRemovedRoadFeatures,
+  extractOverriddenOsmWayIds,
+  filterTrailOverlayByCommunityRoads,
   isCommunityHighwayClass,
+  isRemovedOsmRoad,
   type CommunityHighwayClass,
   type CommunityRoadRecord,
 } from './core/trails/CommunityRoadTypes';
@@ -450,15 +462,23 @@ export const App: React.FC = () => {
   const initialCamera = initialSavedStateRef.current.camera;
   const initialConfig = initialSavedStateRef.current.config;
 
+  const initialTrailBootRef = useRef<ReturnType<
+    typeof trailAnnotationsCloudService.getBootOverlaySnapshot
+  > | null>(null);
+  if (initialTrailBootRef.current === null) {
+    initialTrailBootRef.current = trailAnnotationsCloudService.getBootOverlaySnapshot();
+  }
+
   // Core map & archive state
   const [isMapReady, setIsMapReady] = useState(false);
   const [demInfo, setDemInfo] = useState<MountedArchiveInfo | null>(null);
   const [osmInfo, setOsmInfo] = useState<MountedArchiveInfo | null>(null);
-  const [trailOverlayGeoJSON, setTrailOverlayGeoJSON] = useState<GeoJSON.FeatureCollection>({
-    type: 'FeatureCollection',
-    features: [],
-  });
-  const [trailSearchItems, setTrailSearchItems] = useState<TrailAnnotationSearchItem[]>([]);
+  const [trailOverlayGeoJSON, setTrailOverlayGeoJSON] = useState<GeoJSON.FeatureCollection>(
+    () => initialTrailBootRef.current!.geojson
+  );
+  const [trailSearchItems, setTrailSearchItems] = useState<TrailAnnotationSearchItem[]>(
+    () => initialTrailBootRef.current!.searchItems
+  );
   const [showTrailOverlay, setShowTrailOverlay] = useState(true);
   const [mapStyleRevision, setMapStyleRevision] = useState(0);
   const [selectedTrailWay, setSelectedTrailWay] = useState<TrailWayGeometry | null>(null);
@@ -633,6 +653,8 @@ export const App: React.FC = () => {
   );
   const [showBackgroundInPlanner, setShowBackgroundInPlanner] = useState<boolean>(true);
   const [bgHydrationSeq, setBgHydrationSeq] = useState<number>(0);
+  const pinnedBackgroundRouteIdsRef = useRef<string[]>(pinnedBackgroundRouteIds);
+  pinnedBackgroundRouteIdsRef.current = pinnedBackgroundRouteIds;
 
   useEffect(() => {
     writeStoredPinnedRouteIds(pinnedBackgroundRouteIds);
@@ -776,6 +798,12 @@ export const App: React.FC = () => {
   const trailSubModeRef = useRef<'add-road' | 'edit-road'>(trailSubMode);
   trailSubModeRef.current = trailSubMode;
   const baseHighwayLayerFiltersRef = useRef<Map<string, any>>(new Map());
+  const communityRoadsRef = useRef<CommunityRoadRecord[]>(communityRoads);
+  communityRoadsRef.current = communityRoads;
+  const trailOverlayGeoJSONRef = useRef<GeoJSON.FeatureCollection>(trailOverlayGeoJSON);
+  trailOverlayGeoJSONRef.current = trailOverlayGeoJSON;
+  const showTrailOverlayRef = useRef<boolean>(showTrailOverlay);
+  showTrailOverlayRef.current = showTrailOverlay;
   const isDrawingRoadRef = useRef<boolean>(isDrawingRoad);
   isDrawingRoadRef.current = isDrawingRoad;
   const roadDraftRef = useRef<CommunityRoadEditDraftInput | null>(roadDraft);
@@ -1154,18 +1182,67 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const unsub = communityRoadsCloudService.subscribe((roads) => {
+    setCommunityRoads(communityRoadsCloudService.getCachedRoads());
+    const unsubCache = communityRoadsCloudService.subscribe((roads) => {
       setCommunityRoads(roads);
     });
+    const unsubRealtime = isOnline
+      ? communityRoadsCloudService.subscribeCommunityRoads()
+      : () => {};
     void communityRoadsCloudService.loadCommunityRoads();
-    return unsub;
-  }, []);
+    return () => {
+      unsubCache();
+      unsubRealtime();
+    };
+  }, [isOnline]);
+
+  const trailReleaseId = getTrailMapReleaseId(osmInfo);
+  useEffect(() => {
+    let cancelled = false;
+    const applyOverlay = (overlay: {
+      geojson: GeoJSON.FeatureCollection;
+      searchItems: TrailAnnotationSearchItem[];
+    }) => {
+      if (cancelled) return;
+      setTrailOverlayGeoJSON(overlay.geojson);
+      setTrailSearchItems(overlay.searchItems);
+    };
+
+    void trailAnnotationsCloudService.bootstrapAndSyncOverlay(
+      trailReleaseId,
+      applyOverlay,
+      () => cancelled
+    );
+
+    const unsubRealtime = isOnline
+      ? trailAnnotationsCloudService.subscribePublishedAnnotations((freshAnnotations) => {
+          if (cancelled) return;
+          void trailAnnotationsCloudService
+            .resolveOverlayForAnnotations(freshAnnotations, trailReleaseId)
+            .then((overlay) => {
+              if (cancelled) return;
+              trailAnnotationsCloudService.saveBootOverlaySnapshot(
+                overlay.geojson,
+                overlay.searchItems
+              );
+              applyOverlay(overlay);
+            })
+            .catch(() => undefined);
+        })
+      : () => {};
+
+    return () => {
+      cancelled = true;
+      unsubRealtime();
+    };
+  }, [trailReleaseId, isOnline]);
 
   const pendingOsmSyncCount = useMemo(
     () =>
       communityRoads.filter(
         (road) =>
           road.status === 'active' &&
+          !isRemovedOsmRoad(road) &&
           !(road.osmSync && Number(road.osmSync.syncedRevision) >= Number(road.revision))
       ).length,
     [communityRoads]
@@ -1177,33 +1254,27 @@ export const App: React.FC = () => {
     }
   }, [currentUser, isOnline]);
 
-  const communityRoadsGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
-    const features: GeoJSON.Feature[] = [];
-    for (const road of communityRoads) {
-      if (road.status !== 'active' || road.coordinates.length < 2) continue;
-      features.push({
-        type: 'Feature',
-        properties: {
-          roadId: road.id,
-          kind: road.kind,
-          highwayClass: road.highwayClass,
-          tracktype: road.tracktype || '',
-          name: road.name || '',
-          trailColor: road.trailColor || '',
-          trailNumber: road.trailNumber || '',
-          trailName: road.trailName || '',
-        },
-        geometry: {
-          type: 'LineString',
-          coordinates: road.coordinates,
-        },
-      });
-    }
-    return { type: 'FeatureCollection', features };
-  }, [communityRoads]);
+  const communityRoadsGeoJSON = useMemo(
+    () => buildCommunityRoadsGeoJSON(communityRoads),
+    [communityRoads]
+  );
+
+  const overriddenOsmWayIds = useMemo(
+    () => extractOverriddenOsmWayIds(communityRoads),
+    [communityRoads]
+  );
+
+  const filteredTrailOverlayGeoJSON = useMemo(
+    () => filterTrailOverlayByCommunityRoads(trailOverlayGeoJSON, communityRoads),
+    [trailOverlayGeoJSON, communityRoads]
+  );
 
   const communityRoadDraftGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
     const features: GeoJSON.Feature[] = [];
+    if (isTrailMarkingMode) {
+      // Removed OSM roads stay visible as ghost lines while editing, so they can be picked and restored
+      features.push(...buildRemovedRoadFeatures(communityRoads, roadDraft?.roadId));
+    }
     if (roadDraft && roadDraft.coordinates.length >= 2) {
       features.push({
         type: 'Feature',
@@ -1250,7 +1321,14 @@ export const App: React.FC = () => {
       });
     }
     return { type: 'FeatureCollection', features };
-  }, [roadDraft, isDrawingRoad, selectedRoadVertexIndex, roadSnapPreview]);
+  }, [
+    roadDraft,
+    isDrawingRoad,
+    selectedRoadVertexIndex,
+    roadSnapPreview,
+    isTrailMarkingMode,
+    communityRoads,
+  ]);
 
   const moveRoadDraftVertex = useCallback(
     (vertexIndex: number, lon: number, lat: number, snap: RoadSnapCandidate | null) => {
@@ -1344,8 +1422,8 @@ export const App: React.FC = () => {
           const snap = await snapPointToExistingRoads(
             event.lngLat.lng,
             event.lngLat.lat,
-            12,
-            8,
+            ROAD_SEGMENT_SNAP_METERS,
+            ROAD_VERTEX_SNAP_METERS,
             roadDraftRef.current?.roadId,
             roadDraftRef.current?.sourceOsmWayId
           );
@@ -1361,8 +1439,8 @@ export const App: React.FC = () => {
         const snap = await snapPointToExistingRoads(
           event.lngLat.lng,
           event.lngLat.lat,
-          35,
-          8,
+          ROAD_SEGMENT_SNAP_METERS,
+          ROAD_VERTEX_SNAP_METERS,
           roadDraftRef.current?.roadId,
           roadDraftRef.current?.sourceOsmWayId
         );
@@ -1406,10 +1484,8 @@ export const App: React.FC = () => {
 
       if (trailSubModeRef.current === 'edit-road') {
         const commHitLayers = [
-          'community-roads-casing',
-          'community-roads-track-right',
-          'community-roads-track-left',
-          'community-roads-line',
+          'community-road-removed-line',
+          ...COMMUNITY_ROADS_LINE_LAYER_IDS,
         ].filter((id) => Boolean(map.getLayer(id)));
         if (commHitLayers.length > 0) {
           const commHits = map.queryRenderedFeatures(
@@ -1547,7 +1623,7 @@ export const App: React.FC = () => {
         return;
       }
 
-      const commMarkLayers = ['community-roads-casing', 'community-roads-line'].filter((id) =>
+      const commMarkLayers = COMMUNITY_ROADS_LINE_LAYER_IDS.filter((id) =>
         Boolean(map.getLayer(id))
       );
       if (commMarkLayers.length > 0) {
@@ -2037,6 +2113,20 @@ export const App: React.FC = () => {
           );
           if (!cancelled) {
             setRoutes(all);
+            if (downloaded.length > 0) {
+              const downloadedIds = new Set(downloaded.map((r) => r.id));
+              if (pinnedBackgroundRouteIdsRef.current.some((id) => downloadedIds.has(id))) {
+                setBgHydrationSeq((s) => s + 1);
+              }
+              const curActive = activeRouteRef.current;
+              if (curActive && downloadedIds.has(curActive.id)) {
+                void RouteManager.loadFullRoute(curActive.id).then((refreshed) => {
+                  if (!cancelled && refreshed) {
+                    setActiveRoute((cur) => (cur?.id === refreshed.id ? refreshed : cur));
+                  }
+                });
+              }
+            }
             if (sharedRes.revokedIds.length > 0) {
               const revokedSet = new Set(sharedRes.revokedIds);
               setPinnedBackgroundRouteIds((prev) => prev.filter((id) => !revokedSet.has(id)));
@@ -3631,6 +3721,7 @@ export const App: React.FC = () => {
     mountedStyleKeyRef.current = `${initialOsmUrl}|${initialDemUrl}|${initialContourUrl || ''}|${themeRef.current}|${mapStyleRef.current}`;
     isStyleLoadedRef.current = false;
 
+    const initialCommunityRoads = communityRoadsRef.current;
     const initialStyle = buildIsraelOutdoorStyle({
       osmProtocolUrl: initialOsmUrl,
       demProtocolUrl: initialDemUrl,
@@ -3639,6 +3730,13 @@ export const App: React.FC = () => {
       visibility: visibilityRef.current,
       theme: themeRef.current,
       mapStyle: mapStyleRef.current,
+      overriddenOsmWayIds: extractOverriddenOsmWayIds(initialCommunityRoads),
+      communityRoadsGeoJSON: buildCommunityRoadsGeoJSON(initialCommunityRoads),
+      trailOverlayGeoJSON: filterTrailOverlayByCommunityRoads(
+        trailOverlayGeoJSONRef.current,
+        initialCommunityRoads
+      ),
+      showTrailOverlay: showTrailOverlayRef.current,
     });
 
     const startupCamera = UserStateSyncService.getStartupState().camera;
@@ -4123,8 +4221,8 @@ export const App: React.FC = () => {
           void snapPointToExistingRoads(
             e.lngLat.lng,
             e.lngLat.lat,
-            12,
-            8,
+            ROAD_SEGMENT_SNAP_METERS,
+            ROAD_VERTEX_SNAP_METERS,
             roadDraftRef.current?.roadId,
             roadDraftRef.current?.sourceOsmWayId
           ).then((snap) => {
@@ -4146,12 +4244,11 @@ export const App: React.FC = () => {
       const now = performance.now();
       if (now - lastRoadSnapTsRef.current < 80) return;
       lastRoadSnapTsRef.current = now;
-      const snapRadius = selectedRoadVertexIndexRef.current !== null && !isDrawingRoadRef.current ? 12 : 35;
       void snapPointToExistingRoads(
         e.lngLat.lng,
         e.lngLat.lat,
-        snapRadius,
-        8,
+        ROAD_SEGMENT_SNAP_METERS,
+        ROAD_VERTEX_SNAP_METERS,
         roadDraftRef.current?.roadId,
         roadDraftRef.current?.sourceOsmWayId
       ).then((snap) => {
@@ -4172,8 +4269,8 @@ export const App: React.FC = () => {
       void snapPointToExistingRoads(
         lng,
         lat,
-        12,
-        8,
+        ROAD_SEGMENT_SNAP_METERS,
+        ROAD_VERTEX_SNAP_METERS,
         roadDraftRef.current?.roadId,
         roadDraftRef.current?.sourceOsmWayId
       ).then((snap) => {
@@ -4349,6 +4446,7 @@ export const App: React.FC = () => {
     isStyleLoadedRef.current = false;
     lastPoiSyncRef.current = null;
 
+    const currentCommunityRoads = communityRoadsRef.current;
     const newStyle = buildIsraelOutdoorStyle({
       osmProtocolUrl: effectiveOsmUrl,
       demProtocolUrl: effectiveDemUrl,
@@ -4357,12 +4455,20 @@ export const App: React.FC = () => {
       visibility: visibilityRef.current,
       theme,
       mapStyle,
+      overriddenOsmWayIds: extractOverriddenOsmWayIds(currentCommunityRoads),
+      communityRoadsGeoJSON: buildCommunityRoadsGeoJSON(currentCommunityRoads),
+      trailOverlayGeoJSON: filterTrailOverlayByCommunityRoads(
+        trailOverlayGeoJSONRef.current,
+        currentCommunityRoads
+      ),
+      showTrailOverlay: showTrailOverlayRef.current,
     });
 
     let completed = false;
     const restoreOverlays = () => {
       completed = true;
       if (mapRef.current !== map) return;
+      baseHighwayLayerFiltersRef.current.clear();
       isStyleLoadedRef.current = true;
       setMapStyleRevision((revision) => revision + 1);
       applyLayerVisibilityToMap(
@@ -4443,223 +4549,23 @@ export const App: React.FC = () => {
     const map = mapRef.current;
     if (!map || !isMapReady || !map.isStyleLoaded()) return;
 
-    const roadsSourceId = 'community-roads-src';
-    const existingRoadsSrc = map.getSource(roadsSourceId) as maplibregl.GeoJSONSource | undefined;
+    const existingRoadsSrc = map.getSource(COMMUNITY_ROADS_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
     if (existingRoadsSrc) {
       existingRoadsSrc.setData(communityRoadsGeoJSON);
     } else {
-      map.addSource(roadsSourceId, { type: 'geojson', data: communityRoadsGeoJSON });
+      map.addSource(COMMUNITY_ROADS_SOURCE_ID, {
+        type: 'geojson',
+        data: communityRoadsGeoJSON,
+      });
     }
 
-    const beforeTrailsId = map.getLayer('community-trails-casing')
-      ? 'community-trails-casing'
-      : map.getLayer('saved-routes-line')
-        ? 'saved-routes-line'
-        : findFirstNonRttOverlayLayerId(map);
+    const hideCommunityRoads =
+      isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap);
 
-    if (!map.getLayer('community-roads-casing')) {
-      const roadTrailSpniColorExpr: maplibregl.ExpressionSpecification = [
-        'match',
-        ['coalesce', ['get', 'trailColor'], ''],
-        '#dc2626',
-        '#FF0000',
-        '#2563eb',
-        '#0044FF',
-        '#16a34a',
-        '#00C000',
-        '#334155',
-        '#111111',
-        '#9a5b32',
-      ];
-      map.addLayer(
-        {
-          id: 'community-roads-casing',
-          type: 'line',
-          source: roadsSourceId,
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: {
-            'line-color': theme === 'topo-dark' ? '#0f172a' : '#ffffff',
-            'line-opacity': [
-              'case',
-              ['==', ['get', 'highwayClass'], 'track'],
-              0.95,
-              [
-                'any',
-                ['!=', ['coalesce', ['get', 'trailColor'], ''], ''],
-                ['!', ['in', ['get', 'highwayClass'], ['literal', ['path', 'footway', 'steps', 'bridleway']]]],
-              ],
-              0.75,
-              0,
-            ],
-            'line-width': [
-              'interpolate',
-              ['exponential', 2],
-              ['zoom'],
-              12,
-              ['case', ['==', ['get', 'highwayClass'], 'track'], 3.5, 2.5],
-              13,
-              ['case', ['==', ['get', 'highwayClass'], 'track'], 5, 3.5],
-              16,
-              ['case', ['==', ['get', 'highwayClass'], 'track'], 8, 6],
-              22,
-              ['case', ['==', ['get', 'highwayClass'], 'track'], 30, 18],
-            ],
-          },
-        },
-        beforeTrailsId
-      );
-      map.addLayer(
-        {
-          id: 'community-roads-track-right',
-          type: 'line',
-          source: roadsSourceId,
-          filter: ['==', ['get', 'highwayClass'], 'track'],
-          layout: { 'line-cap': 'round', 'line-join': 'miter' },
-          paint: {
-            'line-color': roadTrailSpniColorExpr,
-            'line-dasharray': [6, 2],
-            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 13, 1.5, 16, 2.4, 22, 9.5],
-            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 13, 1, 16, 1.8, 22, 7],
-          },
-        },
-        beforeTrailsId
-      );
-      map.addLayer(
-        {
-          id: 'community-roads-track-left',
-          type: 'line',
-          source: roadsSourceId,
-          filter: ['==', ['get', 'highwayClass'], 'track'],
-          layout: { 'line-cap': 'round', 'line-join': 'miter' },
-          paint: {
-            'line-color': roadTrailSpniColorExpr,
-            'line-dasharray': [6, 2],
-            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 13, -1.5, 16, -2.4, 22, -9.5],
-            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 13, 1, 16, 1.8, 22, 7],
-          },
-        },
-        beforeTrailsId
-      );
-      map.addLayer(
-        {
-          id: 'community-roads-line',
-          type: 'line',
-          source: roadsSourceId,
-          filter: ['!=', ['get', 'highwayClass'], 'track'],
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: {
-            'line-color': [
-              'match',
-              ['coalesce', ['get', 'trailColor'], ''],
-              '#dc2626',
-              '#FF0000',
-              '#2563eb',
-              '#0044FF',
-              '#16a34a',
-              '#00C000',
-              '#334155',
-              '#111111',
-              [
-                'match',
-                ['coalesce', ['get', 'highwayClass'], 'unclassified'],
-                'path',
-                '#9a5b32',
-                'footway',
-                '#9a5b32',
-                'steps',
-                '#9a5b32',
-                'bridleway',
-                '#9a5b32',
-                'cycleway',
-                '#0d9488',
-                'motorway',
-                '#e11d48',
-                'trunk',
-                '#ea580c',
-                'primary',
-                '#f59e0b',
-                'secondary',
-                '#eab308',
-                '#64748b',
-              ],
-            ],
-            'line-dasharray': [
-              'match',
-              ['coalesce', ['get', 'highwayClass'], 'unclassified'],
-              'path',
-              ['literal', [4, 2.5]],
-              'footway',
-              ['literal', [3, 2]],
-              'steps',
-              ['literal', [1.5, 1.5]],
-              'bridleway',
-              ['literal', [4, 2]],
-              'cycleway',
-              ['literal', [3, 1.5]],
-              ['literal', [1, 0]],
-            ],
-            'line-width': [
-              'interpolate',
-              ['exponential', 2],
-              ['zoom'],
-              12,
-              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 2.2, 1.8],
-              14,
-              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 3.2, 2.6],
-              16,
-              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 4.5, 4],
-              22,
-              ['case', ['!=', ['coalesce', ['get', 'trailColor'], ''], ''], 16, 14],
-            ],
-          },
-        },
-        beforeTrailsId
-      );
-      map.addLayer(
-        {
-          id: 'community-roads-label',
-          type: 'symbol',
-          source: roadsSourceId,
-          minzoom: 13,
-          filter: [
-            'any',
-            ['!=', ['coalesce', ['get', 'name'], ''], ''],
-            ['!=', ['coalesce', ['get', 'trailNumber'], ''], ''],
-            ['!=', ['coalesce', ['get', 'trailName'], ''], ''],
-          ],
-          layout: {
-            'symbol-placement': 'line',
-            'text-field': [
-              'case',
-              ['!=', ['coalesce', ['get', 'trailNumber'], ''], ''],
-              ['get', 'trailNumber'],
-              ['!=', ['coalesce', ['get', 'trailName'], ''], ''],
-              ['get', 'trailName'],
-              ['get', 'name'],
-            ],
-            'text-size': 11,
-            'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
-          },
-          paint: {
-            'text-color': [
-              'match',
-              ['coalesce', ['get', 'trailColor'], ''],
-              '#dc2626',
-              '#FF0000',
-              '#2563eb',
-              '#0044FF',
-              '#16a34a',
-              '#00C000',
-              '#334155',
-              '#111111',
-              theme === 'topo-dark' ? '#f8fafc' : '#1e293b',
-            ],
-            'text-halo-color': theme === 'topo-dark' ? '#0f172a' : '#ffffff',
-            'text-halo-width': 2,
-          },
-        }
-      );
-    }
+    // The style ships with these layers (copies of the base highway layers); this only fills gaps
+    ensureCommunityRoadLayersOnMap(map, theme, !hideCommunityRoads);
 
     const draftSourceId = 'community-road-draft-src';
     const existingDraftSrc = map.getSource(draftSourceId) as maplibregl.GeoJSONSource | undefined;
@@ -4667,6 +4573,24 @@ export const App: React.FC = () => {
       existingDraftSrc.setData(communityRoadDraftGeoJSON);
     } else {
       map.addSource(draftSourceId, { type: 'geojson', data: communityRoadDraftGeoJSON });
+    }
+    if (!map.getLayer('community-road-removed-line')) {
+      map.addLayer(
+        {
+          id: 'community-road-removed-line',
+          type: 'line',
+          source: draftSourceId,
+          filter: ['==', ['get', 'role'], 'removed-road'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#e11d48',
+            'line-width': 3,
+            'line-opacity': 0.75,
+            'line-dasharray': [1, 2],
+          },
+        },
+        findFirstNonRttOverlayLayerId(map)
+      );
     }
     if (!map.getLayer('community-road-draft-line')) {
       map.addLayer(
@@ -4737,54 +4661,21 @@ export const App: React.FC = () => {
       });
     }
 
-    // Hide base OSM highway features that have an active osm-override so only the edited road renders
-    const overriddenIds = communityRoads
-      .filter((r) => r.status === 'active' && r.kind === 'osm-override' && r.sourceOsmWayId)
-      .map((r) => Number(r.sourceOsmWayId!.replace('osm:way:', '')))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    for (const layer of map.getStyle().layers) {
-      const srcLayer = (layer as maplibregl.LayerSpecification & { 'source-layer'?: string })['source-layer'];
-      if (srcLayer !== 'transportation' || !HIGHWAY_LAYER_IDS.has(layer.id)) continue;
-      const filterKey = `${mapStyleRevision}:${layer.id}`;
-      if (!baseHighwayLayerFiltersRef.current.has(filterKey)) {
-        baseHighwayLayerFiltersRef.current.set(filterKey, map.getFilter(layer.id) ?? null);
-      }
-      const origFilter = baseHighwayLayerFiltersRef.current.get(filterKey);
-      try {
-        if (overriddenIds.length > 0) {
-          const serialized = origFilter ? JSON.stringify(origFilter) : '';
-          const isExpressionFilter =
-            serialized.includes('["get",') ||
-            serialized.includes('["coalesce",') ||
-            serialized.includes('["id"]') ||
-            serialized.includes('["literal",');
-          const excludeFilter = isExpressionFilter
-            ? (['!', ['in', ['id'], ['literal', overriddenIds]]] as unknown as maplibregl.FilterSpecification)
-            : (['!in', '$id', ...overriddenIds] as unknown as maplibregl.FilterSpecification);
-          const combined = origFilter
-            ? (['all', origFilter, excludeFilter] as unknown as maplibregl.FilterSpecification)
-            : excludeFilter;
-          map.setFilter(layer.id, combined);
-        } else {
-          map.setFilter(layer.id, origFilter ?? null);
-        }
-      } catch {
-        // Ignore layers with incompatible filter syntax
-      }
-    }
+    // Hide base OSM highway features & labels that have an active osm-override so only the edited road renders
+    applyHighwayOverrideFiltersToMap(
+      map,
+      overriddenOsmWayIds,
+      baseHighwayLayerFiltersRef.current
+    );
 
-    const hideCommunityRoads =
-      isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap);
-    for (const roadLayerId of [
-      'community-roads-casing',
-      'community-roads-track-right',
-      'community-roads-track-left',
-      'community-roads-line',
-      'community-roads-label',
-    ]) {
-      if (map.getLayer(roadLayerId)) {
-        map.setLayoutProperty(roadLayerId, 'visibility', hideCommunityRoads ? 'none' : 'visible');
-      }
+    // The road line layers follow their base highway layers (applyLayerVisibilityToMap); only the
+    // label layer is toggled here.
+    if (map.getLayer(COMMUNITY_ROADS_LABEL_LAYER_ID)) {
+      map.setLayoutProperty(
+        COMMUNITY_ROADS_LABEL_LAYER_ID,
+        'visibility',
+        hideCommunityRoads ? 'none' : 'visible'
+      );
     }
   }, [
     isMapReady,
@@ -4793,7 +4684,7 @@ export const App: React.FC = () => {
     visibility.googleSatellite,
     visibility.govmapOrtho,
     visibility.hideRoadsOnExternalMap,
-    communityRoads,
+    overriddenOsmWayIds,
     communityRoadsGeoJSON,
     communityRoadDraftGeoJSON,
   ]);
@@ -4801,205 +4692,44 @@ export const App: React.FC = () => {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady || !map.isStyleLoaded()) return;
-    const overriddenTrailWayIds = new Set<string>();
-    for (const road of communityRoads) {
-      if (road.status !== 'active') continue;
-      overriddenTrailWayIds.add(`community:road:${road.id}`);
-      if (road.kind === 'osm-override' && road.sourceOsmWayId) {
-        overriddenTrailWayIds.add(road.sourceOsmWayId);
-      }
-    }
-    const filteredTrailOverlay: GeoJSON.FeatureCollection =
-      overriddenTrailWayIds.size === 0
-        ? trailOverlayGeoJSON
-        : {
-            type: 'FeatureCollection',
-            features: trailOverlayGeoJSON.features.filter((f) => {
-              const wid = f.properties?.wayId;
-              return typeof wid !== 'string' || !overriddenTrailWayIds.has(wid);
-            }),
-          };
-    const sourceId = 'community-trails-src';
-    const existing = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+
+    const existing = map.getSource(COMMUNITY_TRAILS_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
     if (existing) {
-      existing.setData(filteredTrailOverlay);
+      existing.setData(filteredTrailOverlayGeoJSON);
     } else {
-      map.addSource(sourceId, { type: 'geojson', data: filteredTrailOverlay });
-    }
-
-    const spniMapColorExpr: maplibregl.ExpressionSpecification = [
-      'match',
-      ['coalesce', ['get', 'color'], ''],
-      '#dc2626',
-      '#FF0000',
-      '#ea580c',
-      '#FF8000',
-      '#ca8a04',
-      '#EAB308',
-      '#16a34a',
-      '#00C000',
-      '#2563eb',
-      '#0044FF',
-      '#7c3aed',
-      '#800080',
-      '#334155',
-      '#111111',
-      ['coalesce', ['get', 'color'], '#FF0000'],
-    ];
-
-    const beforeId = map.getLayer('saved-routes-line')
-      ? 'saved-routes-line'
-      : findFirstNonRttOverlayLayerId(map);
-    if (!map.getLayer('community-trails-casing')) {
-      const isTrackOrRoadFilter: maplibregl.FilterSpecification = [
-        'all',
-        ['!=', ['coalesce', ['get', 'stale'], false], true],
-        ['!=', ['get', 'trailId'], 'selection-preview'],
-        ['!', ['in', ['coalesce', ['get', 'highwayClass'], ''], ['literal', ['path', 'footway']]]],
-      ];
-      map.addLayer(
-        {
-          id: 'community-trails-casing',
-          type: 'line',
-          source: sourceId,
-          filter: isTrackOrRoadFilter,
-          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
-          paint: {
-            'line-color': theme === 'topo-dark' ? '#1e293b' : '#FFFFFF',
-            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 3.5, 13, 5, 16, 8, 22, 32],
-          },
-        },
-        beforeId
-      );
-      map.addLayer(
-        {
-          id: 'community-trails-track-right',
-          type: 'line',
-          source: sourceId,
-          filter: isTrackOrRoadFilter,
-          layout: { 'line-cap': 'round', 'line-join': 'miter', visibility: showTrailOverlay ? 'visible' : 'none' },
-          paint: {
-            'line-color': spniMapColorExpr,
-            'line-dasharray': [8, 2.5],
-            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 2, 22, 8],
-            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 2.5, 22, 10],
-          },
-        },
-        beforeId
-      );
-      map.addLayer(
-        {
-          id: 'community-trails-track-left',
-          type: 'line',
-          source: sourceId,
-          filter: isTrackOrRoadFilter,
-          layout: { 'line-cap': 'round', 'line-join': 'miter', visibility: showTrailOverlay ? 'visible' : 'none' },
-          paint: {
-            'line-color': spniMapColorExpr,
-            'line-dasharray': [8, 2.5],
-            'line-offset': ['interpolate', ['exponential', 2], ['zoom'], 12, -1, 16, -2, 22, -8],
-            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 2.5, 22, 10],
-          },
-        },
-        beforeId
-      );
-      map.addLayer(
-        {
-          id: 'community-trails-path-line',
-          type: 'line',
-          source: sourceId,
-          filter: [
-            'all',
-            ['!=', ['coalesce', ['get', 'stale'], false], true],
-            ['!=', ['get', 'trailId'], 'selection-preview'],
-            ['in', ['coalesce', ['get', 'highwayClass'], ''], ['literal', ['path', 'footway']]],
-          ],
-          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
-          paint: {
-            'line-color': spniMapColorExpr,
-            'line-dasharray': [4, 3],
-            'line-width': ['interpolate', ['exponential', 2], ['zoom'], 11, 1.8, 13, 2, 16, 4, 22, 16],
-          },
-        },
-        beforeId
-      );
-      map.addLayer(
-        {
-          id: 'community-trails-line',
-          type: 'line',
-          source: sourceId,
-          filter: ['==', ['get', 'trailId'], 'selection-preview'],
-          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showTrailOverlay ? 'visible' : 'none' },
-          paint: {
-            'line-color': '#facc15',
-            'line-width': 5,
-            'line-opacity': 0.9,
-          },
-        },
-        beforeId
-      );
-      map.addLayer(
-        {
-          id: 'community-trails-stale',
-          type: 'line',
-          source: sourceId,
-          filter: ['==', ['get', 'stale'], true],
-          layout: {
-            'line-cap': 'round',
-            'line-join': 'round',
-            visibility: showTrailOverlay ? 'visible' : 'none',
-          },
-          paint: {
-            'line-color': '#f59e0b',
-            'line-width': 3.5,
-            'line-opacity': 0.9,
-            'line-dasharray': [2, 1],
-          },
-        },
-        beforeId
-      );
-      map.addLayer(
-        {
-          id: 'community-trails-number',
-          type: 'symbol',
-          source: sourceId,
-          filter: ['!=', ['get', 'trailId'], 'selection-preview'],
-          layout: {
-            'symbol-placement': 'line',
-            'symbol-spacing': 400,
-            'text-offset': [0, -1],
-            'text-field': [
-              'case',
-              ['!=', ['coalesce', ['get', 'name'], ''], ''],
-              ['concat', ['get', 'name'], ' (', ['coalesce', ['get', 'number'], ''], ')'],
-              ['coalesce', ['get', 'number'], ''],
-            ],
-            'text-size': 12,
-            'text-font': ['bold', 'Arial', 'Tahoma', 'sans-serif'],
-            'text-allow-overlap': false,
-            visibility: showTrailOverlay ? 'visible' : 'none',
-          },
-          paint: {
-            'text-color': spniMapColorExpr,
-            'text-halo-color': theme === 'topo-dark' ? '#0B1015' : '#FFFFFF',
-            'text-halo-width': 2.5,
-            'text-halo-blur': 1,
-          },
-        }
-      );
+      map.addSource(COMMUNITY_TRAILS_SOURCE_ID, {
+        type: 'geojson',
+        data: filteredTrailOverlayGeoJSON,
+      });
     }
 
     const trailsVisible =
-      showTrailOverlay && !(isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap));
-    for (const layerId of [
-      'community-trails-casing',
-      'community-trails-track-right',
-      'community-trails-track-left',
-      'community-trails-path-line',
-      'community-trails-line',
-      'community-trails-stale',
-      'community-trails-number',
-    ]) {
+      showTrailOverlay &&
+      !(isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap));
+    const beforeId = map.getLayer('saved-routes-line')
+      ? 'saved-routes-line'
+      : findFirstNonRttOverlayLayerId(map);
+
+    if (!map.getLayer('community-trails-casing')) {
+      const { groundLayers, symbolLayers } = buildCommunityTrailLayerSpecs(
+        theme,
+        trailsVisible
+      );
+      for (const layerSpec of groundLayers) {
+        if (!map.getLayer(layerSpec.id)) {
+          map.addLayer(layerSpec as maplibregl.AddLayerObject, beforeId);
+        }
+      }
+      for (const layerSpec of symbolLayers) {
+        if (!map.getLayer(layerSpec.id)) {
+          map.addLayer(layerSpec as maplibregl.AddLayerObject);
+        }
+      }
+    }
+
+    for (const layerId of COMMUNITY_TRAILS_LAYER_IDS) {
       if (map.getLayer(layerId)) {
         map.setLayoutProperty(layerId, 'visibility', trailsVisible ? 'visible' : 'none');
       }
@@ -5007,8 +4737,7 @@ export const App: React.FC = () => {
   }, [
     isMapReady,
     mapStyleRevision,
-    communityRoads,
-    trailOverlayGeoJSON,
+    filteredTrailOverlayGeoJSON,
     showTrailOverlay,
     visibility.googleSatellite,
     visibility.govmapOrtho,
@@ -8261,33 +7990,6 @@ export const App: React.FC = () => {
               />
             </Suspense>
           )}
-
-          <Suspense fallback={null}>
-            <TrailAnnotationsPanel
-              isMarkingMode={false}
-              theme={theme}
-              currentUser={currentUser}
-              firebaseAvailable={AuthService.isAvailable()}
-              isOnline={isOnline}
-              releaseId={getTrailMapReleaseId(osmInfo)}
-              showTrailOverlay={showTrailOverlay}
-              onToggleTrailOverlay={() => setShowTrailOverlay((value) => !value)}
-              wayCandidates={trailWayCandidates}
-              onResolveCandidate={(candidate) => void resolveTrailCandidate(candidate)}
-              selectedMapWay={selectedTrailWay}
-              onConsumeSelectedWay={consumeSelectedTrailWay}
-              selectedAnnotationId={selectedTrailAnnotationId}
-              onConsumeSelectedAnnotation={consumeSelectedTrailAnnotation}
-              onAddWaysModeChange={handleTrailAddWaysModeChange}
-              onGeoJSONChange={setTrailOverlayGeoJSON}
-              onSearchItemsChange={setTrailSearchItems}
-              onNotify={showToast}
-              onClose={() => {
-                setSelectedTrailWay(null);
-                setTrailWayCandidates([]);
-              }}
-            />
-          </Suspense>
         </div>
 
         {/* ================= DESKTOP / WEB FLOATING CHROME ================= */}

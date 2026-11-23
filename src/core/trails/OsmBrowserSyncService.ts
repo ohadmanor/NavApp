@@ -1,7 +1,7 @@
 import { type NavUser } from '../firebase/AuthService';
 import { communityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
 import { trailAnnotationsCloudService } from '../firebase/TrailAnnotationsCloudService';
-import type { CommunityRoadRecord } from './CommunityRoadTypes';
+import { isRemovedOsmRoad, type CommunityRoadRecord } from './CommunityRoadTypes';
 import type { TrailAnnotationRecord } from './TrailAnnotationTypes';
 import {
   buildOsmChangeXml,
@@ -469,7 +469,8 @@ export function buildOsmSyncRoadItems(
   }
 
   return roads
-    .filter((road) => road.status === 'active')
+    // Removed-road tombstones are app-only: a way is never deleted from OpenStreetMap by this sync
+    .filter((road) => road.status === 'active' && !isRemovedOsmRoad(road))
     .map((road) => {
       const synced = Boolean(
         road.osmSync && Number(road.osmSync.syncedRevision) >= Number(road.revision)

@@ -492,6 +492,7 @@ service cloud.firestore {
           'trailNumber',
           'trailName',
           'status',
+          'removed',
           'revision',
           'lastHistoryId',
           'createdByUid',
@@ -502,6 +503,7 @@ service cloud.firestore {
         ]) &&
         data.schemaVersion == 1 &&
         data.kind in ['new', 'osm-override'] &&
+        (!('removed' in data) || (data.removed == true && data.kind == 'osm-override')) &&
         (!('sourceOsmWayId' in data) || (data.sourceOsmWayId is string && data.sourceOsmWayId.matches('^osm:way:[1-9][0-9]*$'))) &&
         data.coordinates is list &&
         data.coordinates.size() >= 2 &&
@@ -593,6 +595,7 @@ service cloud.firestore {
         next.get('trailColor', '') == prev.get('trailColor', '') &&
         next.get('trailNumber', '') == prev.get('trailNumber', '') &&
         next.get('trailName', '') == prev.get('trailName', '') &&
+        next.get('removed', false) == prev.get('removed', false) &&
         next.status == 'active' &&
         prev.status == 'active';
     }

@@ -24,6 +24,14 @@ import {
   buildWorldGlobeBaseLayers,
   buildWorldGlobeLabelLayers,
 } from './worldGlobeStyle';
+import {
+  COMMUNITY_ROADS_SOURCE_ID,
+  COMMUNITY_TRAILS_SOURCE_ID,
+  buildCommunityRoadLabelLayer,
+  buildCommunityTrailLayerSpecs,
+  getCommunityRoadBaseLayerId,
+  insertCommunityRoadLineLayers,
+} from './communityTrailLayers';
 
 export type { MapStyleId };
 export const DEFAULT_MAP_STYLE: MapStyleId = 'nms';
@@ -252,6 +260,10 @@ export interface BuildIsraelStyleParams {
   mapStyle?: MapStyleId;
   projection?: MapProjectionMode;
   includeWorldGlobe?: boolean;
+  overriddenOsmWayIds?: readonly number[];
+  communityRoadsGeoJSON?: GeoJSON.FeatureCollection;
+  trailOverlayGeoJSON?: GeoJSON.FeatureCollection;
+  showTrailOverlay?: boolean;
 }
 
 const ISRAEL_GLOBE_HIDE_BOX_IDS = new Set([
@@ -904,6 +916,11 @@ function getDynamicPaintUpdates(
   visibility: OutdoorLayerVisibility,
   options?: { styleId?: MapStyleId; isDark?: boolean }
 ): Record<string, any> | null {
+  // A community-road layer is a copy of a base highway layer and is always painted like it
+  const communityRoadBaseId = getCommunityRoadBaseLayerId(layerId);
+  if (communityRoadBaseId) {
+    return getDynamicPaintUpdates(communityRoadBaseId, visibility, options);
+  }
   const styleId: MapStyleId = options?.styleId ?? 'ihm';
   const isDark = Boolean(options?.isDark);
   const isGovmap = styleId === 'govmap';
@@ -1324,6 +1341,11 @@ function getVisibilityForIhmLayer(
   layerId: string,
   visibility: OutdoorLayerVisibility
 ): boolean | null {
+  // A community-road layer is shown and hidden together with the base highway layer it copies
+  const communityRoadBaseId = getCommunityRoadBaseLayerId(layerId);
+  if (communityRoadBaseId) {
+    return getVisibilityForIhmLayer(communityRoadBaseId, visibility);
+  }
   if (layerId === GOOGLE_SATELLITE_LAYER_ID) {
     return visibility.googleSatellite;
   }
@@ -1505,6 +1527,10 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     mapStyle = DEFAULT_MAP_STYLE,
     projection = 'globe',
     includeWorldGlobe = projection !== 'mercator',
+    overriddenOsmWayIds,
+    communityRoadsGeoJSON,
+    trailOverlayGeoJSON,
+    showTrailOverlay = true,
   } = params;
 
   const isDark = theme === 'topo-dark';
@@ -1607,6 +1633,18 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
 
   if (includeWorldGlobe) {
     sources[WORLD_BASEMAP_SOURCE_ID] = buildWorldBasemapSource(worldProtocolUrl || origin);
+  }
+  if (communityRoadsGeoJSON) {
+    sources[COMMUNITY_ROADS_SOURCE_ID] = {
+      type: 'geojson',
+      data: communityRoadsGeoJSON,
+    };
+  }
+  if (trailOverlayGeoJSON) {
+    sources[COMMUNITY_TRAILS_SOURCE_ID] = {
+      type: 'geojson',
+      data: trailOverlayGeoJSON,
+    };
   }
 
   const baseLayers = structuredClone(navappLayersRaw) as LayerSpecification[];
@@ -1866,6 +1904,59 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     applyGovmapStyleEnhancements(layers, theme, visibility);
   }
 
+  // Community roads and OSM road overrides are drawn by copies of the fully styled base highway
+  // layers, so they are indistinguishable from the roads around them in every theme and map style.
+  if (communityRoadsGeoJSON) {
+    insertCommunityRoadLineLayers(layers);
+  }
+
+  const cleanOverriddenIds = normalizeOverriddenWayIds(overriddenOsmWayIds);
+  if (cleanOverriddenIds.length > 0) {
+    for (const layer of layers) {
+      const srcLayer = (layer as LayerSpecification & { 'source-layer'?: string })['source-layer'];
+      if (
+        (srcLayer === 'transportation' || srcLayer === 'transportation_name') &&
+        HIGHWAY_LAYER_IDS.has(layer.id)
+      ) {
+        const nextFilter = buildHighwayOverrideLayerFilter((layer as any).filter, cleanOverriddenIds);
+        if (nextFilter) {
+          (layer as any).filter = nextFilter;
+        }
+      }
+    }
+  }
+
+  if (communityRoadsGeoJSON || trailOverlayGeoJSON) {
+    const hideExternalRoads =
+      isAerialOverlayActive(visibility) && Boolean(visibility.hideRoadsOnExternalMap);
+    const groundOverlays: LayerSpecification[] = [];
+    const symbolOverlays: LayerSpecification[] = [];
+
+    if (communityRoadsGeoJSON) {
+      symbolOverlays.push(buildCommunityRoadLabelLayer(theme, !hideExternalRoads));
+    }
+    if (trailOverlayGeoJSON) {
+      const trailSpecs = buildCommunityTrailLayerSpecs(
+        theme,
+        showTrailOverlay && !hideExternalRoads
+      );
+      groundOverlays.push(...trailSpecs.groundLayers);
+      symbolOverlays.push(...trailSpecs.symbolLayers);
+    }
+
+    if (groundOverlays.length > 0) {
+      const firstNonRttIdx = layers.findIndex((l) => !RTT_DRAPED_LAYER_TYPES.has(l.type));
+      if (firstNonRttIdx !== -1) {
+        layers.splice(firstNonRttIdx, 0, ...groundOverlays);
+      } else {
+        layers.push(...groundOverlays);
+      }
+    }
+    if (symbolOverlays.length > 0) {
+      layers.push(...symbolOverlays);
+    }
+  }
+
   // Insert world sea/continent/country labels in the symbol stack below place-city
   // so Israel's city and trail labels keep collision priority while keeping all symbol
   // layers above roads/trails.
@@ -1930,6 +2021,12 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
   return style;
 }
 
+function legacyFieldToExpr(field: string): any {
+  if (field === '$type') return ['geometry-type'];
+  if (field === '$id') return ['id'];
+  return ['get', field];
+}
+
 function convertLegacyFilterToExpression(filter: any): any {
   if (!filter || !Array.isArray(filter)) return null;
   const op = filter[0];
@@ -1948,13 +2045,13 @@ function convertLegacyFilterToExpression(filter: any): any {
     (op === '==' || op === '!=' || op === '>' || op === '>=' || op === '<' || op === '<=') &&
     typeof filter[1] === 'string'
   ) {
-    return [op, ['get', filter[1]], filter[2]];
+    return [op, legacyFieldToExpr(filter[1]), filter[2]];
   }
   if (op === 'in' && typeof filter[1] === 'string') {
-    return ['in', ['get', filter[1]], ['literal', filter.slice(2)]];
+    return ['in', legacyFieldToExpr(filter[1]), ['literal', filter.slice(2)]];
   }
   if (op === '!in' && typeof filter[1] === 'string') {
-    return ['!', ['in', ['get', filter[1]], ['literal', filter.slice(2)]]];
+    return ['!', ['in', legacyFieldToExpr(filter[1]), ['literal', filter.slice(2)]]];
   }
   if (op === 'has' && typeof filter[1] === 'string') {
     return ['has', filter[1]];
@@ -1963,6 +2060,80 @@ function convertLegacyFilterToExpression(filter: any): any {
     return ['!', ['has', filter[1]]];
   }
   return filter;
+}
+
+function normalizeOverriddenWayIds(ids?: readonly number[]): number[] {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const unique = new Set<number>();
+  for (const id of ids) {
+    if (Number.isSafeInteger(id) && id > 0) {
+      unique.add(id);
+    }
+  }
+  return Array.from(unique).sort((a, b) => a - b);
+}
+
+/**
+ * Combines a base transportation/transportation_name filter with an exclusion clause
+ * hiding any OSM ways superseded by active `osm-override` community roads.
+ */
+export function buildHighwayOverrideLayerFilter(
+  baseFilter: any,
+  overriddenIds: readonly number[]
+): any {
+  const cleanIds = normalizeOverriddenWayIds(overriddenIds);
+  if (cleanIds.length === 0) {
+    return baseFilter ?? null;
+  }
+  const excludeExpr: any = ['!', ['in', ['id'], ['literal', cleanIds]]];
+  const baseExpr = convertLegacyFilterToExpression(baseFilter);
+  if (!baseExpr) {
+    return excludeExpr;
+  }
+  return ['all', baseExpr, excludeExpr];
+}
+
+/**
+ * Updates all base OSM transportation/transportation_name layers on a live MapLibre instance
+ * to exclude `overriddenIds` while always deriving from each layer's original unfiltered rule.
+ */
+export function applyHighwayOverrideFiltersToMap(
+  map: any,
+  overriddenIds: readonly number[],
+  fallbackBaseFilters?: Map<string, any>
+): void {
+  const layers = map?.getStyle?.()?.layers;
+  if (!Array.isArray(layers) || typeof map.setFilter !== 'function') return;
+  const cleanIds = normalizeOverriddenWayIds(overriddenIds);
+
+  for (const layer of layers) {
+    const srcLayer = (layer as LayerSpecification & { 'source-layer'?: string })['source-layer'];
+    if (
+      (srcLayer !== 'transportation' && srcLayer !== 'transportation_name') ||
+      !HIGHWAY_LAYER_IDS.has(layer.id)
+    ) {
+      continue;
+    }
+    const rawLayer = rawLayerById.get(layer.id);
+    let origFilter: any;
+    if (rawLayer !== undefined) {
+      origFilter = rawLayer.filter ?? null;
+    } else if (fallbackBaseFilters) {
+      if (!fallbackBaseFilters.has(layer.id)) {
+        fallbackBaseFilters.set(layer.id, map.getFilter?.(layer.id) ?? null);
+      }
+      origFilter = fallbackBaseFilters.get(layer.id);
+    } else {
+      origFilter = null;
+    }
+
+    try {
+      const nextFilter = buildHighwayOverrideLayerFilter(origFilter, cleanIds);
+      map.setFilter(layer.id, nextFilter ?? null);
+    } catch {
+      // Ignore layers with incompatible filter syntax
+    }
+  }
 }
 
 /**

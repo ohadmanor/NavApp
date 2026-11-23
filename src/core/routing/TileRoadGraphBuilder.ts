@@ -2,7 +2,11 @@ import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import { pmtilesRegistry } from '../pmtiles/PMTilesRegistry';
 import { communityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
-import type { CommunityRoadRecord, RoadConnectionAnchor } from '../trails/CommunityRoadTypes';
+import {
+  isRemovedOsmRoad,
+  type CommunityRoadRecord,
+  type RoadConnectionAnchor,
+} from '../trails/CommunityRoadTypes';
 import { evaluateEdgeAccess, type PlanningMode } from './RoutingProfiles';
 
 export const ROUTING_TILE_ZOOM = 14;
@@ -434,6 +438,8 @@ export class TileRoadGraphBuilder {
         const osmNumeric = road.sourceOsmWayId.replace('osm:way:', '');
         if (osmNumeric) overriddenOsmFeatureIds.add(osmNumeric);
       }
+      // A removed-road tombstone only hides its OSM way; it contributes no edges or junctions
+      if (isRemovedOsmRoad(road)) continue;
       for (const anchor of road.anchors) {
         allAnchors.push(anchor);
       }
@@ -496,6 +502,7 @@ export class TileRoadGraphBuilder {
     }
 
     for (const road of intersectingRoads) {
+      if (isRemovedOsmRoad(road)) continue;
       const anchorByIdx = new Map<number, RoadConnectionAnchor>();
       for (const a of road.anchors) {
         anchorByIdx.set(a.vertexIndex, a);

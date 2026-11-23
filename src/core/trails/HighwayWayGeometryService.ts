@@ -6,6 +6,7 @@ import {
   TileRoadGraphBuilder,
 } from '../routing/TileRoadGraphBuilder';
 import type { DecodedWay, TileCoord } from '../routing/TileRoadGraphBuilder';
+import { db } from '../db/NavDatabase';
 import { communityRoadsCloudService } from '../firebase/CommunityRoadsCloudService';
 import { parseCommunityRoadWayId } from './CommunityRoadTypes';
 import {
@@ -133,9 +134,11 @@ export class HighwayWayGeometryService {
   ): Promise<ResolvedTrailWay> {
     const communityRoadId = parseCommunityRoadWayId(wayId);
     if (communityRoadId) {
-      const road = communityRoadsCloudService
-        .getCachedRoads()
-        .find((r) => r.id === communityRoadId);
+      const road =
+        communityRoadsCloudService
+          .getCachedRoads()
+          .find((r) => r.id === communityRoadId) ??
+        (await db.communityRoads.get(communityRoadId).catch(() => undefined));
       if (!road) {
         throw new Error('הדרך הקהילתית שנבחרה לא נמצאה במטמון המקומי.');
       }

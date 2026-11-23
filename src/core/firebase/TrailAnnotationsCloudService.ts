@@ -4,6 +4,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   runTransaction,
@@ -24,11 +25,13 @@ import {
   type TrailAnnotationHistoryRecord,
   type TrailAnnotationOperation,
   type TrailAnnotationRecord,
+  type TrailAnnotationSearchItem,
   type TrailAnnotationSnapshot,
   type TrailAnnotationDraftRecord,
   type TrailGeometryCacheRecord,
   type TrailWayGeometry,
 } from '../trails/TrailAnnotationTypes';
+import { parseCommunityRoadWayId } from '../trails/CommunityRoadTypes';
 import {
   highwayWayGeometryService,
 } from '../trails/HighwayWayGeometryService';
@@ -36,9 +39,53 @@ import { AuthService, type NavUser } from './AuthService';
 import { getFirebaseServices } from './firebaseApp';
 
 const TRAIL_ANNOTATIONS_COLLECTION = 'trail_annotations';
+export const TRAIL_OVERLAY_BOOT_STORAGE_KEY = 'navapp.trailOverlayBoot.v1';
 const MAX_PUBLIC_ANNOTATIONS = 200;
 const MAX_HISTORY_PAGE_SIZE = 50;
 const MAX_FIRESTORE_GEOMETRY_BYTES = 900_000;
+const MAX_TRAIL_BOOT_STORAGE_CHARS = 1_500_000;
+
+export interface TrailOverlayBootSnapshot {
+  geojson: GeoJSON.FeatureCollection;
+  searchItems: TrailAnnotationSearchItem[];
+}
+
+function emptyFeatureCollection(): GeoJSON.FeatureCollection {
+  return { type: 'FeatureCollection', features: [] };
+}
+
+function readTrailOverlayBootSnapshot(): TrailOverlayBootSnapshot {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { geojson: emptyFeatureCollection(), searchItems: [] };
+  }
+  try {
+    const raw = window.localStorage.getItem(TRAIL_OVERLAY_BOOT_STORAGE_KEY);
+    if (!raw) return { geojson: emptyFeatureCollection(), searchItems: [] };
+    const parsed = JSON.parse(raw) as Partial<TrailOverlayBootSnapshot>;
+    const features =
+      parsed?.geojson?.type === 'FeatureCollection' && Array.isArray(parsed.geojson.features)
+        ? parsed.geojson.features
+        : [];
+    const searchItems = Array.isArray(parsed?.searchItems) ? parsed.searchItems : [];
+    return {
+      geojson: { type: 'FeatureCollection', features },
+      searchItems,
+    };
+  } catch {
+    return { geojson: emptyFeatureCollection(), searchItems: [] };
+  }
+}
+
+function writeTrailOverlayBootSnapshot(snapshot: TrailOverlayBootSnapshot): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    const serialized = JSON.stringify(snapshot);
+    if (serialized.length > MAX_TRAIL_BOOT_STORAGE_CHARS) return;
+    window.localStorage.setItem(TRAIL_OVERLAY_BOOT_STORAGE_KEY, serialized);
+  } catch {
+    // Ignore storage quota or restricted context errors
+  }
+}
 
 let storageUnavailableForSession = false;
 
@@ -226,6 +273,59 @@ function annotationGeometryCollection(
 }
 
 export class TrailAnnotationsCloudService {
+  getBootOverlaySnapshot(): TrailOverlayBootSnapshot {
+    return readTrailOverlayBootSnapshot();
+  }
+
+  saveBootOverlaySnapshot(
+    geojson: GeoJSON.FeatureCollection,
+    searchItems: TrailAnnotationSearchItem[]
+  ): void {
+    writeTrailOverlayBootSnapshot({ geojson, searchItems });
+  }
+
+  async loadCachedPublishedAnnotations(): Promise<TrailAnnotationRecord[]> {
+    return db.trailAnnotations.toArray().catch(() => []);
+  }
+
+  async resolveCachedAnnotationGeometry(
+    annotation: TrailAnnotationRecord,
+    releaseId: string
+  ): Promise<TrailGeometryResolution> {
+    const geometries: TrailWayGeometry[] = [];
+    const staleWayIds: string[] = [];
+    for (const wayId of annotation.wayIds) {
+      if (parseCommunityRoadWayId(wayId)) {
+        try {
+          const resolved = await highwayWayGeometryService.resolveWayAt(wayId, 0, 0, releaseId);
+          const { fragments: _fragments, ...way } = resolved;
+          geometries.push(way);
+          continue;
+        } catch {
+          // Fall through to cached geometry if community road isn't available yet
+        }
+      }
+      const exact = await db.trailGeometryCache
+        .get(getTrailGeometryCacheId(releaseId, wayId))
+        .catch(() => undefined);
+      if (exact) {
+        geometries.push(exact);
+        continue;
+      }
+      const releases = await db.trailGeometryCache
+        .where('wayId')
+        .equals(wayId)
+        .toArray()
+        .catch(() => []);
+      if (releases.length > 0) {
+        geometries.push(releases.sort((a, b) => b.releaseId.localeCompare(a.releaseId))[0]);
+      } else {
+        staleWayIds.push(wayId);
+      }
+    }
+    return { ways: geometries, staleWayIds };
+  }
+
   async loadPublishedAnnotations(): Promise<TrailAnnotationLoadResult> {
     const services = getFirebaseServices();
     if (!services) {
@@ -257,6 +357,154 @@ export class TrailAnnotationsCloudService {
         source: 'cache',
         warning: 'Could not refresh shared annotations; showing the saved local copy.',
       };
+    }
+  }
+
+  subscribePublishedAnnotations(
+    onAnnotations: (annotations: TrailAnnotationRecord[]) => void
+  ): () => void {
+    const services = getFirebaseServices();
+    if (!services || typeof onSnapshot !== 'function') {
+      return () => {};
+    }
+    let disposed = false;
+    const q = query(
+      collection(services.firestore, TRAIL_ANNOTATIONS_COLLECTION),
+      orderBy('updatedAt', 'desc'),
+      limit(MAX_PUBLIC_ANNOTATIONS)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snapshots) => {
+        if (disposed) return;
+        const annotations: TrailAnnotationRecord[] = [];
+        snapshots.docs.forEach((entry) => {
+          try {
+            annotations.push(normalizeAnnotation(entry.id, entry.data()));
+          } catch {
+            // Skip invalid remote doc
+          }
+        });
+        void db.trailAnnotations.bulkPut(annotations).catch(() => {});
+        onAnnotations(annotations);
+      },
+      (err) => {
+        console.warn('[TrailAnnotationsCloudService] Snapshot warning:', err);
+      }
+    );
+    return () => {
+      disposed = true;
+      unsub();
+    };
+  }
+
+  buildSearchItems(
+    annotations: TrailAnnotationRecord[],
+    resolved: Map<string, TrailGeometryResolution>
+  ): TrailAnnotationSearchItem[] {
+    const items: TrailAnnotationSearchItem[] = [];
+    for (const annotation of annotations) {
+      if (annotation.status !== 'active') continue;
+      const resolution = resolved.get(annotation.id);
+      const firstCoord = resolution?.ways
+        .flatMap((w) => w.geometry.coordinates)
+        .flatMap((line) => line)[0];
+      if (!firstCoord) continue;
+      items.push({
+        id: annotation.id,
+        name: annotation.name || '',
+        number: annotation.number,
+        color: annotation.color,
+        description: annotation.description,
+        lon: firstCoord[0],
+        lat: firstCoord[1],
+      });
+    }
+    return items;
+  }
+
+  async resolveOverlayForAnnotations(
+    annotations: TrailAnnotationRecord[],
+    releaseId: string,
+    options?: { cachedOnly?: boolean }
+  ): Promise<{
+    resolutions: Map<string, TrailGeometryResolution>;
+    geojson: GeoJSON.FeatureCollection<GeoJSON.MultiLineString, Record<string, unknown>>;
+    searchItems: TrailAnnotationSearchItem[];
+  }> {
+    const nextResolutions = new Map<string, TrailGeometryResolution>();
+    const active = annotations.filter((annotation) => annotation.status === 'active');
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(4, active.length) }, async () => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= active.length) return;
+        const annotation = active[index];
+        try {
+          const resolution = options?.cachedOnly
+            ? await this.resolveCachedAnnotationGeometry(annotation, releaseId)
+            : await this.resolveAnnotationGeometry(annotation, releaseId);
+          nextResolutions.set(annotation.id, resolution);
+        } catch (error) {
+          if (!options?.cachedOnly) {
+            console.warn(`[TrailAnnotations] Could not load geometry for ${annotation.id}:`, error);
+          }
+          nextResolutions.set(annotation.id, { ways: [], staleWayIds: annotation.wayIds });
+        }
+      }
+    });
+    await Promise.all(workers);
+    const geojson = this.toGeoJSON(annotations, nextResolutions);
+    const searchItems = this.buildSearchItems(annotations, nextResolutions);
+    return { resolutions: nextResolutions, geojson, searchItems };
+  }
+
+  /**
+   * Cache-first overlay bootstrap: immediately emits Dexie cached annotations/geometries
+   * before reconciling fresh annotations from Firestore and persisting the synchronous boot cache.
+   */
+  async bootstrapAndSyncOverlay(
+    releaseId: string,
+    onUpdate: (overlay: {
+      geojson: GeoJSON.FeatureCollection;
+      searchItems: TrailAnnotationSearchItem[];
+      annotations: TrailAnnotationRecord[];
+      resolutions: Map<string, TrailGeometryResolution>;
+    }) => void,
+    isCancelled?: () => boolean
+  ): Promise<void> {
+    const cached = await this.loadCachedPublishedAnnotations();
+    if (isCancelled?.()) return;
+    if (cached.length > 0) {
+      const cachedOverlay = await this.resolveOverlayForAnnotations(cached, releaseId, {
+        cachedOnly: true,
+      });
+      if (isCancelled?.()) return;
+      if (cachedOverlay.geojson.features.length > 0) {
+        this.saveBootOverlaySnapshot(cachedOverlay.geojson, cachedOverlay.searchItems);
+        onUpdate({
+          geojson: cachedOverlay.geojson,
+          searchItems: cachedOverlay.searchItems,
+          annotations: cached,
+          resolutions: cachedOverlay.resolutions,
+        });
+      }
+    }
+
+    try {
+      const result = await this.loadPublishedAnnotations();
+      if (isCancelled?.()) return;
+      const freshOverlay = await this.resolveOverlayForAnnotations(result.annotations, releaseId);
+      if (isCancelled?.()) return;
+      this.saveBootOverlaySnapshot(freshOverlay.geojson, freshOverlay.searchItems);
+      onUpdate({
+        geojson: freshOverlay.geojson,
+        searchItems: freshOverlay.searchItems,
+        annotations: result.annotations,
+        resolutions: freshOverlay.resolutions,
+      });
+    } catch {
+      // Offline/unconfigured: cached emission above already rendered available trails
     }
   }
 
@@ -593,6 +841,16 @@ export class TrailAnnotationsCloudService {
     };
 
     for (const wayId of annotation.wayIds) {
+      if (parseCommunityRoadWayId(wayId)) {
+        try {
+          const resolved = await highwayWayGeometryService.resolveWayAt(wayId, 0, 0, releaseId);
+          const { fragments: _fragments, ...cache } = resolved;
+          geometries.push(cache);
+          continue;
+        } catch {
+          // Fall through to cached geometry if community road is not yet available
+        }
+      }
       const cached = await db.trailGeometryCache.get(getTrailGeometryCacheId(releaseId, wayId));
       if (cached) {
         geometries.push(cached);

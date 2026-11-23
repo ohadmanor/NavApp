@@ -140,6 +140,7 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
   const [historyError, setHistoryError] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const mountedUidRef = useRef<string | null>(currentUser?.uid ?? null);
+  const [hasLoadedAnnotations, setHasLoadedAnnotations] = useState(false);
 
   const editingAnnotation = useMemo(
     () => annotations.find((annotation) => annotation.id === trailId) || null,
@@ -152,39 +153,48 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
     const load = async () => {
       setIsLoading(true);
       setLoadError('');
+      let hasCached = false;
       try {
+        const cached = await trailAnnotationsCloudService.loadCachedPublishedAnnotations();
+        if (!cancelled && cached.length > 0) {
+          const cachedOverlay = await trailAnnotationsCloudService.resolveOverlayForAnnotations(
+            cached,
+            releaseId,
+            { cachedOnly: true }
+          );
+          if (!cancelled) {
+            hasCached = cachedOverlay.geojson.features.length > 0;
+            setAnnotations(cached);
+            setResolutions(cachedOverlay.resolutions);
+            setHasLoadedAnnotations(true);
+            setIsLoading(false);
+            if (hasCached) {
+              trailAnnotationsCloudService.saveBootOverlaySnapshot(
+                cachedOverlay.geojson,
+                cachedOverlay.searchItems
+              );
+            }
+          }
+        }
         const result: TrailAnnotationLoadResult =
           await trailAnnotationsCloudService.loadPublishedAnnotations();
         if (cancelled) return;
         const published = result.annotations;
-        setAnnotations(published);
         setLoadWarning(result.warning || '');
-        const nextResolutions = new Map<string, TrailGeometryResolution>();
-        const active = published.filter((annotation) => annotation.status === 'active');
-        let nextIndex = 0;
-        const workers = Array.from({ length: Math.min(4, active.length) }, async () => {
-          while (!cancelled) {
-            const index = nextIndex++;
-            if (index >= active.length) return;
-            const annotation = active[index];
-            try {
-              const resolution = await trailAnnotationsCloudService.resolveAnnotationGeometry(
-                annotation,
-                releaseId
-              );
-              if (!cancelled) nextResolutions.set(annotation.id, resolution);
-            } catch (error) {
-              if (!cancelled) {
-                console.warn(`[TrailAnnotations] Could not load geometry for ${annotation.id}:`, error);
-                nextResolutions.set(annotation.id, { ways: [], staleWayIds: annotation.wayIds });
-              }
-            }
-          }
-        });
-        await Promise.all(workers);
-        if (!cancelled) setResolutions(nextResolutions);
+        const freshOverlay = await trailAnnotationsCloudService.resolveOverlayForAnnotations(
+          published,
+          releaseId
+        );
+        if (cancelled) return;
+        setAnnotations(published);
+        setResolutions(freshOverlay.resolutions);
+        setHasLoadedAnnotations(true);
+        trailAnnotationsCloudService.saveBootOverlaySnapshot(
+          freshOverlay.geojson,
+          freshOverlay.searchItems
+        );
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !hasCached) {
           const message = error instanceof Error ? error.message : 'Failed to load trail annotations.';
           setLoadError(message);
           setLoadWarning('');
@@ -194,12 +204,32 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
       }
     };
     void load();
+    const unsubscribeRealtime = isOnline
+      ? trailAnnotationsCloudService.subscribePublishedAnnotations((freshAnnotations) => {
+          if (cancelled) return;
+          void trailAnnotationsCloudService
+            .resolveOverlayForAnnotations(freshAnnotations, releaseId)
+            .then((overlay) => {
+              if (cancelled) return;
+              setAnnotations(freshAnnotations);
+              setResolutions(overlay.resolutions);
+              setHasLoadedAnnotations(true);
+              trailAnnotationsCloudService.saveBootOverlaySnapshot(
+                overlay.geojson,
+                overlay.searchItems
+              );
+            })
+            .catch(() => undefined);
+        })
+      : () => {};
     return () => {
       cancelled = true;
+      unsubscribeRealtime();
     };
-  }, [releaseId]);
+  }, [releaseId, isOnline]);
 
   useEffect(() => {
+    if (!hasLoadedAnnotations && !isEditing) return;
     const geojson = trailAnnotationsCloudService.toGeoJSON(annotations, resolutions);
     if (isEditing) {
       for (const wayId of wayIds) {
@@ -221,30 +251,12 @@ export const TrailAnnotationsPanel: React.FC<TrailAnnotationsPanelProps> = ({
       }
     }
     onGeoJSONChange(geojson);
-  }, [annotations, resolutions, isEditing, wayIds, ways, onGeoJSONChange]);
+  }, [annotations, resolutions, hasLoadedAnnotations, isEditing, wayIds, ways, onGeoJSONChange]);
 
   useEffect(() => {
-    if (!onSearchItemsChange) return;
-    const items: TrailAnnotationSearchItem[] = [];
-    for (const annotation of annotations) {
-      if (annotation.status !== 'active') continue;
-      const resolution = resolutions.get(annotation.id);
-      const firstCoord = resolution?.ways
-        .flatMap((w) => w.geometry.coordinates)
-        .flatMap((line) => line)[0];
-      if (!firstCoord) continue;
-      items.push({
-        id: annotation.id,
-        name: annotation.name || '',
-        number: annotation.number,
-        color: annotation.color,
-        description: annotation.description,
-        lon: firstCoord[0],
-        lat: firstCoord[1],
-      });
-    }
-    onSearchItemsChange(items);
-  }, [annotations, resolutions, onSearchItemsChange]);
+    if (!onSearchItemsChange || !hasLoadedAnnotations) return;
+    onSearchItemsChange(trailAnnotationsCloudService.buildSearchItems(annotations, resolutions));
+  }, [annotations, resolutions, hasLoadedAnnotations, onSearchItemsChange]);
 
   useEffect(() => {
     onAddWaysModeChange(isEditing && addWaysMode);

@@ -7,6 +7,7 @@ import {
   Link2,
   LoaderCircle,
   Plus,
+  RotateCcw,
   Save,
   Trash2,
   Undo2,
@@ -129,6 +130,7 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
   const [trailName, setTrailName] = useState<string>(draft.trailName || '');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmDeleteRoad, setConfirmDeleteRoad] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyEvents, setHistoryEvents] = useState<CommunityRoadHistoryRecord[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -149,6 +151,7 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
     setTrailNumber(draft.trailNumber || draft.existingTrailAnnotation?.number || '');
     setTrailName(draft.trailName || draft.existingTrailAnnotation?.name || '');
     setErrorMessage('');
+    setConfirmDeleteRoad(false);
     setShowHistory(false);
     setHistoryEvents([]);
     // Only reset form fields when opening a different road/way, not when geometry vertices move
@@ -169,6 +172,9 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
   const existingRecord = draft.existingRecord;
   const isOsmOverride = draft.kind === 'osm-override';
   const isDeleted = existingRecord?.status === 'deleted';
+  // An OSM road that was removed from the map (tombstone); opened from its ghost line to restore it
+  const isRemoved = !isDeleted && Boolean(existingRecord?.removed);
+  const canDeleteWholeRoad = !isDeleted && !isRemoved;
   const isOsmSynced =
     Boolean(existingRecord?.osmSync) &&
     existingRecord!.osmSync!.syncedRevision >= existingRecord!.revision;
@@ -217,24 +223,77 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
     }
   };
 
-  const handleDelete = async () => {
-    if (!draft.roadId) return;
+  const runRoadRemoval = async (
+    mutate: () => Promise<CommunityRoadRecord>,
+    successMessage: string
+  ) => {
     setErrorMessage('');
     setIsSaving(true);
     try {
-      const deleted = await communityRoadsCloudService.deleteCommunityRoad({
-        roadId: draft.roadId,
-        expectedRevision: draft.expectedRevision,
-        user: currentUser,
-        reason: reason || 'מחיקת דרך קהילתית',
-      });
-      onNotify('הדרך סומנה כמחוקה מקומית ותסונכרן לענן.');
-      onDeleted(deleted);
+      const record = await mutate();
+      onNotify(successMessage);
+      onDeleted(record);
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'מחיקת הדרך נכשלה.');
+      const message = err instanceof Error ? err.message : 'מחיקת הדרך נכשלה.';
+      setErrorMessage(message);
+      // The error box sits at the bottom of a long form, so surface the failure as a toast too
+      onNotify(message);
+      setConfirmDeleteRoad(false);
     } finally {
       setIsSaving(false);
     }
+  };
+
+  /**
+   * Soft-deletes the saved record. For a community-drawn road this removes the road; for an OSM
+   * override (or a removed-road tombstone) it discards the record, so the original OSM way returns.
+   */
+  const handleDelete = async () => {
+    const roadId = draft.roadId;
+    if (!roadId) return;
+    await runRoadRemoval(
+      () =>
+        communityRoadsCloudService.deleteCommunityRoad({
+          roadId,
+          expectedRevision: draft.expectedRevision,
+          user: currentUser,
+          reason:
+            reason || (isOsmOverride ? 'חזרה לדרך המקורית של OSM' : 'מחיקת דרך קהילתית'),
+        }),
+      isOsmOverride
+        ? 'הדרך המקורית של OSM הוחזרה למפה.'
+        : 'הדרך סומנה כמחוקה מקומית ותסונכרן לענן.'
+    );
+  };
+
+  /** Deletes the entire selected road (as opposed to a single point of it). */
+  const handleDeleteWholeRoad = async () => {
+    if (isOsmOverride) {
+      const sourceOsmWayId = draft.sourceOsmWayId;
+      if (!sourceOsmWayId) return;
+      await runRoadRemoval(
+        () =>
+          communityRoadsCloudService.removeOsmRoad({
+            roadId: draft.roadId,
+            expectedRevision: draft.expectedRevision,
+            user: currentUser,
+            sourceOsmWayId,
+            coordinates: draft.coordinates,
+            highwayClass: draft.highwayClass,
+            name: draft.name,
+            reason: reason || 'הסרת דרך מהמפה',
+          }),
+        'הדרך הוסרה מהמפה ומהניתוב. ניתן לשחזר אותה במצב עריכת דרך.'
+      );
+      return;
+    }
+    if (!draft.roadId) {
+      // A new road that was never saved: nothing is stored yet, so deleting it discards the draft
+      onNotify('הדרך שלא נשמרה נמחקה.');
+      onCancel();
+      return;
+    }
+    await handleDelete();
   };
 
   const toggleHistory = async () => {
@@ -339,7 +398,9 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
       <header className={`flex items-center justify-between gap-2 border-b px-4 py-3 ${t.divider}`}>
         <div>
           <h2 className="text-sm font-bold">
-            {isOsmOverride
+            {isRemoved
+              ? `דרך OSM שהוסרה ${draft.sourceOsmWayId?.replace('osm:way:', '#') || ''}`
+              : isOsmOverride
               ? `עריכת דרך OSM ${draft.sourceOsmWayId?.replace('osm:way:', '#') || ''}`
               : draft.roadId
                 ? `עריכת דרך${name ? `: ${name}` : ''}`
@@ -354,10 +415,59 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
                 : 'ללא חיבור לרשת'}
           </p>
         </div>
-        <button type="button" onClick={onCancel} className={`rounded-lg p-2 ${t.hoverRow}`} aria-label="סגור">
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {canDeleteWholeRoad && (
+            <button
+              type="button"
+              onClick={() => setConfirmDeleteRoad(true)}
+              disabled={isSaving}
+              className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 px-2 py-1.5 text-xs font-semibold text-rose-500 disabled:opacity-45"
+              title="מחיקת הדרך כולה"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              מחק דרך
+            </button>
+          )}
+          <button type="button" onClick={onCancel} className={`rounded-lg p-2 ${t.hoverRow}`} aria-label="סגור">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </header>
+
+      {confirmDeleteRoad && canDeleteWholeRoad && (
+        <div
+          role="alertdialog"
+          aria-label="אישור מחיקת הדרך"
+          className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs"
+        >
+          <span className="font-semibold text-rose-500">
+            {isOsmOverride
+              ? 'למחוק את כל הדרך? היא תוסר מהמפה ומהניתוב לכל המשתמשים.'
+              : draft.roadId
+                ? 'למחוק את כל הדרך? היא תוסר מהמפה ומהניתוב.'
+                : 'למחוק את הדרך שעדיין לא נשמרה?'}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void handleDeleteWholeRoad()}
+              disabled={isSaving}
+              className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 font-bold text-white disabled:opacity-45"
+            >
+              {isSaving && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+              מחק
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmDeleteRoad(false)}
+              disabled={isSaving}
+              className={`rounded-lg border px-2.5 py-1 disabled:opacity-45 ${t.pillBtn}`}
+            >
+              ביטול
+            </button>
+          </span>
+        </div>
+      )}
 
       <div className="space-y-3 overflow-y-auto p-3">
         <p className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${t.subCard}`}>
@@ -384,6 +494,21 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
           <p className="rounded-lg bg-amber-500/10 p-2 text-xs text-amber-500">
             דרך זו נמחקה. שמירה תשחזר אותה למפה ולניתוב.
           </p>
+        )}
+
+        {isRemoved && (
+          <div className="rounded-lg bg-amber-500/10 p-2 text-xs text-amber-500">
+            <p>דרך זו הוסרה מהמפה ומהניתוב. שמירה תשחזר אותה עם הפרטים שבטופס.</p>
+            <button
+              type="button"
+              onClick={() => void handleDelete()}
+              disabled={isSaving}
+              className="mt-1.5 inline-flex items-center gap-1 font-semibold underline disabled:opacity-45"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              שחזור הדרך המקורית של OSM
+            </button>
+          </div>
         )}
 
         {draft.kind === 'new' && draft.anchors.length === 0 && (
@@ -675,7 +800,7 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
             className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-45"
           >
             {isSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {isDeleted ? 'שחזור ושמירה' : draft.roadId ? 'עדכון דרך' : 'שמירת דרך'}
+            {isDeleted || isRemoved ? 'שחזור ושמירה' : draft.roadId ? 'עדכון דרך' : 'שמירת דרך'}
           </button>
 
           {draft.roadId && (
@@ -690,15 +815,16 @@ export const CommunityRoadEditor: React.FC<CommunityRoadEditorProps> = ({
             </button>
           )}
 
-          {draft.roadId && !isDeleted && (
+          {draft.roadId && isOsmOverride && canDeleteWholeRoad && (
             <button
               type="button"
               onClick={() => void handleDelete()}
               disabled={isSaving}
-              className="rounded-lg border border-rose-500/40 px-2.5 py-2 text-xs text-rose-500 disabled:opacity-45"
-              title="מחיקת דרך"
+              className={`rounded-lg border px-2.5 py-2 text-xs disabled:opacity-45 ${t.pillBtn}`}
+              title="ביטול העריכה וחזרה לדרך המקורית של OSM"
+              aria-label="ביטול העריכה וחזרה לדרך המקורית של OSM"
             >
-              <Trash2 className="h-4 w-4" />
+              <RotateCcw className="h-4 w-4" />
             </button>
           )}
         </div>
