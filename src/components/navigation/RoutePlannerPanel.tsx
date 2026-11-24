@@ -68,6 +68,7 @@ interface RoutePlannerPanelProps {
   onSignOutGoogle: () => void;
   onSyncPendingNow: () => void;
   onClose: () => void;
+  hideCloseButton?: boolean;
 }
 
 const MODE_OPTIONS: Array<{
@@ -116,6 +117,7 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
   onSignOutGoogle,
   onSyncPendingNow,
   onClose,
+  hideCloseButton = false,
 }) => {
   const t = getSurfaceTheme(theme);
   const modeMeta = PLANNING_MODE_META[mode];
@@ -141,27 +143,31 @@ export const RoutePlannerPanel: React.FC<RoutePlannerPanelProps> = ({
             לחץ על המפה להוספת נקודה • דאבל-קליק לסיום
           </p>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {isEditingExisting && onCancelEdit && (
-            <button
-              type="button"
-              onClick={onCancelEdit}
-              className={`px-2 py-1 rounded-lg border text-[11px] font-bold text-amber-500 ${t.pillBtn}`}
-              title="בטל עריכה וחזור לרשימת המסלולים"
-            >
-              בטל עריכה
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
-            title="סגור מתכנן מסלול"
-            aria-label="סגור מתכנן מסלול"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {((isEditingExisting && onCancelEdit) || !hideCloseButton) && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isEditingExisting && onCancelEdit && (
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className={`px-2 py-1 rounded-lg border text-[11px] font-bold text-amber-500 ${t.pillBtn}`}
+                title="בטל עריכה וחזור לרשימת המסלולים"
+              >
+                בטל עריכה
+              </button>
+            )}
+            {!hideCloseButton && (
+              <button
+                type="button"
+                onClick={onClose}
+                className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
+                title="סגור מתכנן מסלול"
+                aria-label="סגור מתכנן מסלול"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Optional Background Reference Routes Toggle Strip */}

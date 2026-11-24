@@ -27,6 +27,7 @@ tools/pbf-to-pmtiles/bin/
 # Environment & Keystores (keep credentials safe)
 .env
 .env.local
+**/google-services.json
 devops/keystore/
 *.jks
 *.keystore

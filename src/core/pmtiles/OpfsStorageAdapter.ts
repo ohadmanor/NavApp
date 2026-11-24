@@ -51,10 +51,13 @@ export class OpfsStorageAdapter {
         if (!response.ok || !response.body) {
           throw new Error(`Failed to fetch ${sourceUrlOrBlob}: HTTP ${response.status}`);
         }
-        // Content-Length is the *compressed* size when the CDN applies Content-Encoding, while the
-        // stream yields decoded bytes. Trust only the real (probed) size, never a compressed header.
-        const encoded = !!response.headers.get('content-encoding');
-        const total = expectedSize || (encoded ? 0 : Number(response.headers.get('content-length') || 0));
+        // Content-Length is the *compressed* size when the CDN applies Content-Encoding (e.g. br/gzip),
+        // while response.body streams decoded bytes. Never compare decoded bytes against a compressed size.
+        const encoding = (response.headers.get('content-encoding') || '').trim().toLowerCase();
+        const encoded = Boolean(encoding && encoding !== 'identity');
+        const total = encoded
+          ? 0
+          : expectedSize || Number(response.headers.get('content-length') || 0);
         const reader = response.body.getReader();
         let loaded = 0;
 

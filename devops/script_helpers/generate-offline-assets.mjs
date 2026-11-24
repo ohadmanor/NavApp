@@ -353,7 +353,17 @@ const APP_SHELL = ${JSON.stringify(appShellEntries, null, 2)};
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(
+        APP_SHELL.map((entry) => {
+          const req =
+            entry === '/' || entry === '/index.html'
+              ? new Request(entry, { cache: 'reload' })
+              : entry;
+          return cache.add(req);
+        })
+      )
+    )
   );
   self.skipWaiting();
 });
@@ -361,10 +371,20 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(
+        keys
+          .filter((k) => k !== CACHE_NAME && !k.startsWith('pmtiles-range-cache-'))
+          .map((k) => caches.delete(k))
+      )
     )
   );
   self.clients.claim();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 async function handleBundledWorldPmtilesRequest(event, url) {
@@ -422,16 +442,36 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(handleBundledWorldPmtilesRequest(event, url));
     return;
   }
-  // Never intercept byte-range requests to large .pmtiles files, Android native/remote map endpoints, OAuth callbacks, or cross-origin requests
+  // Never intercept byte-range requests to large .pmtiles files, Android native/remote map endpoints, OAuth callbacks, deploy version check, or cross-origin requests
   if (
     url.pathname.startsWith('/__native_maps__/') ||
     url.pathname.startsWith('/__remote_proxy__/') ||
     url.pathname.endsWith('.pmtiles') ||
+    url.pathname === '/version.json' ||
     url.pathname === '/osm-callback' ||
     url.searchParams.has('code') ||
     event.request.headers.get('range') ||
     url.origin !== self.location.origin
   ) {
+    return;
+  }
+  // Network-first for HTML navigations & app shell entrypoints so new deploys are picked up immediately
+  if (
+    event.request.method === 'GET' &&
+    url.origin === self.location.origin &&
+    (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html')
+  ) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' })
+        .then((response) => {
+          if (response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match('/index.html'))
+    );
     return;
   }
   // Network-first for /osm-sync so admin sync view always loads latest app shell when online

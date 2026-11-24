@@ -40,6 +40,7 @@ interface MapStorageModalProps {
   osmInfo: MountedArchiveInfo | null;
   theme?: MapTheme;
   embedded?: boolean;
+  hideCloseButton?: boolean;
   currentUser?: NavUser | null;
   onArchivesUpdated: (dem: MountedArchiveInfo | null, osm: MountedArchiveInfo | null) => void;
   onDataBundleUpdated?: () => void;
@@ -68,6 +69,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   osmInfo,
   theme = 'topo-dark',
   embedded = false,
+  hideCloseButton = false,
   currentUser = null,
   onArchivesUpdated,
   onDataBundleUpdated,
@@ -348,10 +350,15 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
         file,
         (loaded, total) => {
           if (total > 0) setProgressPct(Math.round((loaded / total) * 100));
-        }
+        },
+        persistOpfs
       );
       onArchivesUpdated(updatedDem, osmInfo);
-      setStatusMessage(`✓ קובץ Israel.dem.pmtiles חובר בהצלחה מהמכשיר!`);
+      setStatusMessage(
+        updatedDem.record.storageKind === 'opfs'
+          ? '✓ קובץ Israel.dem.pmtiles נשמר בזיכרון המקומי (OPFS) וחובר בהצלחה!'
+          : '✓ קובץ Israel.dem.pmtiles חובר בהצלחה מהמכשיר!'
+      );
     } catch (err: any) {
       setStatusMessage(`שגיאה בטעינת DEM: ${err.message}`);
     } finally {
@@ -473,9 +480,11 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
             <p className={`text-xs ${t.muted}`}>עבודה מלאה בשטח ללא קליטה סלולרית</p>
           </div>
         </div>
-        <button onClick={onClose} className={`p-1.5 rounded-lg border ${t.pillBtn}`} title="סגור">
-          <X className="w-4 h-4" />
-        </button>
+        {!hideCloseButton && (
+          <button onClick={onClose} className={`p-1.5 rounded-lg border ${t.pillBtn}`} title="סגור">
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Status / Progress Banner */}
@@ -604,8 +613,8 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 <div className={`text-xs space-y-0.5 ${t.muted}`}>
                   <div>
                     {isDem
-                      ? `${info.record.storageKind === 'native-file' ? 'שמור במכשיר (Android + Auto) • ' : 'קבוע ומוגן • '}זום z${info.record.minZoom}–z${info.record.maxZoom}`
-                      : `${info.record.storageKind === 'native-file' ? 'שמור במכשיר (Android + Auto)' : info.record.storageKind === 'opfs' ? 'שמור ב-OPFS' : info.record.storageKind === 'local-server' ? 'מקור: /data מקומי' : 'מקור: ענן Firebase'} • עודכן: ${info.record.createdUtc.slice(0, 10)}`}
+                      ? `${info.record.storageKind === 'native-file' ? 'שמור במכשיר (Android + Auto) • ' : info.record.storageKind === 'opfs' ? 'שמור ב-OPFS • ' : info.record.storageKind === 'user-file' ? 'קובץ מקומי לסשן • ' : 'קבוע ומוגן • '}זום z${info.record.minZoom}–z${info.record.maxZoom}`
+                      : `${info.record.storageKind === 'native-file' ? 'שמור במכשיר (Android + Auto)' : info.record.storageKind === 'opfs' ? 'שמור ב-OPFS' : info.record.storageKind === 'user-file' ? 'קובץ מקומי לסשן' : info.record.storageKind === 'local-server' ? 'מקור: /data מקומי' : 'מקור: ענן Firebase'} • עודכן: ${info.record.createdUtc.slice(0, 10)}`}
                   </div>
                   {!isDem && info.hasTrailColorSchema !== undefined && (
                     <div
@@ -949,7 +958,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                 onChange={(e) => setPersistOpfs(e.target.checked)}
                 className="rounded border-slate-500 text-emerald-600"
               />
-              <span className={t.muted}>שמור קובץ OSM שהוחלף בזיכרון המקומי (OPFS)</span>
+              <span className={t.muted}>שמור קבצי מפה שהוחלפו (OSM / DEM) בזיכרון המקומי (OPFS)</span>
             </label>
 
             <div className="flex gap-2">

@@ -17,6 +17,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ScreenKeepAwakePlugin.class);
         registerPlugin(NativeGpsPlugin.class);
         registerPlugin(NativeOfflineStoragePlugin.class);
+        registerPlugin(NativeGoogleAuthPlugin.class);
         super.onCreate(savedInstanceState);
         NativeMapStore.getInstance(this).ensurePoisLoadedAsync();
         LocalCarServer.getInstance(this).ensureStarted();

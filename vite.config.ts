@@ -178,11 +178,42 @@ function cleanStaleBuildAssetsPlugin(): Plugin {
   };
 }
 
+function emitDeployVersionPlugin(appVersion: string): Plugin {
+  return {
+    name: 'emit-deploy-version',
+    apply: 'build',
+    closeBundle() {
+      const distDir = path.resolve(__dirname, 'dist');
+      if (!fs.existsSync(distDir)) return;
+      fs.writeFileSync(
+        path.join(distDir, 'version.json'),
+        JSON.stringify({ version: appVersion, builtAt: new Date().toISOString() }, null, 2),
+        'utf-8'
+      );
+      const swPath = path.join(distDir, 'sw.js');
+      if (fs.existsSync(swPath)) {
+        const swContent = fs.readFileSync(swPath, 'utf-8');
+        const stamped = swContent.replace(
+          /const CACHE_NAME = ['"][^'"]+['"];/,
+          `const CACHE_NAME = 'navapp-offline-${appVersion}';`
+        );
+        fs.writeFileSync(swPath, stamped, 'utf-8');
+      }
+    },
+  };
+}
+
 export default defineConfig({
   root: path.resolve(__dirname, 'src'),
   publicDir: path.resolve(__dirname, 'src', 'public'),
   envDir: __dirname,
-  plugins: [react(), tailwindcss(), pmtilesDataRangePlugin(), cleanStaleBuildAssetsPlugin()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    pmtilesDataRangePlugin(),
+    cleanStaleBuildAssetsPlugin(),
+    emitDeployVersionPlugin(APP_VERSION),
+  ],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },

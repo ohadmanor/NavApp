@@ -1,16 +1,112 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { getAppVersion } from './core/appVersion';
 import './index.css';
 
-// Register Offline-First PWA Service Worker in production web; unregister stale SWs in dev or native Capacitor
+const DEPLOYED_VERSION_KEY = 'navapp.deployedVersion.v1';
+const RELOADED_VERSION_KEY = 'navapp.reloadedForVersion.v1';
+const APP_SHELL_CACHE_PREFIX = 'navapp-offline-';
+const VERSION_CHECK_THROTTLE_MS = 45_000;
+
+async function clearStaleAppShellCaches(keepCacheName?: string): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  try {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter((k) => k.startsWith(APP_SHELL_CACHE_PREFIX) && k !== keepCacheName)
+        .map((k) => caches.delete(k))
+    );
+  } catch {
+    // Ignore restricted cache environments
+  }
+}
+
+async function applyNewDeployReload(
+  nextVersion: string,
+  swRegistration?: ServiceWorkerRegistration | null
+): Promise<void> {
+  try {
+    if (sessionStorage.getItem(RELOADED_VERSION_KEY) === nextVersion) {
+      return;
+    }
+    sessionStorage.setItem(RELOADED_VERSION_KEY, nextVersion);
+  } catch {
+    // Continue cache clear even if sessionStorage is unavailable
+  }
+  await clearStaleAppShellCaches();
+  await swRegistration?.update().catch(() => {});
+  window.location.reload();
+}
+
+async function checkRemoteDeployVersion(
+  currentVersion: string,
+  swRegistration?: ServiceWorkerRegistration | null
+): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  try {
+    const res = await fetch(`/version.json?ts=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const payload = (await res.json()) as { version?: unknown };
+    const remoteVersion = typeof payload?.version === 'string' ? payload.version.trim() : '';
+    if (remoteVersion && remoteVersion !== currentVersion) {
+      await applyNewDeployReload(remoteVersion, swRegistration);
+    }
+  } catch {
+    // Offline or local dev server without /version.json
+  }
+}
+
+// Register Offline-First PWA Service Worker in production web & clear old deploy caches automatically
 if ('serviceWorker' in navigator) {
   const isCapacitorNative = !!(window as any).Capacitor?.isNativePlatform?.();
   if (import.meta.env.PROD && !isCapacitorNative) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch((err) => {
-        console.warn('Service worker registration skipped:', err);
+    const currentVersion = getAppVersion();
+    const expectedCache = `${APP_SHELL_CACHE_PREFIX}${currentVersion}`;
+    try {
+      const prevVersion = localStorage.getItem(DEPLOYED_VERSION_KEY);
+      if (prevVersion && prevVersion !== currentVersion) {
+        void clearStaleAppShellCaches(expectedCache);
+      }
+      localStorage.setItem(DEPLOYED_VERSION_KEY, currentVersion);
+    } catch {
+      // Ignore storage errors
+    }
+
+    let swReg: ServiceWorkerRegistration | null = null;
+    let lastCheckMs = 0;
+    let refreshingFromSw = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshingFromSw) return;
+      refreshingFromSw = true;
+      void clearStaleAppShellCaches(expectedCache).finally(() => {
+        window.location.reload();
       });
+    });
+
+    window.addEventListener('load', () => {
+      lastCheckMs = Date.now();
+      navigator.serviceWorker
+        .register('/sw.js', { updateViaCache: 'none' })
+        .then((reg) => {
+          swReg = reg;
+          void reg.update().catch(() => {});
+          void checkRemoteDeployVersion(currentVersion, reg);
+        })
+        .catch((err) => {
+          console.warn('Service worker registration skipped:', err);
+          void checkRemoteDeployVersion(currentVersion, null);
+        });
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastCheckMs < VERSION_CHECK_THROTTLE_MS) return;
+      lastCheckMs = now;
+      void swReg?.update().catch(() => {});
+      void checkRemoteDeployVersion(currentVersion, swReg);
     });
   } else {
     navigator.serviceWorker.getRegistrations().then((registrations) => {

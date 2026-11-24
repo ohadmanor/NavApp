@@ -37,6 +37,7 @@ interface LayerSwitcherSheetProps {
   mapStyle: MapStyleId;
   onSelectMapStyle: (style: MapStyleId) => void;
   embedded?: boolean;
+  hideCloseButton?: boolean;
   /** Which part of the controls to show. Omit to show everything. */
   section?: LayerSheetSection;
   onSelectSection?: (section: LayerSheetSection) => void;
@@ -52,6 +53,7 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
   mapStyle,
   onSelectMapStyle,
   embedded = false,
+  hideCloseButton = false,
   section,
   onSelectSection,
 }) => {
@@ -178,18 +180,22 @@ export const LayerSwitcherSheet: React.FC<LayerSwitcherSheetProps> = ({
             <h3 className="text-sm font-bold">{header.title}</h3>
           </div>
         )}
-        <div className="flex items-center gap-1.5">
-          {!embedded && (
-            <MinimizeToggle minimized={minimized} onToggle={() => setMinimized((v) => !v)} theme={theme} />
-          )}
-          <button
-            onClick={onClose}
-            className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
-            title="סגור"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {(!embedded || !hideCloseButton) && (
+          <div className="flex items-center gap-1.5">
+            {!embedded && (
+              <MinimizeToggle minimized={minimized} onToggle={() => setMinimized((v) => !v)} theme={theme} />
+            )}
+            {!hideCloseButton && (
+              <button
+                onClick={onClose}
+                className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
+                title="סגור"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className={!embedded && minimized ? 'hidden' : 'space-y-3.5'}>

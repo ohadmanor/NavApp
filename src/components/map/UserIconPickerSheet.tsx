@@ -17,6 +17,7 @@ interface UserIconPickerSheetProps {
   isOnline: boolean;
   hasGpsFix?: boolean;
   embedded?: boolean;
+  hideCloseButton?: boolean;
   anchorSide?: 'left' | 'right';
   onSelectPreference: (next: UserLocationIconPreference) => void;
   onLocateOnMap?: () => void;
@@ -100,6 +101,7 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
   isOnline,
   hasGpsFix = true,
   embedded = false,
+  hideCloseButton = false,
   anchorSide = 'right',
   onSelectPreference,
   onLocateOnMap,
@@ -196,31 +198,35 @@ export const UserIconPickerSheet: React.FC<UserIconPickerSheetProps> = ({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          {onLocateOnMap && (
-            <button
-              type="button"
-              onClick={onLocateOnMap}
-              className={`px-2 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 ${
-                hasGpsFix
-                  ? t.pillBtn
-                  : 'bg-sky-600 border-sky-400 text-white hover:bg-sky-500'
-              }`}
-              title="הצג ומרכז את האייקון שלי במפה"
-            >
-              <LocateFixed className="w-3.5 h-3.5" />
-              <span>{hasGpsFix ? 'הצג במפה' : 'אתר GPS'}</span>
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className={`p-1.5 rounded-lg border ${t.pillBtn}`}
-            title="סגור"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {(onLocateOnMap || !hideCloseButton) && (
+          <div className="flex items-center gap-1.5">
+            {onLocateOnMap && (
+              <button
+                type="button"
+                onClick={onLocateOnMap}
+                className={`px-2 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 ${
+                  hasGpsFix
+                    ? t.pillBtn
+                    : 'bg-sky-600 border-sky-400 text-white hover:bg-sky-500'
+                }`}
+                title="הצג ומרכז את האייקון שלי במפה"
+              >
+                <LocateFixed className="w-3.5 h-3.5" />
+                <span>{hasGpsFix ? 'הצג במפה' : 'אתר GPS'}</span>
+              </button>
+            )}
+            {!hideCloseButton && (
+              <button
+                type="button"
+                onClick={onClose}
+                className={`p-1.5 rounded-lg border ${t.pillBtn}`}
+                title="סגור"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {!hasGpsFix && (

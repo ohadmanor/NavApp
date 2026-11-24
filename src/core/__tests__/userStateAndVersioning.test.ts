@@ -237,4 +237,36 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     expect(chromeClientSrc).toContain('onCloseWindow');
     expect(chromeClientSrc).toContain('WebViewTransport');
   });
+
+  it('enforces deploy cache-busting headers, network-first HTML service worker, and automatic version reload', () => {
+    const firebaseCfg = JSON.parse(fs.readFileSync('firebase.json', 'utf-8'));
+    const appHosting = firebaseCfg.hosting.find((h: any) => h.target === 'app');
+    expect(appHosting).toBeDefined();
+    for (const route of ['/', '/index.html', '/sw.js', '/version.json']) {
+      const rule = appHosting.headers.find((h: any) => h.source === route);
+      expect(rule?.headers?.[0]).toEqual({
+        key: 'Cache-Control',
+        value: 'no-cache, no-store, must-revalidate',
+      });
+    }
+
+    const swSrc = fs.readFileSync('src/public/sw.js', 'utf-8');
+    expect(swSrc).toContain("url.pathname === '/version.json'");
+    expect(swSrc).toContain("fetch(event.request, { cache: 'no-store' })");
+    expect(swSrc).toContain("!k.startsWith('pmtiles-range-cache-')");
+
+    const genAssetsSrc = fs.readFileSync('devops/script_helpers/generate-offline-assets.mjs', 'utf-8');
+    expect(genAssetsSrc).toContain("url.pathname === '/version.json'");
+    expect(genAssetsSrc).toContain("fetch(event.request, { cache: 'no-store' })");
+
+    const mainSrc = fs.readFileSync('src/main.tsx', 'utf-8');
+    expect(mainSrc).toContain("updateViaCache: 'none'");
+    expect(mainSrc).toContain('/version.json?ts=');
+    expect(mainSrc).toContain('RELOADED_VERSION_KEY');
+    expect(mainSrc).toContain('clearStaleAppShellCaches');
+
+    const viteSrc = fs.readFileSync('vite.config.ts', 'utf-8');
+    expect(viteSrc).toContain('emitDeployVersionPlugin');
+    expect(viteSrc).toContain('version.json');
+  });
 });

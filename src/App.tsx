@@ -204,7 +204,7 @@ import {
 } from './components/navigation/RoutePlannerPanel';
 import { LayerSwitcherSheet, type LayerSheetSection } from './components/map/LayerSwitcherSheet';
 import { raiseRegionalTrailNamesAbove } from './core/style/regionalTrails';
-import { MinimizeToggle } from './components/ui/MinimizeToggle';
+import { SheetChromeHeader } from './components/ui/SheetChromeHeader';
 import {
   UserIconPickerSheet,
   UserLocationIconBadge,
@@ -301,6 +301,21 @@ type MobileOverlayMode =
   | 'google-account'
   | null;
 type MobileNavOverlay = 'poi-mini' | 'layers' | 'add-poi' | 'record' | 'user-icon' | 'google-account' | null;
+
+const MOBILE_SHEET_TITLES: Record<string, string> = {
+  poi: 'נקודת עניין',
+  'poi-mini': 'נקודת עניין',
+  'google-account': 'חשבון Google',
+  'user-icon': 'אייקון מיקום',
+  layers: 'שכבות וסגנון מפה',
+  'add-poi': 'נקודה חדשה',
+  'plan-route': 'תכנון מסלול',
+  routes: 'מסלולים',
+  'planning-db': 'מאגר תכנון מסלולים',
+  'map-edit': 'עריכת מפה',
+  offline: 'מפות אופליין וייבוא',
+  record: 'הקלטת מסלול',
+};
 
 const LAST_AUTH_UID_STORAGE_KEY = 'navapp.lastAuthUid.v1';
 const PINNED_ROUTES_STORAGE_KEY = 'navapp.pinnedBackgroundRoutes.v1';
@@ -472,6 +487,7 @@ export const App: React.FC = () => {
   // Core map & archive state
   const [isMapReady, setIsMapReady] = useState(false);
   const [demInfo, setDemInfo] = useState<MountedArchiveInfo | null>(null);
+  const [isDemUnavailable, setIsDemUnavailable] = useState(false);
   const [osmInfo, setOsmInfo] = useState<MountedArchiveInfo | null>(null);
   const [trailOverlayGeoJSON, setTrailOverlayGeoJSON] = useState<GeoJSON.FeatureCollection>(
     () => initialTrailBootRef.current!.geojson
@@ -2305,7 +2321,10 @@ export const App: React.FC = () => {
         highwayWayGeometryService.clearTileCache();
         setOsmInfo(info);
       }
-      if (id === 'israel-dem') setDemInfo(info);
+      if (id === 'israel-dem') {
+        setDemInfo(info);
+        setIsDemUnavailable(false);
+      }
       setDownloadStatus(null);
       showToast(`קובץ המפה ${info.record.fileName} נשמר במכשיר! פועל 100% אופליין.`);
     });
@@ -4345,7 +4364,12 @@ export const App: React.FC = () => {
       .initializeDefaultIsraelArchives()
       .then(({ dem, osm }) => {
         if (isCancelled) return { dem: null, osm: null };
-        if (dem) setDemInfo(dem);
+        if (dem) {
+          setDemInfo(dem);
+          setIsDemUnavailable(false);
+        } else {
+          setIsDemUnavailable(true);
+        }
         if (osm) {
           setOsmInfo(osm);
           if (osm.hasTrailColorSchema === false) {
@@ -4435,10 +4459,14 @@ export const App: React.FC = () => {
     if (!map || !isMapReady) return;
 
     const effectiveOsmUrl = osmInfo?.protocolUrl || pmtilesRegistry.getDefaultOsmProtocolUrl();
-    const effectiveDemUrl = demInfo?.protocolUrl || pmtilesRegistry.getDefaultDemProtocolUrl();
-    const effectiveContourUrl =
-      demInfo?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl() || null;
-    const nextStyleKey = `${effectiveOsmUrl}|${effectiveDemUrl}|${effectiveContourUrl || ''}|${theme}|${mapStyle}`;
+    const demDisabled = !demInfo && isDemUnavailable;
+    const effectiveDemUrl = demDisabled
+      ? ''
+      : demInfo?.protocolUrl || pmtilesRegistry.getDefaultDemProtocolUrl();
+    const effectiveContourUrl = demDisabled
+      ? null
+      : demInfo?.contourProtocolUrl || pmtilesRegistry.getDefaultContourProtocolUrl() || null;
+    const nextStyleKey = `${effectiveOsmUrl}|${effectiveDemUrl}|${effectiveContourUrl || ''}|${demDisabled ? 'nodem' : 'dem'}|${theme}|${mapStyle}`;
     if (mountedStyleKeyRef.current === nextStyleKey) {
       return;
     }
@@ -4451,6 +4479,7 @@ export const App: React.FC = () => {
       osmProtocolUrl: effectiveOsmUrl,
       demProtocolUrl: effectiveDemUrl,
       contourProtocolUrl: effectiveContourUrl,
+      disableDem: demDisabled,
       worldProtocolUrl: pmtilesRegistry.getDefaultWorldProtocolUrl(),
       visibility: visibilityRef.current,
       theme,
@@ -4503,7 +4532,7 @@ export const App: React.FC = () => {
         mountedStyleKeyRef.current = '';
       }
     };
-  }, [isMapReady, demInfo, osmInfo, theme, mapStyle, syncOverlaySourcesToMap]);
+  }, [isMapReady, demInfo, isDemUnavailable, osmInfo, theme, mapStyle, syncOverlaySourcesToMap]);
 
   // Effect B: Instant in-place refresh for layer visibility, POIs, selected highlight, active route, GPS track, and Route Planner overlays
   useEffect(() => {
@@ -5005,6 +5034,21 @@ export const App: React.FC = () => {
       mobileTab === 'planning-db' ||
       mobileTab === 'map-edit' ||
       (mobileTab === 'offline' && Boolean(currentUser)));
+
+  const activeMobileSheetKey =
+    mobileDisplayMode === 'navigating'
+      ? mobileNavOverlay
+      : isMobilePlanningSheetVisible
+        ? (mobilePlanningOverlay ?? mobileTab)
+        : null;
+
+  useEffect(() => {
+    setIsMobileSheetMinimized(false);
+  }, [activeMobileSheetKey, mobileDisplayMode]);
+
+  useEffect(() => {
+    setIsDesktopDrawerMinimized(false);
+  }, [desktopDrawer]);
 
   const handleFlyTo = useCallback(
     (lon: number, lat: number, zoom = 14) => {
@@ -6596,6 +6640,48 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const handleCloseDesktopDrawer = useCallback(() => {
+    if (desktopDrawer === 'poi') {
+      setSelectedPoi(null);
+      setDesktopDrawer(null);
+      return;
+    }
+    if (desktopDrawer === 'plan-route') {
+      handleClosePlannerPanel();
+      return;
+    }
+    setDesktopDrawer(null);
+  }, [desktopDrawer, handleClosePlannerPanel]);
+
+  const handleCloseMobilePlanningSheet = useCallback(() => {
+    if (mobilePlanningOverlay === 'poi') {
+      setSelectedPoi(null);
+      setMobilePlanningOverlay(null);
+      return;
+    }
+    if (mobilePlanningOverlay === 'plan-route') {
+      handleClosePlannerPanel();
+      return;
+    }
+    if (mobilePlanningOverlay) {
+      setMobilePlanningOverlay(null);
+      return;
+    }
+    setMobileTab('explore');
+  }, [mobilePlanningOverlay, handleClosePlannerPanel]);
+
+  const handleToggleMobilePlanningHandle = useCallback(() => {
+    if (isMobileSheetMinimized) {
+      setIsMobileSheetMinimized(false);
+      return;
+    }
+    if (mobilePlanningOverlay === 'poi' || mobilePlanningOverlay === 'plan-route') {
+      setMobileSheetExpanded((v) => !v);
+      return;
+    }
+    setIsMobileSheetMinimized(true);
+  }, [isMobileSheetMinimized, mobilePlanningOverlay]);
+
   const handleChangePlanningMode = useCallback(
     (nextMode: PlanningMode) => {
       planningModeRef.current = nextMode;
@@ -7785,7 +7871,7 @@ export const App: React.FC = () => {
   return (
     <div
       dir="rtl"
-      className={`relative w-screen h-screen overflow-hidden bg-slate-950 select-none flex flex-col ${
+      className={`relative w-screen h-screen h-dvh overflow-hidden bg-slate-950 select-none flex flex-col ${
         isMobile && mobileDisplayMode === 'planning' ? 'navapp-mobile-planning' : ''
       }`}
     >
@@ -8020,32 +8106,13 @@ export const App: React.FC = () => {
                       className="absolute top-0 bottom-0 left-0 w-2 cursor-ew-resize hover:bg-emerald-500/35 active:bg-emerald-500/50 transition-colors z-20"
                     />
                   )}
-                  <div
-                    dir="rtl"
-                    className="flex items-center justify-between gap-2 px-3 py-1.5 shrink-0"
-                  >
-                    <span className={`text-[11px] font-bold ${t.muted}`}>
-                      {DESKTOP_DRAWER_TITLES[desktopDrawer] ?? ''}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <MinimizeToggle
-                        minimized={isDesktopDrawerMinimized}
-                        onToggle={() => setIsDesktopDrawerMinimized((v) => !v)}
-                        theme={theme}
-                      />
-                      {desktopDrawer === 'planning-db' && (
-                        <button
-                          type="button"
-                          onClick={() => setDesktopDrawer(null)}
-                          className={`p-1 rounded-lg transition ${t.hoverRow} ${t.muted}`}
-                          title="סגור חלון"
-                          aria-label="סגור חלון"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  <SheetChromeHeader
+                    title={DESKTOP_DRAWER_TITLES[desktopDrawer] ?? ''}
+                    minimized={isDesktopDrawerMinimized}
+                    onToggleMinimize={() => setIsDesktopDrawerMinimized((v) => !v)}
+                    onClose={handleCloseDesktopDrawer}
+                    theme={theme}
+                  />
                   <div
                     className={
                       isDesktopDrawerMinimized
@@ -8063,6 +8130,7 @@ export const App: React.FC = () => {
                       isAuthBusy={isAuthBusy}
                       onSignInGoogle={handleSignInGoogle}
                       embedded
+                      hideCloseButton
                       onClose={() => {
                         setSelectedPoi(null);
                         setDesktopDrawer(null);
@@ -8082,6 +8150,7 @@ export const App: React.FC = () => {
                     <Suspense fallback={null}>
                       <PlanningTrailDbDrawer
                         theme={theme}
+                        hideCloseButton
                         folders={planningFolders}
                         trails={planningTrails}
                         selectedTrailId={selectedPlanningTrailId}
@@ -8105,6 +8174,7 @@ export const App: React.FC = () => {
                       pois={pois}
                       theme={theme}
                       embedded
+                      hideCloseButton
                       isNavigating={isNavigatingRoute}
                       routeDisplayMode={resolvedRouteDisplay.mode}
                       backgroundRouteIds={pinnedBackgroundRouteIds}
@@ -8151,6 +8221,7 @@ export const App: React.FC = () => {
                   {desktopDrawer === 'plan-route' && (
                     <RoutePlannerPanel
                       theme={theme}
+                      hideCloseButton
                       mode={planningMode}
                       routeName={planRouteName}
                       waypoints={planWaypoints}
@@ -8191,6 +8262,7 @@ export const App: React.FC = () => {
                   {desktopDrawer === 'record' && (
                     <TrackRecorderPanel
                       theme={theme}
+                      hideCloseButton
                       isRecording={isRecordingTrack}
                       isPaused={isRecordingPaused}
                       elapsedSeconds={recordElapsedSeconds}
@@ -8210,6 +8282,7 @@ export const App: React.FC = () => {
                   {desktopDrawer === 'add-poi' && (
                     <AddPoiPanel
                       theme={theme}
+                      hideCloseButton
                       centerCoords={addPoiCoords ?? cursorCoords}
                       currentUser={currentUser}
                       isOnline={isOnline}
@@ -9225,20 +9298,20 @@ export const App: React.FC = () => {
               {renderNorthModeButton(true)}
             </div>
 
-            {/* Mobile Planning Mode Compact HUD Pill (single line alongside bottom-right distance scale) */}
+            {/* Mobile Planning Mode Compact HUD Pill (anchored bottom-right; ScaleControl sits opposite at bottom-left) */}
             {mobileDisplayMode === 'planning' && (
               <button
                 type="button"
                 onClick={() => handleCopyGrid(milCoords.idfGrid8Digit)}
                 dir="rtl"
                 data-testid="mobile-coords-pill"
-                className={`absolute bottom-3 right-3 z-20 px-2.5 py-1 rounded-full border shadow-lg text-[11px] font-mono pointer-events-auto inline-flex items-center gap-1.5 whitespace-nowrap ${t.panel}`}
+                className={`absolute bottom-3 right-3 z-20 max-w-[calc(100vw-150px)] px-2.5 py-1 rounded-full border shadow-lg text-[11px] leading-tight font-mono pointer-events-auto inline-flex items-center gap-1.5 whitespace-nowrap ${t.panel}`}
               >
-                <span className="text-emerald-500 font-bold tabular-nums">
+                <span className="text-emerald-500 font-bold tabular-nums shrink-0">
                   {cursorCoords.ele !== null ? `${cursorCoords.ele}m` : '---'}
                 </span>
-                <span className="opacity-30">•</span>
-                <span className="text-amber-500 font-bold inline-flex items-center gap-1">
+                <span className="opacity-30 shrink-0">•</span>
+                <span className="text-amber-500 font-bold inline-flex items-center gap-1 min-w-0 truncate">
                   <span className="font-sans">נ.צ.</span>
                   <span dir="ltr" className="tabular-nums">
                     {milCoords.idfGrid8Digit}
@@ -9275,21 +9348,16 @@ export const App: React.FC = () => {
         <>
           {/* Planning Expandable Bottom Sheet (hidden in default map view; no Nearby strip) */}
           {isMobilePlanningSheetVisible && (
-          <div className={`relative z-30 rounded-t-3xl border-t shadow-2xl shrink-0 ${t.panel}`}>
-            <div className="relative w-full">
-              <div
-                onClick={() => setMobileSheetExpanded(!mobileSheetExpanded)}
-                className="w-full pt-2 pb-1 flex justify-center cursor-pointer"
-              >
-                <div className="w-10 h-1 rounded-full bg-slate-400/50" />
-              </div>
-              <MinimizeToggle
-                minimized={isMobileSheetMinimized}
-                onToggle={() => setIsMobileSheetMinimized((v) => !v)}
-                theme={theme}
-                className="absolute top-0.5 left-2 !p-1"
-              />
-            </div>
+          <div className={`relative z-30 rounded-t-3xl border-t shadow-2xl shrink-0 overflow-hidden ${t.panel}`}>
+            <SheetChromeHeader
+              title={MOBILE_SHEET_TITLES[mobilePlanningOverlay ?? mobileTab] ?? ''}
+              minimized={isMobileSheetMinimized}
+              onToggleMinimize={() => setIsMobileSheetMinimized((v) => !v)}
+              onClose={handleCloseMobilePlanningSheet}
+              onToggleHandle={handleToggleMobilePlanningHandle}
+              showHandlePill
+              theme={theme}
+            />
             <div className={isMobileSheetMinimized ? 'hidden' : 'contents'}>
 
             {mobilePlanningOverlay === 'poi' && selectedPoi ? (
@@ -9303,6 +9371,7 @@ export const App: React.FC = () => {
                   isAuthBusy={isAuthBusy}
                   onSignInGoogle={handleSignInGoogle}
                   embedded
+                  hideCloseButton
                   isExpanded={mobileSheetExpanded}
                   onToggleExpand={() => setMobileSheetExpanded(!mobileSheetExpanded)}
                   onClose={() => {
@@ -9327,6 +9396,7 @@ export const App: React.FC = () => {
                 lastSyncedAt={lastSyncedAt}
                 theme={theme}
                 embedded
+                hideCloseButton
                 onSyncNow={handleSyncPendingNow}
                 onSignOutGoogle={handleSignOutGoogle}
                 onClose={() => setMobilePlanningOverlay(null)}
@@ -9337,6 +9407,7 @@ export const App: React.FC = () => {
               <UserIconPickerSheet
                 isOpen
                 embedded
+                hideCloseButton
                 theme={theme}
                 preference={userIconPref}
                 isOnline={isOnline}
@@ -9349,6 +9420,7 @@ export const App: React.FC = () => {
               <LayerSwitcherSheet
                 isOpen
                 embedded
+                hideCloseButton
                 section={mobileLayerSection}
                 onSelectSection={setMobileLayerSection}
                 onClose={() => setMobilePlanningOverlay(null)}
@@ -9363,6 +9435,7 @@ export const App: React.FC = () => {
               <div className="max-h-[60vh] overflow-y-auto">
                 <AddPoiPanel
                   theme={theme}
+                  hideCloseButton
                   centerCoords={addPoiCoords ?? cursorCoords}
                   currentUser={currentUser}
                   isOnline={isOnline}
@@ -9392,6 +9465,7 @@ export const App: React.FC = () => {
                 <div className="max-h-[56vh] overflow-y-auto">
                   <RoutePlannerPanel
                     theme={theme}
+                    hideCloseButton
                     mode={planningMode}
                     routeName={planRouteName}
                     waypoints={planWaypoints}
@@ -9466,18 +9540,18 @@ export const App: React.FC = () => {
                 </div>
               )
             ) : mobileTab === 'routes' || mobileTab === 'planning-db' ? (
-              <div className="max-h-[64vh] flex flex-col">
+              <div className="max-h-[60vh] flex flex-col">
                 {/* Unified מסלולים Sub-Menu: המסלולים שלי / תכנון מסלול / מאגר תכנון */}
-                <div className="px-3 pt-1 pb-2 border-b border-current/10 flex items-center gap-1.5 shrink-0">
+                <div className="px-3 py-2 border-b border-current/10 flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => setMobileTab('routes')}
-                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors ${
+                    className={`flex-1 min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
                       mobileTab === 'routes' ? 'bg-emerald-600 text-white' : t.subCard
                     }`}
                   >
-                    <RouteIcon className="w-3.5 h-3.5" />
-                    <span>המסלולים שלי</span>
+                    <RouteIcon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">המסלולים שלי</span>
                   </button>
                   <button
                     type="button"
@@ -9487,20 +9561,20 @@ export const App: React.FC = () => {
                       exitTrailMarkingMode();
                       setMobileSheetExpanded(true);
                     }}
-                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors ${t.subCard}`}
+                    className={`flex-1 min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${t.subCard}`}
                   >
-                    <PenTool className="w-3.5 h-3.5 text-blue-500" />
-                    <span>תכנון מסלול</span>
+                    <PenTool className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                    <span className="truncate">תכנון מסלול</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => openTrailsPlanningDb()}
-                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors ${
+                    className={`flex-1 min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
                       mobileTab === 'planning-db' ? 'bg-emerald-600 text-white' : t.subCard
                     }`}
                   >
-                    <FolderTree className="w-3.5 h-3.5" />
-                    <span>מאגר תכנון</span>
+                    <FolderTree className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">מאגר תכנון</span>
                   </button>
                 </div>
 
@@ -9510,6 +9584,7 @@ export const App: React.FC = () => {
                       <PlanningTrailDbDrawer
                         theme={theme}
                         isMobile
+                        hideCloseButton
                         folders={planningFolders}
                         trails={planningTrails}
                         selectedTrailId={selectedPlanningTrailId}
@@ -9534,6 +9609,7 @@ export const App: React.FC = () => {
                         pois={pois}
                         theme={theme}
                         embedded
+                        hideCloseButton
                         isNavigating={isNavigatingRoute}
                         routeDisplayMode={resolvedRouteDisplay.mode}
                         backgroundRouteIds={pinnedBackgroundRouteIds}
@@ -9584,20 +9660,6 @@ export const App: React.FC = () => {
               </div>
             ) : mobileTab === 'map-edit' ? (
               <div dir="rtl" className="p-3.5 space-y-2 max-h-[58vh] overflow-y-auto">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold flex items-center gap-1.5">
-                    <Pencil className="w-4 h-4 text-amber-500" />
-                    <span>עריכת מפה</span>
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setMobileTab('explore')}
-                    className={`p-1 rounded-lg ${t.hoverRow}`}
-                    title="סגור"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
                 <div className="grid grid-cols-1 gap-2">
                   <button
                     type="button"
@@ -9665,6 +9727,7 @@ export const App: React.FC = () => {
                 <MapStorageModal
                   isOpen
                   embedded
+                  hideCloseButton
                   theme={theme}
                   currentUser={currentUser}
                   onClose={() => setMobileTab('explore')}
@@ -9672,6 +9735,7 @@ export const App: React.FC = () => {
                   osmInfo={osmInfo}
                   onArchivesUpdated={(nextDem, nextOsm) => {
                     setDemInfo(nextDem);
+                    if (nextDem) setIsDemUnavailable(false);
                     setOsmInfo(nextOsm);
                   }}
                   onDataBundleUpdated={() => {
@@ -9685,110 +9749,120 @@ export const App: React.FC = () => {
           </div>
           )}
 
-          {/* Mobile Bottom Menu Bar (Planning Mode: מסלולים, עריכת מפה, Login/Account — Map accessed via Search / closing sheet) */}
+          {/* Mobile Bottom Menu Bar (Planning Mode: מסלולים, עריכת מפה, Login/Account — pb-safe sits outside min-h so Android/iOS insets never crush the buttons) */}
           <nav
-            className={`h-16 border-t px-2 flex items-center justify-around shrink-0 z-40 pb-safe ${t.navBar}`}
+            aria-label="תפריט ניווט תחתון"
+            className={`border-t shrink-0 z-40 pb-safe ${t.navBar}`}
           >
-            {[
-              {
-                id: 'routes' as const,
-                label: 'מסלולים',
-                icon: (
-                  <span className="relative inline-flex">
-                    <RouteIcon className="w-5 h-5" />
-                    {unseenSharedCount > 0 && (
-                      <span className="absolute -top-1 -right-2 px-1 min-w-[16px] h-4 rounded-full bg-violet-600 text-white text-[10px] font-bold flex items-center justify-center leading-none">
-                        {unseenSharedCount}
-                      </span>
-                    )}
-                  </span>
-                ),
-              },
-              {
-                id: 'map-edit' as const,
-                label: 'עריכת מפה',
-                icon: <Pencil className="w-5 h-5" />,
-              },
-            ].map((tab) => {
-              const active =
-                (tab.id === 'routes'
-                  ? mobileTab === 'routes' || mobileTab === 'planning-db'
-                  : mobileTab === tab.id) && !mobilePlanningOverlay;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => {
-                    setMobileTab((prev) =>
-                      prev === tab.id || (tab.id === 'routes' && prev === 'planning-db')
-                        ? 'explore'
-                        : tab.id
-                    );
-                    setMobilePlanningOverlay(null);
-                    exitTrailMarkingMode();
-                  }}
-                  className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 text-xs font-bold transition-colors ${
-                    active ? 'text-emerald-500' : ''
-                  }`}
-                >
-                  {tab.icon}
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-
-            <button
-              type="button"
-              data-testid="mobile-bottom-auth-btn"
-              disabled={isAuthBusy}
-              onClick={() => {
-                setMobileSpeedDial(null);
-                exitTrailMarkingMode();
-                if (currentUser) {
-                  setMobileTab('explore');
-                  setMobileSheetExpanded(true);
-                  setMobilePlanningOverlay((prev) =>
-                    prev === 'google-account' ? null : 'google-account'
-                  );
-                } else {
-                  void handleSignInGoogle();
-                }
-              }}
-              className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 text-xs font-bold transition-colors ${
-                mobilePlanningOverlay === 'google-account'
-                  ? 'text-emerald-500'
-                  : ''
-              }`}
-              title={
-                currentUser
-                  ? `${currentUser.displayName || currentUser.email || 'חשבון Google'} (אופליין / התנתקות)`
-                  : 'התחבר עם Google'
-              }
-            >
-              {currentUser ? (
-                <span className="relative inline-flex items-center justify-center">
-                  {currentUser.photoURL ? (
-                    <img
-                      src={currentUser.photoURL}
-                      alt={currentUser.displayName || 'Google'}
-                      referrerPolicy="no-referrer"
-                      className="w-5 h-5 rounded-full object-cover border border-emerald-500/60"
-                    />
-                  ) : (
-                    <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center">
-                      {(currentUser.displayName || currentUser.email || 'G').trim().charAt(0).toUpperCase()}
+            <div className="min-h-[3.75rem] px-2 py-1 grid grid-cols-3 items-stretch gap-1">
+              {[
+                {
+                  id: 'routes' as const,
+                  label: 'מסלולים',
+                  icon: (
+                    <>
+                      <RouteIcon className="w-5 h-5 shrink-0" />
+                      {unseenSharedCount > 0 && (
+                        <span className="absolute -top-1 -right-2 px-1 min-w-[16px] h-4 rounded-full bg-violet-600 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+                          {unseenSharedCount}
+                        </span>
+                      )}
+                    </>
+                  ),
+                },
+                {
+                  id: 'map-edit' as const,
+                  label: 'עריכת מפה',
+                  icon: <Pencil className="w-5 h-5 shrink-0" />,
+                },
+              ].map((tab) => {
+                const active =
+                  (tab.id === 'routes'
+                    ? mobileTab === 'routes' || mobileTab === 'planning-db'
+                    : mobileTab === tab.id) && !mobilePlanningOverlay;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setMobileTab((prev) =>
+                        prev === tab.id || (tab.id === 'routes' && prev === 'planning-db')
+                          ? 'explore'
+                          : tab.id
+                      );
+                      setMobilePlanningOverlay(null);
+                      exitTrailMarkingMode();
+                    }}
+                    className={`min-w-0 rounded-xl py-1 px-1 flex flex-col items-center justify-center gap-1 text-xs leading-tight font-bold transition-colors active:scale-[0.98] ${
+                      active ? 'text-emerald-500 bg-emerald-500/10' : t.hoverRow
+                    }`}
+                  >
+                    <span className="relative w-6 h-6 shrink-0 flex items-center justify-center">
+                      {tab.icon}
                     </span>
+                    <span className="whitespace-nowrap truncate max-w-full">{tab.label}</span>
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                data-testid="mobile-bottom-auth-btn"
+                disabled={isAuthBusy}
+                onClick={() => {
+                  setMobileSpeedDial(null);
+                  exitTrailMarkingMode();
+                  if (currentUser) {
+                    setMobileTab('explore');
+                    setMobileSheetExpanded(true);
+                    setMobilePlanningOverlay((prev) =>
+                      prev === 'google-account' ? null : 'google-account'
+                    );
+                  } else {
+                    void handleSignInGoogle();
+                  }
+                }}
+                className={`min-w-0 rounded-xl py-1 px-1 flex flex-col items-center justify-center gap-1 text-xs leading-tight font-bold transition-colors active:scale-[0.98] ${
+                  mobilePlanningOverlay === 'google-account'
+                    ? 'text-emerald-500 bg-emerald-500/10'
+                    : t.hoverRow
+                }`}
+                title={
+                  currentUser
+                    ? `${currentUser.displayName || currentUser.email || 'חשבון Google'} (אופליין / התנתקות)`
+                    : 'התחבר עם Google'
+                }
+              >
+                <span className="relative w-6 h-6 shrink-0 flex items-center justify-center">
+                  {currentUser ? (
+                    <>
+                      {currentUser.photoURL ? (
+                        <img
+                          src={currentUser.photoURL}
+                          alt={currentUser.displayName || 'Google'}
+                          referrerPolicy="no-referrer"
+                          className="w-5 h-5 rounded-full object-cover border border-emerald-500/60"
+                        />
+                      ) : (
+                        <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center">
+                          {(currentUser.displayName || currentUser.email || 'G').trim().charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                      <span
+                        className={`absolute bottom-0 right-0 w-2 h-2 rounded-full border ${
+                          theme === 'topo-dark' ? 'border-slate-900' : 'border-white'
+                        } ${isOnline ? 'bg-emerald-500' : 'bg-amber-400'}`}
+                      />
+                    </>
+                  ) : (
+                    <GoogleGIcon className="w-5 h-5 shrink-0" />
                   )}
-                  <span
-                    className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border ${
-                      theme === 'topo-dark' ? 'border-slate-900' : 'border-white'
-                    } ${isOnline ? 'bg-emerald-500' : 'bg-amber-400'}`}
-                  />
                 </span>
-              ) : (
-                <GoogleGIcon className="w-5 h-5" />
-              )}
-              <span>{currentUser ? 'חשבון' : 'התחבר'}</span>
-            </button>
+                <span className="whitespace-nowrap truncate max-w-full">
+                  {currentUser ? 'חשבון' : 'התחבר'}
+                </span>
+              </button>
+            </div>
           </nav>
         </>
       )}
@@ -9797,14 +9871,15 @@ export const App: React.FC = () => {
       {isMobile && mobileDisplayMode === 'navigating' && (
         <div className={`relative z-30 border-t shadow-2xl shrink-0 pb-safe ${t.panel}`}>
           {mobileNavOverlay && (
-            <div className="flex justify-end px-2 pt-1">
-              <MinimizeToggle
-                minimized={isMobileSheetMinimized}
-                onToggle={() => setIsMobileSheetMinimized((v) => !v)}
-                theme={theme}
-                className="!p-1"
-              />
-            </div>
+            <SheetChromeHeader
+              title={MOBILE_SHEET_TITLES[mobileNavOverlay] ?? ''}
+              minimized={isMobileSheetMinimized}
+              onToggleMinimize={() => setIsMobileSheetMinimized((v) => !v)}
+              onClose={() => setMobileNavOverlay(null)}
+              onToggleHandle={() => setIsMobileSheetMinimized((v) => !v)}
+              showHandlePill
+              theme={theme}
+            />
           )}
           <div className={mobileNavOverlay && isMobileSheetMinimized ? 'hidden' : 'contents'}>
           {mobileNavOverlay === 'google-account' && currentUser ? (
@@ -9815,6 +9890,7 @@ export const App: React.FC = () => {
               lastSyncedAt={lastSyncedAt}
               theme={theme}
               embedded
+              hideCloseButton
               onSyncNow={handleSyncPendingNow}
               onSignOutGoogle={handleSignOutGoogle}
               onClose={() => setMobileNavOverlay(null)}
@@ -9825,6 +9901,7 @@ export const App: React.FC = () => {
             <UserIconPickerSheet
               isOpen
               embedded
+              hideCloseButton
               theme={theme}
               preference={userIconPref}
               isOnline={isOnline}
@@ -9837,6 +9914,7 @@ export const App: React.FC = () => {
             <LayerSwitcherSheet
               isOpen
               embedded
+              hideCloseButton
               section={mobileLayerSection}
               onSelectSection={setMobileLayerSection}
               onClose={() => setMobileNavOverlay(null)}
@@ -9851,6 +9929,7 @@ export const App: React.FC = () => {
             <div className="max-h-[58vh] overflow-y-auto">
               <AddPoiPanel
                 theme={theme}
+                hideCloseButton
                 centerCoords={addPoiCoords ?? cursorCoords}
                 currentUser={currentUser}
                 isOnline={isOnline}
@@ -9885,6 +9964,7 @@ export const App: React.FC = () => {
               isAuthBusy={isAuthBusy}
               onSignInGoogle={handleSignInGoogle}
               compactNavigating
+              hideCloseButton
               onClose={() => setMobileNavOverlay(null)}
               onOpenFullPlanning={() => {
                 setMobileNavOverlay(null);
@@ -9905,6 +9985,7 @@ export const App: React.FC = () => {
             <div className="max-h-[60vh] overflow-y-auto">
               <TrackRecorderPanel
                 theme={theme}
+                hideCloseButton
                 isRecording={isRecordingTrack}
                 isPaused={isRecordingPaused}
                 elapsedSeconds={recordElapsedSeconds}
@@ -10049,6 +10130,7 @@ export const App: React.FC = () => {
             osmInfo={osmInfo}
             onArchivesUpdated={(nextDem, nextOsm) => {
               setDemInfo(nextDem);
+              if (nextDem) setIsDemUnavailable(false);
               setOsmInfo(nextOsm);
             }}
             onDataBundleUpdated={() => {

@@ -343,14 +343,51 @@ describe('Map Control Modes: My Location (3-state) & Zero-to-North (3-state)', (
     expect(appSrc).toContain("id: 'map-edit' as const");
     expect(appSrc).toContain('data-testid="mobile-bottom-auth-btn"');
     expect(appSrc).toContain('data-testid="mobile-coords-pill"');
+    expect(appSrc).toContain('max-w-[calc(100vw-150px)]');
     expect(appSrc).toContain("mobileNavOverlay === 'record'");
     expect(appSrc).not.toContain('בקרבתך');
     expect(appSrc).not.toContain("id: 'explore' as const");
     expect(appSrc).not.toContain("id: 'record' as const");
     expect(appSrc).not.toContain("id: 'offline' as const");
 
+    // Mobile bottom nav bar keeps pb-safe outside a fixed h-* container and uses equal 3-column grid + uniform icon slots
+    const navMatch = appSrc.match(/aria-label="תפריט ניווט תחתון"[\s\S]*?<\/nav>/);
+    const navSrc = navMatch?.[0] ?? '';
+    expect(navSrc).toContain('pb-safe');
+    expect(navSrc).not.toMatch(/<nav[^>]*\bh-16\b/);
+    expect(navSrc).toContain('grid-cols-3');
+    expect(navSrc).toContain('w-6 h-6 shrink-0 flex items-center justify-center');
+
+    // Mobile planning ScaleControl is anchored bottom-left away from the bottom-right coords pill
     const cssSrc = fs.readFileSync('src/index.css', 'utf-8');
     expect(cssSrc).toContain('.navapp-mobile-planning .maplibregl-ctrl-bottom-right');
     expect(cssSrc).toContain('bottom: 0.75rem !important;');
+    expect(cssSrc).toContain('left: 0.75rem !important;');
+    expect(cssSrc).toContain('right: auto !important;');
+    expect(cssSrc).not.toContain('right: 10.5rem');
+
+    // Unified sheet chrome puts drag handle, minimize (-), and close (X) cleanly in-flow across all menus
+    const chromeSrc = fs.readFileSync('src/components/ui/SheetChromeHeader.tsx', 'utf-8');
+    expect(chromeSrc).toContain('<MinimizeToggle');
+    expect(chromeSrc).toContain('aria-label="סגור"');
+    expect(appSrc).toContain('<SheetChromeHeader');
+    expect(appSrc).not.toContain('absolute top-0.5 left-2');
+
+    // All embedded menu components support hideCloseButton so outer sheet chrome does not duplicate [X]
+    const embeddedPanels = [
+      'src/components/navigation/ElevationProfileDrawer.tsx',
+      'src/components/navigation/PlanningTrailDbDrawer.tsx',
+      'src/components/navigation/RoutePlannerPanel.tsx',
+      'src/components/navigation/TrackRecorderPanel.tsx',
+      'src/components/pois/PoiInspectorSheet.tsx',
+      'src/components/pois/AddPoiPanel.tsx',
+      'src/components/map/LayerSwitcherSheet.tsx',
+      'src/components/map/UserIconPickerSheet.tsx',
+      'src/components/auth/GoogleAccountButton.tsx',
+      'src/components/maps-manager/MapStorageModal.tsx',
+    ];
+    for (const panelPath of embeddedPanels) {
+      expect(fs.readFileSync(panelPath, 'utf-8')).toContain('hideCloseButton');
+    }
   });
 });

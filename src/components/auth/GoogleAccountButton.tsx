@@ -31,6 +31,7 @@ export interface GoogleAccountMenuCardProps {
   lastSyncedAt?: string;
   theme: MapTheme;
   embedded?: boolean;
+  hideCloseButton?: boolean;
   onSyncNow?: () => void;
   onSignOutGoogle: () => void;
   onClose: () => void;
@@ -79,6 +80,7 @@ export const GoogleAccountMenuCard: React.FC<GoogleAccountMenuCardProps> = ({
   lastSyncedAt,
   theme,
   embedded = false,
+  hideCloseButton = false,
   onSyncNow,
   onSignOutGoogle,
   onClose,
@@ -119,15 +121,17 @@ export const GoogleAccountMenuCard: React.FC<GoogleAccountMenuCardProps> = ({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className={`p-1 rounded-lg ${t.muted} hover:bg-slate-500/10`}
-          title="סגור"
-          aria-label="סגור"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
+        {!hideCloseButton && (
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1 rounded-lg ${t.muted} hover:bg-slate-500/10`}
+            title="סגור"
+            aria-label="סגור"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       <div

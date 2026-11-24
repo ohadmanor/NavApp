@@ -277,6 +277,7 @@ export class PMTilesRegistry {
   private forcedDownloads = new Set<string>();
   private migrationQueue: Promise<void> = Promise.resolve();
   private migratingArchives = new Set<string>();
+  private demRemoteUnavailable = false;
   private defaultInitPromise: Promise<{
     dem: MountedArchiveInfo | null;
     osm: MountedArchiveInfo | null;
@@ -296,6 +297,21 @@ export class PMTilesRegistry {
 
   getDefaultContourProtocolUrl(): string | undefined {
     return this.defaultContourProtocolUrl;
+  }
+
+  isDemUnavailable(): boolean {
+    return this.demRemoteUnavailable;
+  }
+
+  private async assertPmtilesFileHeader(file: File): Promise<void> {
+    if (!file || file.size < 64) {
+      throw new Error('הקובץ שנבחר אינו קובץ PMTiles תקין.');
+    }
+    const magic = new Uint8Array(await file.slice(0, 7).arrayBuffer());
+    const text = String.fromCharCode(...magic);
+    if (text !== 'PMTiles') {
+      throw new Error('הקובץ שנבחר אינו ארכיון PMTiles תקין (חסרה כותרת PMTiles).');
+    }
   }
 
   private getDefaultWorldHttpUrl(): string {
@@ -526,16 +542,25 @@ export class PMTilesRegistry {
     try {
       const remote = await this.probeRemote(fileName);
       if (!remote) {
+        if (id === 'israel-dem') {
+          this.demRemoteUnavailable = true;
+        }
         console.warn(
           `[PMTilesRegistry] ${fileName} does not exist on Firebase Hosting (404/missing). Base map will be unavailable until uploaded or imported.`
         );
         return null;
       }
 
+      if (id === 'israel-dem') {
+        this.demRemoteUnavailable = false;
+      }
       console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remote.url}`);
       const mounted = await this.mountFromUrl(id, fileName, remote.url, isConstant, remote.size);
       return mounted;
     } catch (err) {
+      if (id === 'israel-dem') {
+        this.demRemoteUnavailable = true;
+      }
       console.warn(`[PMTilesRegistry] Could not mount ${fileName} from Firebase:`, err);
       return null;
     }
@@ -909,8 +934,10 @@ export class PMTilesRegistry {
 
   async mountLocalDemArchive(
     file: File,
-    onProgress?: (loaded: number, total: number) => void
+    onProgress?: (loaded: number, total: number) => void,
+    persistToOpfs = false
   ): Promise<MountedArchiveInfo> {
+    await this.assertPmtilesFileHeader(file);
     if (NativeOfflineStorage.isAndroidNative()) {
       const saved = await NativeOfflineStorage.saveBlobChunked('Israel.dem.pmtiles', file, onProgress);
       await OpfsStorageAdapter.removeFile('Israel.dem.pmtiles').catch(() => {});
@@ -923,6 +950,16 @@ export class PMTilesRegistry {
         saved.localPath,
         saved.lastModifiedMs
       );
+    }
+    if (persistToOpfs && OpfsStorageAdapter.isSupported()) {
+      const savedFile = await OpfsStorageAdapter.saveOrReplaceFromStream(
+        'Israel.dem.pmtiles',
+        file,
+        onProgress
+      );
+      this.writeMeta('Israel.dem.pmtiles', { size: savedFile.size });
+      await CachedFetchSource.clear().catch(() => {});
+      return this.mountFromFile('israel-dem', 'Israel.dem.pmtiles', savedFile, true, 'opfs');
     }
     return this.mountFromFile('israel-dem', 'Israel.dem.pmtiles', file, true, 'user-file');
   }
@@ -1011,6 +1048,7 @@ export class PMTilesRegistry {
 
     let contourProtocolUrl: string | undefined;
     if (id === 'israel-dem') {
+      this.demRemoteUnavailable = false;
       this.activeDemPmtiles = pmtiles;
       contourProtocolUrl = this.setupDemContours(pmtiles, header.maxZoom);
     }

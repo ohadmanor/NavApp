@@ -19,11 +19,18 @@ export interface RemoteDataProbe {
   size: number;
   etag?: string;
   url: string;
+  compressedTransfer?: boolean;
 }
 
 export interface StoredDataFileMeta {
   size: number;
+  transferSize?: number;
   etag?: string;
+}
+
+function isCompressedContentEncoding(headers: Headers): boolean {
+  const encoding = (headers.get('content-encoding') || '').trim().toLowerCase();
+  return Boolean(encoding && encoding !== 'identity');
 }
 
 export function readDataFileMeta(fileName: string): StoredDataFileMeta | null {
@@ -103,10 +110,12 @@ async function tryHeadProbe(targetUrl: string): Promise<RemoteDataProbe | null> 
   }
   const size = Number(res.headers.get('content-length') || 0);
   if (!size) return null;
+  const compressedTransfer = isCompressedContentEncoding(res.headers);
   return {
     size,
     etag: res.headers.get('etag') || undefined,
     url: targetUrl,
+    ...(compressedTransfer ? { compressedTransfer: true } : {}),
   };
 }
 
@@ -124,10 +133,12 @@ async function tryRangeProbe(targetUrl: string): Promise<RemoteDataProbe | null>
   const range = res.headers.get('content-range');
   const size = range ? Number(range.split('/')[1]) : Number(res.headers.get('content-length') || 0);
   if (!size) return null;
+  const compressedTransfer = isCompressedContentEncoding(res.headers);
   return {
     size,
     etag: res.headers.get('etag') || undefined,
     url: targetUrl,
+    ...(compressedTransfer ? { compressedTransfer: true } : {}),
   };
 }
 

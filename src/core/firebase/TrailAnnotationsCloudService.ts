@@ -90,14 +90,17 @@ function writeTrailOverlayBootSnapshot(snapshot: TrailOverlayBootSnapshot): void
 let storageUnavailableForSession = false;
 
 function isStorageUnavailableError(error: unknown): boolean {
-  const code = String((error as { code?: unknown } | null)?.code || '');
-  const message = String((error as { message?: unknown } | null)?.message || '');
+  const code = String((error as { code?: unknown } | null)?.code || '').toLowerCase();
+  const message = String((error as { message?: unknown } | null)?.message || '').toLowerCase();
   return (
     code.includes('storage/unknown') ||
     code.includes('storage/unauthorized') ||
     code.includes('storage/bucket-not-found') ||
     code.includes('storage/retry-limit-exceeded') ||
-    message.includes('timeout')
+    message.includes('timeout') ||
+    message.includes('failed to fetch') ||
+    message.includes('network') ||
+    message.includes('err_connection')
   );
 }
 

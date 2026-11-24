@@ -17,6 +17,7 @@ interface TrackRecorderPanelProps {
   onDiscard: () => void;
   onDropWaypoint: () => void;
   onClose: () => void;
+  hideCloseButton?: boolean;
 }
 
 export function formatDuration(seconds: number): string {
@@ -41,6 +42,7 @@ export const TrackRecorderPanel: React.FC<TrackRecorderPanelProps> = ({
   onDiscard,
   onDropWaypoint,
   onClose,
+  hideCloseButton = false,
 }) => {
   const t = getSurfaceTheme(theme);
 
@@ -68,9 +70,11 @@ export const TrackRecorderPanel: React.FC<TrackRecorderPanelProps> = ({
             <p className={`text-xs ${t.muted}`}>{pointsCount} נקודות דגימה בנתיב</p>
           </div>
         </div>
-        <button onClick={onClose} className={`p-1.5 rounded-lg border ${t.pillBtn}`} title="סגור">
-          <X className="w-4 h-4" />
-        </button>
+        {!hideCloseButton && (
+          <button onClick={onClose} className={`p-1.5 rounded-lg border ${t.pillBtn}`} title="סגור">
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* High-Contrast Outdoor Trip Computer Grid */}

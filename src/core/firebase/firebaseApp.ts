@@ -10,6 +10,7 @@ export interface FirebaseClientConfig {
   storageBucket: string;
   messagingSenderId: string;
   appId: string;
+  googleWebClientId?: string;
 }
 
 export function getFirebaseConfigFromEnv(): FirebaseClientConfig {
@@ -24,6 +25,7 @@ export function getFirebaseConfigFromEnv(): FirebaseClientConfig {
     ).trim(),
     messagingSenderId: String(env.VITE_FIREBASE_MESSAGING_SENDER_ID || '').trim(),
     appId: String(env.VITE_FIREBASE_APP_ID || '').trim(),
+    googleWebClientId: String(env.VITE_FIREBASE_GOOGLE_WEB_CLIENT_ID || '').trim() || undefined,
   };
 }
 
@@ -38,6 +40,7 @@ export interface FirebaseClientServices {
   storage: FirebaseStorage;
   firestore: Firestore;
   googleProvider: GoogleAuthProvider;
+  googleWebClientId?: string;
 }
 
 let cachedServices: FirebaseClientServices | null = null;
@@ -60,6 +63,13 @@ export function getFirebaseServices(): FirebaseClientServices | null {
   const googleProvider = new GoogleAuthProvider();
   googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-  cachedServices = { app, auth, storage, firestore, googleProvider };
+  cachedServices = {
+    app,
+    auth,
+    storage,
+    firestore,
+    googleProvider,
+    ...(cfg.googleWebClientId ? { googleWebClientId: cfg.googleWebClientId } : {}),
+  };
   return cachedServices;
 }

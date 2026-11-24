@@ -67,6 +67,7 @@ interface PoiInspectorSheetProps {
   onToggleExpand?: () => void;
   compactNavigating?: boolean;
   onOpenFullPlanning?: () => void;
+  hideCloseButton?: boolean;
 }
 
 function buildWikipediaHref(raw: string): string {
@@ -115,6 +116,7 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
   onToggleExpand,
   compactNavigating = false,
   onOpenFullPlanning,
+  hideCloseButton = false,
 }) => {
   const [noteText, setNoteText] = useState('');
   const [sampledDemEle, setSampledDemEle] = useState<number | null>(null);
@@ -387,23 +389,27 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
             <span dir="ltr">{milCoords.idfGrid8Digit}</span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {onOpenFullPlanning && (
-            <button
-              onClick={onOpenFullPlanning}
-              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
-            >
-              פרטים
-            </button>
-          )}
-          <button
-            onClick={onClose}
-            className={`p-1.5 rounded-xl border text-xs font-bold ${t.pillBtn}`}
-            title="סגור"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {(onOpenFullPlanning || !hideCloseButton) && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {onOpenFullPlanning && (
+              <button
+                onClick={onOpenFullPlanning}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+              >
+                פרטים
+              </button>
+            )}
+            {!hideCloseButton && (
+              <button
+                onClick={onClose}
+                className={`p-1.5 rounded-xl border text-xs font-bold ${t.pillBtn}`}
+                title="סגור"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -579,23 +585,27 @@ export const PoiInspectorSheet: React.FC<PoiInspectorSheetProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
-          {onToggleExpand && (
-            <button
-              onClick={onToggleExpand}
-              className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.pillBtn}`}
-            >
-              {isExpanded ? 'צמצם' : 'הרחב'}
-            </button>
-          )}
-          <button
-            onClick={onClose}
-            className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
-            title="סגור"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {(onToggleExpand || !hideCloseButton) && (
+          <div className="flex items-center gap-1 shrink-0">
+            {onToggleExpand && (
+              <button
+                onClick={onToggleExpand}
+                className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.pillBtn}`}
+              >
+                {isExpanded ? 'צמצם' : 'הרחב'}
+              </button>
+            )}
+            {!hideCloseButton && (
+              <button
+                onClick={onClose}
+                className={`p-1.5 rounded-lg border transition-colors ${t.pillBtn}`}
+                title="סגור"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Telemetry Row */}

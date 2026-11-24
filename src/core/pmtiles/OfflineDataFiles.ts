@@ -238,11 +238,20 @@ export class OfflineDataFilesManager {
 
       if (opfsSupported && !localServer) {
         const etag = res.headers?.get?.('etag') || undefined;
+        const encoding = (res.headers?.get?.('content-encoding') || '').trim().toLowerCase();
+        const compressedTransfer = Boolean(encoding && encoding !== 'identity');
+        const transferHeaderSize = Number(res.headers?.get?.('content-length') || 0);
         const mime = fileName.endsWith('.geojson') ? 'application/json' : 'application/octet-stream';
         const blob = new Blob([buf], { type: mime });
         void OpfsStorageAdapter.saveOrReplaceFromStream(fileName, blob)
           .then((saved) => {
-            writeDataFileMeta(fileName, { size: saved.size || buf.byteLength, etag });
+            writeDataFileMeta(fileName, {
+              size: saved.size || buf.byteLength,
+              ...(compressedTransfer && transferHeaderSize > 0
+                ? { transferSize: transferHeaderSize }
+                : {}),
+              etag,
+            });
           })
           .catch(() => {});
       }
@@ -305,12 +314,25 @@ export class OfflineDataFilesManager {
         this.checkedThisSession.add(fileName);
 
         const meta = readDataFileMeta(fileName);
-        // HEAD Content-Length may be the compressed size while localSize is the decoded size, so
-        // prefer the remote size recorded at download time; fall back to the local size.
-        const sameSize = meta?.size ? remote.size === meta.size : remote.size === localSize;
         const sameEtag = !meta?.etag || !remote.etag || meta.etag === remote.etag;
+        // HEAD Content-Length may be CDN-compressed (br/gzip) while localSize is decoded; compare
+        // compressed transfer size against recorded transferSize or rely on matching ETag instead of
+        // mistaking a compressed byte length for a file size mismatch.
+        const sameSize = remote.compressedTransfer
+          ? meta?.transferSize
+            ? remote.size === meta.transferSize
+            : Boolean(meta?.etag && remote.etag && meta.etag === remote.etag)
+          : meta?.size
+            ? remote.size === meta.size
+            : remote.size === localSize;
         if (sameSize && sameEtag) {
-          if (!meta) writeDataFileMeta(fileName, { size: remote.size, etag: remote.etag });
+          if (!meta || (remote.compressedTransfer && !meta.transferSize)) {
+            writeDataFileMeta(fileName, {
+              size: localSize || meta?.size || remote.size,
+              ...(remote.compressedTransfer ? { transferSize: remote.size } : {}),
+              etag: remote.etag || meta?.etag,
+            });
+          }
           return;
         }
 
@@ -332,7 +354,7 @@ export class OfflineDataFilesManager {
 
   private async downloadSingleFile(
     fileName: OfflineDataFileName,
-    knownRemote?: { size: number; etag?: string; url: string } | null,
+    knownRemote?: { size: number; etag?: string; url: string; compressedTransfer?: boolean } | null,
     onProgress?: (loaded: number, total: number) => void,
     signal?: AbortSignal
   ): Promise<number> {
@@ -353,7 +375,11 @@ export class OfflineDataFilesManager {
         onProgress,
         signal
       );
-      writeDataFileMeta(fileName, { size: remote.size || saved.sizeBytes, etag: remote.etag });
+      writeDataFileMeta(fileName, {
+        size: saved.sizeBytes || (!remote.compressedTransfer ? remote.size : 0),
+        ...(remote.compressedTransfer && remote.size ? { transferSize: remote.size } : {}),
+        etag: remote.etag,
+      });
       await OpfsStorageAdapter.removeFile(fileName).catch(() => {});
       return saved.sizeBytes;
     }
@@ -363,7 +389,7 @@ export class OfflineDataFilesManager {
     }
 
     const url = local ? local.versionedUrl : remote!.url;
-    const expectedSize = local ? local.size : remote!.size;
+    const expectedSize = local ? local.size : remote?.compressedTransfer ? undefined : remote?.size;
     const etag = local ? local.etag : remote!.etag;
     const saved = await OpfsStorageAdapter.saveOrReplaceFromStream(
       fileName,
@@ -372,7 +398,11 @@ export class OfflineDataFilesManager {
       signal,
       expectedSize
     );
-    writeDataFileMeta(fileName, { size: expectedSize || saved.size, etag });
+    writeDataFileMeta(fileName, {
+      size: saved.size || expectedSize || 0,
+      ...(!local && remote?.compressedTransfer && remote.size ? { transferSize: remote.size } : {}),
+      etag,
+    });
     return saved.size;
   }
 

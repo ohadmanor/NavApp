@@ -1,12 +1,19 @@
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import {
+  GoogleAuthProvider,
   getRedirectResult,
   onAuthStateChanged,
+  signInWithCredential,
   signInWithPopup,
   signInWithRedirect,
   signOut as firebaseSignOut,
   type User,
 } from 'firebase/auth';
-import { getFirebaseServices, isFirebaseConfigured } from './firebaseApp';
+import {
+  getFirebaseServices,
+  isFirebaseConfigured,
+  type FirebaseClientServices,
+} from './firebaseApp';
 
 export interface NavUser {
   uid: string;
@@ -14,6 +21,27 @@ export interface NavUser {
   displayName: string | null;
   photoURL: string | null;
 }
+
+export interface NativeGoogleSignInResult {
+  idToken: string;
+  email?: string;
+  displayName?: string;
+  photoUrl?: string;
+}
+
+export interface NativeGoogleAuthPlugin {
+  signIn(options?: { serverClientId?: string }): Promise<NativeGoogleSignInResult>;
+  signOut(): Promise<void>;
+}
+
+export const NativeGoogleAuth = registerPlugin<NativeGoogleAuthPlugin>('NativeGoogleAuth');
+
+const NATIVE_FALLBACK_ERROR_CODES = new Set([
+  'NO_CREDENTIAL',
+  'UNAVAILABLE',
+  'MISSING_WEB_CLIENT_ID',
+  'UNIMPLEMENTED',
+]);
 
 function mapFirebaseUser(user: User | null): NavUser | null {
   if (!user) return null;
@@ -32,7 +60,50 @@ function mapFirebaseUser(user: User | null): NavUser | null {
 
 export function isCapacitorNativePlatform(): boolean {
   if (typeof window === 'undefined') return false;
-  return Boolean((window as any).Capacitor?.isNativePlatform?.());
+  return Boolean((window as any).Capacitor?.isNativePlatform?.() || Capacitor.isNativePlatform?.());
+}
+
+export function isAndroidNativePlatform(): boolean {
+  if (!isCapacitorNativePlatform()) return false;
+  const cap = (typeof window !== 'undefined' ? (window as any).Capacitor : undefined) as
+    | { getPlatform?: () => string }
+    | undefined;
+  const platform =
+    typeof cap?.getPlatform === 'function' ? cap.getPlatform() : Capacitor.getPlatform?.();
+  if (platform) return platform === 'android';
+  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+}
+
+async function signInWithAndroidNativeAccount(
+  services: FirebaseClientServices
+): Promise<NavUser | null> {
+  try {
+    const result = await NativeGoogleAuth.signIn({
+      ...(services.googleWebClientId ? { serverClientId: services.googleWebClientId } : {}),
+    });
+    if (!result?.idToken) {
+      throw new Error('לא התקבל אסימון זיהוי מחשבון Google במכשיר');
+    }
+    const credential = GoogleAuthProvider.credential(result.idToken);
+    const firebaseCred = await signInWithCredential(services.auth, credential);
+    const mapped = mapFirebaseUser(firebaseCred.user);
+    if (!mapped) throw new Error('לא התקבלו פרטי משתמש מ-Google');
+    return mapped;
+  } catch (err: any) {
+    const code = String(err?.code || '').toUpperCase();
+    const message = String(err?.message || '');
+    if (code === 'CANCELLED') {
+      throw new Error('ההתחברות עם Google בוטלה');
+    }
+    if (
+      NATIVE_FALLBACK_ERROR_CODES.has(code) ||
+      /not implemented|unimplemented/i.test(message)
+    ) {
+      console.warn('[Auth] Native Android Google Sign-In unavailable, falling back to popup:', err);
+      return null;
+    }
+    throw err;
+  }
 }
 
 export class AuthService {
@@ -68,6 +139,13 @@ export class AuthService {
       );
     }
 
+    if (isAndroidNativePlatform()) {
+      const nativeUser = await signInWithAndroidNativeAccount(services);
+      if (nativeUser) {
+        return nativeUser;
+      }
+    }
+
     try {
       const cred = await signInWithPopup(services.auth, services.googleProvider);
       const mapped = mapFirebaseUser(cred.user);
@@ -97,6 +175,9 @@ export class AuthService {
 
   static async signOut(): Promise<void> {
     const services = getFirebaseServices();
+    if (isAndroidNativePlatform()) {
+      await NativeGoogleAuth.signOut().catch(() => {});
+    }
     if (!services) return;
     await firebaseSignOut(services.auth);
   }

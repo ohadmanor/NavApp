@@ -143,6 +143,7 @@ interface ElevationProfileDrawerProps {
   onFlyToRoute: (route: SavedRouteRecord) => void;
   onFitAllRoutes?: () => void;
   embedded?: boolean;
+  hideCloseButton?: boolean;
 }
 
 export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
@@ -178,6 +179,7 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
   onFlyToRoute,
   onFitAllRoutes,
   embedded = false,
+  hideCloseButton = false,
 }) => {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [pinnedIdx, setPinnedIdx] = useState<number | null>(null);
@@ -939,20 +941,22 @@ export const ElevationProfileDrawer: React.FC<ElevationProfileDrawerProps> = ({
               </button>
             )
           )}
-          <button
-            type="button"
-            onClick={() => {
-              setHoveredIdx(null);
-              setPinnedIdx(null);
-              onHoverPoint(null);
-              onClose();
-            }}
-            className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
-            title="סגור"
-            aria-label="סגור"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!hideCloseButton && (
+            <button
+              type="button"
+              onClick={() => {
+                setHoveredIdx(null);
+                setPinnedIdx(null);
+                onHoverPoint(null);
+                onClose();
+              }}
+              className={`p-1.5 rounded-lg border shrink-0 ${t.pillBtn}`}
+              title="סגור"
+              aria-label="סגור"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 

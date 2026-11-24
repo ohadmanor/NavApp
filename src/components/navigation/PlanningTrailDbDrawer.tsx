@@ -63,6 +63,7 @@ interface PlanningTrailDbDrawerProps {
   onDeleteTrail: (trailId: string) => Promise<void>;
   onSendTrailToActiveRoutes: (trailId: string) => Promise<void>;
   onClose?: () => void;
+  hideCloseButton?: boolean;
 }
 
 export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
@@ -82,6 +83,7 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
   onDeleteTrail,
   onSendTrailToActiveRoutes,
   onClose,
+  hideCloseButton = false,
 }) => {
   const surface = getSurfaceTheme(theme);
   const [activeFolderId, setActiveFolderId] = useState<string>('v-all');
@@ -487,7 +489,7 @@ export const PlanningTrailDbDrawer: React.FC<PlanningTrailDbDrawerProps> = ({
           >
             <FolderPlus className="w-4 h-4" />
           </button>
-          {onClose && (
+          {!hideCloseButton && onClose && (
             <button
               type="button"
               onClick={onClose}

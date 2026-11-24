@@ -253,6 +253,7 @@ export interface BuildIsraelStyleParams {
   osmProtocolUrl?: string | null;
   demProtocolUrl?: string | null;
   contourProtocolUrl?: string | null;
+  disableDem?: boolean;
   tacticalGridProtocolUrl?: string | null;
   worldProtocolUrl?: string | null;
   visibility: OutdoorLayerVisibility;
@@ -1520,6 +1521,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
     osmProtocolUrl,
     demProtocolUrl,
     contourProtocolUrl,
+    disableDem = false,
     tacticalGridProtocolUrl = 'tactical-grid://{z}/{x}/{y}',
     worldProtocolUrl,
     visibility,
@@ -1543,7 +1545,7 @@ export function buildIsraelOutdoorStyle(params: BuildIsraelStyleParams): StyleSp
   const defaultOsmUrl = `pmtiles://${pmtilesUrl('Israel.osm.pmtiles')}`;
   const defaultDemUrl = `pmtiles://${pmtilesUrl('Israel.dem.pmtiles')}`;
   const effectiveOsmUrl = osmProtocolUrl || defaultOsmUrl;
-  const effectiveDemUrl = demProtocolUrl || defaultDemUrl;
+  const effectiveDemUrl = disableDem ? '' : demProtocolUrl || defaultDemUrl;
 
   const sources: StyleSpecification['sources'] = {
     [GOOGLE_SATELLITE_SOURCE_ID]: {

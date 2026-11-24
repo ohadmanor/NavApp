@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,11 +26,14 @@ import {
 } from '../pmtiles/OfflineDataFiles';
 import { OpfsStorageAdapter } from '../pmtiles/OpfsStorageAdapter';
 import { NativeOfflineStorage } from '../pmtiles/NativeOfflineStorage';
+import { PMTilesRegistry } from '../pmtiles/PMTilesRegistry';
+import { buildIsraelOutdoorStyle, DEFAULT_LAYER_VISIBILITY } from '../style/israelOutdoorStyle';
 
 describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
   const origWindow = (globalThis as any).window;
   const origFetch = globalThis.fetch;
   const origLocalStorage = (globalThis as any).localStorage;
+  const origNavigator = (globalThis as any).navigator;
 
   function setupMockLocalStorage() {
     const store = new Map<string, string>();
@@ -51,6 +55,11 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
     (globalThis as any).window = origWindow;
     globalThis.fetch = origFetch;
     (globalThis as any).localStorage = origLocalStorage;
+    Object.defineProperty(globalThis, 'navigator', {
+      value: origNavigator,
+      configurable: true,
+      writable: true,
+    });
   });
 
   it('treats Capacitor localhost native origin as non-local dev server and builds Firebase URLs', () => {
@@ -415,5 +424,193 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
       size: 1402183369,
       etag: '"dem-etag"',
     });
+  });
+
+  it('handles CDN Content-Encoding: br compressed Content-Length without Incomplete download errors or bogus updates', async () => {
+    (globalThis as any).window = {
+      location: { origin: 'https://navapp-israel-topo.web.app', hostname: 'navapp-israel-topo.web.app' },
+    };
+    vi.spyOn(NativeOfflineStorage, 'isAndroidNative').mockReturnValue(false);
+
+    const opfsFiles = new Map<string, Uint8Array>();
+    const makeMockDir = () => ({
+      getDirectoryHandle: async () => makeMockDir(),
+      getFileHandle: async (name: string) => ({
+        createWritable: async () => {
+          const chunks: Uint8Array[] = [];
+          return {
+            write: async (chunk: BufferSource) => {
+              const view =
+                chunk instanceof ArrayBuffer
+                  ? new Uint8Array(chunk)
+                  : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+              chunks.push(view.slice());
+            },
+            close: async () => {
+              const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+              const out = new Uint8Array(total);
+              let off = 0;
+              for (const c of chunks) {
+                out.set(c, off);
+                off += c.byteLength;
+              }
+              opfsFiles.set(name, out);
+            },
+            abort: async () => {},
+          };
+        },
+        move: async (targetName: string) => {
+          const buf = opfsFiles.get(name);
+          if (buf) {
+            opfsFiles.delete(name);
+            opfsFiles.set(targetName, buf);
+          }
+        },
+        getFile: async () => {
+          const data = opfsFiles.get(name);
+          if (!data) throw new Error('NotFoundError');
+          return {
+            name,
+            size: data.byteLength,
+            lastModified: Date.now(),
+            arrayBuffer: async () => data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+          } as unknown as File;
+        },
+      }),
+      removeEntry: async (name: string) => {
+        opfsFiles.delete(name);
+      },
+    });
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { storage: { getDirectory: async () => makeMockDir() } },
+      configurable: true,
+      writable: true,
+    });
+
+    const v1Payload = new TextEncoder().encode(
+      JSON.stringify({
+        type: 'FeatureCollection',
+        features: Array.from({ length: 20 }, (_, i) => ({
+          type: 'Feature',
+          id: `v1-${i}`,
+          geometry: { type: 'Point', coordinates: [35.2, 31.7] },
+          properties: { nameHe: `נקודה ראשונה ${i}` },
+        })),
+      })
+    );
+    const v2Payload = new TextEncoder().encode(
+      JSON.stringify({
+        type: 'FeatureCollection',
+        features: Array.from({ length: 12 }, (_, i) => ({
+          type: 'Feature',
+          id: `v2-${i}`,
+          geometry: { type: 'Point', coordinates: [35.3, 31.8] },
+          properties: { nameHe: `נקודה מעודכנת ${i}` },
+        })),
+      })
+    );
+
+    opfsFiles.set('Israel.pois.geojson', v1Payload);
+    writeDataFileMeta('Israel.pois.geojson', {
+      size: v1Payload.byteLength,
+      etag: '"same-br"',
+    });
+
+    let currentEtag = '"same-br"';
+    let currentTransferSize = 312;
+    let currentBody = v1Payload;
+    let getCount = 0;
+
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      if (method === 'HEAD') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            'content-type': 'application/geo+json',
+            'content-encoding': 'br',
+            'content-length': String(currentTransferSize),
+            etag: currentEtag,
+          }),
+        } as unknown as Response;
+      }
+      getCount += 1;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(currentBody);
+          controller.close();
+        },
+      });
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'content-type': 'application/geo+json',
+          'content-encoding': 'br',
+          'content-length': String(currentTransferSize),
+          etag: currentEtag,
+        }),
+        body: stream,
+      } as unknown as Response;
+    });
+
+    // 1. Probe preserves compressedTransfer flag so decoded vs compressed sizes are never confused
+    const probeSame = await probeRemoteDataFile('Israel.pois.geojson', { preferHead: true });
+    expect(probeSame?.compressedTransfer).toBe(true);
+    expect(probeSame?.size).toBe(312);
+
+    // 2. Matching ETag skips bogus background re-download despite HEAD compressed size != decoded OPFS size
+    const mgr1 = new OfflineDataFilesManager();
+    const res1 = await mgr1.loadJson('Israel.pois.geojson');
+    expect(res1.features[0].id).toBe('v1-0');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(getCount).toBe(0);
+
+    // 3. New ETag streams full decoded body through real OpfsStorageAdapter without Incomplete download
+    currentEtag = '"v2-br"';
+    currentTransferSize = 188;
+    currentBody = v2Payload;
+    const mgr2 = new OfflineDataFilesManager();
+    const updated: string[] = [];
+    mgr2.onDataFileUpdated((f) => updated.push(f));
+    await mgr2.loadJson('Israel.pois.geojson');
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(getCount).toBe(1);
+    expect(updated).toEqual(['Israel.pois.geojson']);
+    expect(opfsFiles.get('Israel.pois.geojson')?.byteLength).toBe(v2Payload.byteLength);
+    expect(readDataFileMeta('Israel.pois.geojson')).toEqual({
+      size: v2Payload.byteLength,
+      transferSize: 188,
+      etag: '"v2-br"',
+    });
+  });
+
+  it('omits unreachable DEM sources cleanly when disableDem is true and validates local DEM PMTiles headers before persisting', async () => {
+    const styleSpec = createRequire(import.meta.url)('@maplibre/maplibre-gl-style-spec');
+    for (const mapStyle of ['ihm', 'nms', 'govmap'] as const) {
+      const style = buildIsraelOutdoorStyle({
+        osmProtocolUrl: 'pmtiles://israel-osm',
+        demProtocolUrl: null,
+        contourProtocolUrl: null,
+        disableDem: true,
+        visibility: DEFAULT_LAYER_VISIBILITY,
+        theme: 'topo-day',
+        mapStyle,
+      });
+      expect(style.sources['israel-dem']).toBeUndefined();
+      expect(style.sources['israel-dem-hillshade']).toBeUndefined();
+      expect(style.sources['israel-contours']).toBeUndefined();
+      expect(styleSpec.validateStyleMin(style)).toEqual([]);
+    }
+
+    const registry = new PMTilesRegistry();
+    const badHtmlFile = new File(['<html>404</html>'.repeat(10)], 'Israel.dem.pmtiles', {
+      type: 'text/html',
+    });
+    await expect(registry.mountLocalDemArchive(badHtmlFile, undefined, true)).rejects.toThrow(
+      'PMTiles'
+    );
   });
 });

@@ -36,6 +36,7 @@ interface AddPoiPanelProps {
   onSignInGoogle?: () => void;
   onClose: () => void;
   onCreated: (poi: PoiRecord, meta?: { queuedOffline?: boolean }) => void;
+  hideCloseButton?: boolean;
 }
 
 export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
@@ -48,6 +49,7 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
   onSignInGoogle,
   onClose,
   onCreated,
+  hideCloseButton = false,
 }) => {
   const [category, setCategory] = useState<PoiCategory>('water');
   const [subcategory, setSubcategory] = useState<string>(POI_CATEGORY_SPECS.water.defaultSubcategory);
@@ -166,14 +168,16 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
             </span>
             <h3 className="text-base font-bold mt-0.5">דווח נקודת עניין בשטח</h3>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className={`p-1.5 rounded-lg border ${t.pillBtn}`}
-            title="סגור"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!hideCloseButton && (
+            <button
+              type="button"
+              onClick={onClose}
+              className={`p-1.5 rounded-lg border ${t.pillBtn}`}
+              title="סגור"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         <div className={`p-3 rounded-xl border text-xs leading-relaxed space-y-2 ${t.subCard}`}>
@@ -206,14 +210,16 @@ export const AddPoiPanel: React.FC<AddPoiPanelProps> = ({
           </span>
           <h3 className="text-base font-bold mt-0.5">דווח נקודת עניין בשטח</h3>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className={`p-1.5 rounded-lg border ${t.pillBtn}`}
-          title="סגור"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        {!hideCloseButton && (
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1.5 rounded-lg border ${t.pillBtn}`}
+            title="סגור"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Live Target Coordinate Readout */}
