@@ -64,7 +64,7 @@ function readPngMetadata(filePath) {
 }
 
 function removeAccidentalBundledPackages() {
-  const dirs = [path.join(ROOT_DIR, 'dist'), PUBLIC_ASSETS_DIR];
+  const dirs = [path.join(ROOT_DIR, 'devops', 'dist'), PUBLIC_ASSETS_DIR];
   for (const dir of dirs) {
     if (!fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir)) {

@@ -10,7 +10,7 @@ echo   Working Directory: %CD%
 echo ============================================================================
 
 echo [1/5] Generating offline assets and building production web bundle...
-if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
+if exist "devops\dist\NavApp-Israel-Signed-Release.apk" del /F /Q "devops\dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 if exist "devops\mobile\android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" del /F /Q "devops\mobile\android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 call node devops\script_helpers\generate-offline-assets.mjs
 if errorlevel 1 (
@@ -75,11 +75,12 @@ echo [5/5] Copying Signed Release APK...
 cd /d "%~dp0\.."
 set "SIGNED_APK=devops\mobile\android\app\build\outputs\apk\release\app-release.apk"
 if exist "%SIGNED_APK%" (
-    copy /Y "%SIGNED_APK%" "dist\NavApp-Israel-Signed-Release.apk" >nul
+    if not exist "devops\dist" mkdir "devops\dist"
+    copy /Y "%SIGNED_APK%" "devops\dist\NavApp-Israel-Signed-Release.apk" >nul
     echo.
     echo ============================================================================
     echo   [SUCCESS] Signed Android APK ready for phone installation:
-    echo   %CD%\dist\NavApp-Israel-Signed-Release.apk
+    echo   %CD%\devops\dist\NavApp-Israel-Signed-Release.apk
     echo.
     echo   NOTE for Android Auto: Sideloading via file manager hides Car apps
     echo   unless installed via ADB with Play Store attribution:

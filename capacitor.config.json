@@ -1,7 +1,7 @@
 {
   "appId": "com.navapp.outdoor.israel",
   "appName": "NavApp Israel Outdoor",
-  "webDir": "dist",
+  "webDir": "devops/dist",
   "bundledWebRuntime": false,
   "server": {
     "androidScheme": "https",

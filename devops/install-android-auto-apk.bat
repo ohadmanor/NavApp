@@ -4,7 +4,7 @@ title NavApp - Install APK for Android Auto (ADB Play-Store Installer Flag)
 
 cd /d "%~dp0\.."
 
-set "APK_PATH=%CD%\dist\NavApp-Israel-Signed-Release.apk"
+set "APK_PATH=%CD%\devops\dist\NavApp-Israel-Signed-Release.apk"
 if not exist "%APK_PATH%" (
     echo [ERROR] Signed APK not found at:
     echo         %APK_PATH%

@@ -8,9 +8,9 @@
 #   3. Configures Info.plist (GPS, background location, ATS, AppIcon, version)
 #   4. Installs CocoaPods dependencies (pod install)
 #   5. Compiles via xcodebuild into:
-#        - dist/NavApp-Israel-Release.ipa    (when IOS_TEAM_ID is set)
-#        - dist/NavApp-Israel-Unsigned.ipa   (default --unsigned mode)
-#        - dist/NavApp-Israel-Simulator.app.zip (when --simulator is passed)
+#        - devops/dist/NavApp-Israel-Release.ipa    (when IOS_TEAM_ID is set)
+#        - devops/dist/NavApp-Israel-Unsigned.ipa   (default --unsigned mode)
+#        - devops/dist/NavApp-Israel-Simulator.app.zip (when --simulator is passed)
 #
 # Usage:
 #   bash devops/build-ios-ipa.sh                     # Unsigned .ipa (or signed if IOS_TEAM_ID is set)
@@ -69,7 +69,7 @@ echo "  Working Directory: ${ROOT_DIR}"
 echo "============================================================================"
 
 echo "[1/5] Generating offline assets and building web bundle..."
-rm -f dist/*.apk dist/*.ipa dist/*.app.zip
+rm -f devops/dist/*.apk devops/dist/*.ipa devops/dist/*.app.zip
 node devops/script_helpers/generate-offline-assets.mjs
 npm run build
 
@@ -125,7 +125,7 @@ if [[ "${MODE}" == "simulator" ]]; then
     echo "[ERROR] Simulator App.app not found at ${APP_PATH}" >&2
     exit 1
   fi
-  OUT_ZIP="${ROOT_DIR}/dist/NavApp-Israel-Simulator.app.zip"
+  OUT_ZIP="${ROOT_DIR}/devops/dist/NavApp-Israel-Simulator.app.zip"
   (cd "$(dirname "${APP_PATH}")" && zip -r -q "${OUT_ZIP}" "App.app")
   echo ""
   echo "============================================================================"
@@ -155,7 +155,7 @@ elif [[ "${MODE}" == "unsigned" ]]; then
   rm -rf "${BUILD_DIR}/ipa-stage"
   mkdir -p "${PAYLOAD_DIR}"
   cp -R "${APP_PATH}" "${PAYLOAD_DIR}/App.app"
-  OUT_IPA="${ROOT_DIR}/dist/NavApp-Israel-Unsigned.ipa"
+  OUT_IPA="${ROOT_DIR}/devops/dist/NavApp-Israel-Unsigned.ipa"
   (cd "${BUILD_DIR}/ipa-stage" && zip -r -q "${OUT_IPA}" "Payload")
 
   echo ""
@@ -193,7 +193,7 @@ else
     exit 1
   fi
 
-  OUT_IPA="${ROOT_DIR}/dist/NavApp-Israel-Release.ipa"
+  OUT_IPA="${ROOT_DIR}/devops/dist/NavApp-Israel-Release.ipa"
   cp -f "${BUILT_IPA}" "${OUT_IPA}"
   echo ""
   echo "============================================================================"

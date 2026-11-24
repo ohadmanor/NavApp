@@ -12,9 +12,9 @@ echo ===========================================================================
 echo [1/3] Updating offline PWA assets...
 call node devops\script_helpers\generate-offline-assets.mjs
 
-echo [2/3] Cleaning and building production PWA bundle ^(dist\^)...
-if exist "dist" (
-    rmdir /s /q "dist"
+echo [2/3] Cleaning and building production PWA bundle ^(devops\dist\^)...
+if exist "devops\dist" (
+    rmdir /s /q "devops\dist"
 )
 call npm.cmd run build
 if errorlevel 1 (

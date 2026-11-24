@@ -49,7 +49,7 @@ jobs:
         with:
           name: navapp-ios-${{ inputs.build_mode }}
           path: |
-            dist/NavApp-Israel-*.ipa
-            dist/NavApp-Israel-*.app.zip
+            devops/dist/NavApp-Israel-*.ipa
+            devops/dist/NavApp-Israel-*.app.zip
           if-no-files-found: error
           retention-days: 14

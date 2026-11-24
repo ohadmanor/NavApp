@@ -35,7 +35,7 @@ const APP_VERSION = buildAppVersionString();
 function pmtilesDataRangePlugin(): Plugin {
   const dataDir = path.resolve(__dirname, 'data');
   const publicDir = path.resolve(__dirname, 'src', 'public');
-  const distDir = path.resolve(__dirname, 'dist');
+  const distDir = path.resolve(__dirname, 'devops', 'dist');
 
   const serveDataMiddleware = (req: any, res: any, next: () => void) => {
     if (!req.url) {
@@ -161,7 +161,7 @@ function cleanStaleBuildAssetsPlugin(): Plugin {
     name: 'clean-stale-build-assets',
     apply: 'build',
     buildStart() {
-      const assetsDir = path.resolve(__dirname, 'dist', 'assets');
+      const assetsDir = path.resolve(__dirname, 'devops', 'dist', 'assets');
       if (!fs.existsSync(assetsDir)) return;
       for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
         if (!entry.isFile()) continue;
@@ -183,7 +183,7 @@ function emitDeployVersionPlugin(appVersion: string): Plugin {
     name: 'emit-deploy-version',
     apply: 'build',
     closeBundle() {
-      const distDir = path.resolve(__dirname, 'dist');
+      const distDir = path.resolve(__dirname, 'devops', 'dist');
       if (!fs.existsSync(distDir)) return;
       fs.writeFileSync(
         path.join(distDir, 'version.json'),
@@ -226,8 +226,8 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: path.resolve(__dirname, 'dist'),
-    emptyOutDir: false, // Never wipe dist/ so large PMTiles files are preserved across builds
+    outDir: path.resolve(__dirname, 'devops', 'dist'),
+    emptyOutDir: false, // Never wipe devops/dist/ so large PMTiles files are preserved across builds
     sourcemap: false,
     chunkSizeWarningLimit: 2000,
     rollupOptions: {

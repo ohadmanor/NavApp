@@ -108,7 +108,7 @@ Android Auto hides sideloaded `CarAppService` navigation apps installed from a f
    ```bat
    devops\install-android-auto-apk.bat
    ```
-   *(Runs `adb install -i "com.android.vending" -r dist\NavApp-Israel-Signed-Release.apk` so Android registers Google Play installer provenance, and refreshes Android Auto.)*
+   *(Runs `adb install -i "com.android.vending" -r devops\dist\NavApp-Israel-Signed-Release.apk` so Android registers Google Play installer provenance, and refreshes Android Auto.)*
 2. On your phone, enable **Android Auto Developer Mode** (one-time):
    - Open **Settings → Android Auto** → scroll to **Version** and tap it **10 times**.
    - Open the top-right **⋮ menu → Developer settings** → enable **Unknown sources** (and set **Application mode** to **Developer**).
@@ -123,7 +123,7 @@ Run:
 ```bat
 devops\build-ios.bat
 ```
-This builds the offline assets and web bundle (`dist/`), syncs Capacitor iOS (`ios/App`), and runs [`configure-ios.mjs`](../devops/configure-ios.mjs) to configure:
+This builds the offline assets and web bundle (`devops/dist/`), syncs Capacitor iOS (`ios/App`), and runs [`configure-ios.mjs`](../devops/configure-ios.mjs) to configure:
 - **GPS & Background Location (`Info.plist`)**: `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`, and `UIBackgroundModes` (`location`).
 - **Files App Access & Export Compliance**: `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`, and `ITSAppUsesNonExemptEncryption=false`.
 - **Network Security (ATS)**: Enforces HTTPS/TLS while allowing local networking (`NSAllowsLocalNetworking=true`).
@@ -133,8 +133,8 @@ This builds the offline assets and web bundle (`dist/`), syncs Capacitor iOS (`i
 Compiling an `.ipa` requires macOS + Xcode:
 - **On a Mac**:
   ```bash
-  bash devops/build-ios-ipa.sh                # Produces dist/NavApp-Israel-Unsigned.ipa
-  bash devops/build-ios-ipa.sh --simulator    # Produces dist/NavApp-Israel-Simulator.app.zip
+  bash devops/build-ios-ipa.sh                # Produces devops/dist/NavApp-Israel-Unsigned.ipa
+  bash devops/build-ios-ipa.sh --simulator    # Produces devops/dist/NavApp-Israel-Simulator.app.zip
   IOS_TEAM_ID=YOUR_TEAM_ID bash devops/build-ios-ipa.sh --ad-hoc   # Signed .ipa
   ```
 - **From Windows via GitHub Actions**: Trigger the **Build iOS App (.ipa)** workflow ([`.github/workflows/build-ios.yml`](../.github/workflows/build-ios.yml)) on `macos-latest` from the repository's **Actions** tab and download the generated `.ipa` artifact.
@@ -143,7 +143,7 @@ Compiling an `.ipa` requires macOS + Xcode:
 
 ## Data pipeline
 
-Map data (4 files: DEM, OSM tiles, the single merged `Israel.pois.geojson` (OSM + Off-Road, Off-Road ids prefixed `or-`), `Israel.search.idx`) lives in `data/` (git-ignored) and is published to a **separate Firebase Hosting site** (`navapp-israel-topo-data`, target `data`, staging folder `deploy_data/data/`). The app is a second site (target `app`, folder `dist/`).
+Map data (4 files: DEM, OSM tiles, the single merged `Israel.pois.geojson` (OSM + Off-Road, Off-Road ids prefixed `or-`), `Israel.search.idx`) lives in `data/` (git-ignored) and is published to a **separate Firebase Hosting site** (`navapp-israel-topo-data`, target `data`, staging folder `deploy_data/data/`). The app is a second site (target `app`, folder `devops/dist/`).
 
 | Step | Command |
 |---|---|

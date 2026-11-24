@@ -10,9 +10,9 @@ echo   Working Directory: %CD%
 echo ============================================================================
 
 echo [1/4] Generating offline assets and building production web bundle...
-if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
-if exist "dist\NavApp-Israel-Unsigned.ipa" del /F /Q "dist\NavApp-Israel-Unsigned.ipa" >nul 2>&1
-if exist "dist\NavApp-Israel-Release.ipa" del /F /Q "dist\NavApp-Israel-Release.ipa" >nul 2>&1
+if exist "devops\dist\NavApp-Israel-Signed-Release.apk" del /F /Q "devops\dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
+if exist "devops\dist\NavApp-Israel-Unsigned.ipa" del /F /Q "devops\dist\NavApp-Israel-Unsigned.ipa" >nul 2>&1
+if exist "devops\dist\NavApp-Israel-Release.ipa" del /F /Q "devops\dist\NavApp-Israel-Release.ipa" >nul 2>&1
 call node devops\script_helpers\generate-offline-assets.mjs
 call npm.cmd run build
 if errorlevel 1 (

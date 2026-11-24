@@ -48,7 +48,7 @@ If you want to test local builds without Play Console:
 
 - **Via USB or Wireless ADB (`devops/install-android-auto-apk.bat`):**
   ```bat
-  adb install -i "com.android.vending" -r dist\NavApp-Israel-Signed-Release.apk
+  adb install -i "com.android.vending" -r devops\dist\NavApp-Israel-Signed-Release.apk
   ```
   (You can also pair/connect over Wi-Fi using Android **Settings → Developer options → Wireless debugging**.)
 - **On-device without a PC:** Use **Shizuku** (via Wireless debugging) + **Install with Options** with the installer package set to `com.android.vending`.

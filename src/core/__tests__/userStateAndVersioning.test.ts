@@ -268,5 +268,9 @@ describe('Versioning, Google Account UI & Cross-Platform User State Persistence'
     const viteSrc = fs.readFileSync('vite.config.ts', 'utf-8');
     expect(viteSrc).toContain('emitDeployVersionPlugin');
     expect(viteSrc).toContain('version.json');
+    expect(viteSrc).toContain("path.resolve(__dirname, 'devops', 'dist')");
+    expect(appHosting.public).toBe('devops/dist');
+    const capCfg = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf-8'));
+    expect(capCfg.webDir).toBe('devops/dist');
   });
 });
