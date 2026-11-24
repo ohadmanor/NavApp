@@ -13,16 +13,29 @@ echo [1/5] Generating offline assets and building production web bundle...
 if exist "dist\NavApp-Israel-Signed-Release.apk" del /F /Q "dist\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 if exist "devops\mobile\android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" del /F /Q "devops\mobile\android\app\src\main\assets\public\NavApp-Israel-Signed-Release.apk" >nul 2>&1
 call node devops\script_helpers\generate-offline-assets.mjs
+if errorlevel 1 (
+    echo [ERROR] Offline asset generation failed!
+    if /i not "%~1"=="--no-pause" pause
+    exit /b 1
+)
 call npm.cmd run build
 if errorlevel 1 (
     echo [ERROR] Web production build failed!
-    pause
+    if /i not "%~1"=="--no-pause" pause
     exit /b 1
 )
 
 if "%ANDROID_HOME%"=="" (
     if exist "%LOCALAPPDATA%\Android\Sdk" (
         set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
+    )
+)
+if "%JAVA_HOME%"=="" (
+    where java >nul 2>&1
+    if errorlevel 1 (
+        if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe" (
+            set "JAVA_HOME=%ProgramFiles%\Android\Android Studio\jbr"
+        )
     )
 )
 
@@ -33,7 +46,7 @@ if not exist "devops\mobile\android" (
 call npx.cmd cap sync android
 if errorlevel 1 (
     echo [ERROR] Capacitor Android sync failed!
-    pause
+    if /i not "%~1"=="--no-pause" pause
     exit /b 1
 )
 
@@ -41,23 +54,24 @@ echo [3/5] Applying Android Security Hardening ^& RSA-2048 Release Signing Keyst
 call node devops\script_helpers\configure-android-security.mjs
 if errorlevel 1 (
     echo [ERROR] Android security configuration failed!
-    pause
+    if /i not "%~1"=="--no-pause" pause
     exit /b 1
 )
 
 echo [4/5] Building Signed Release APK via Gradle ^(assembleRelease^)...
-cd /d "%~dp0\..\devops\mobile\android"
-call gradlew.bat assembleRelease
+cd /d "%~dp0mobile\android"
+call ".\gradlew.bat" assembleRelease
 if errorlevel 1 (
     echo.
-    echo [WARN] Gradle assembleRelease requires Android SDK ^(ANDROID_HOME^) configured.
-    echo        You can also open the pre-configured project in Android Studio:
-    echo        npx cap open android
+    echo [ERROR] Gradle assembleRelease failed! Ensure Java JDK 17+ and ANDROID_HOME are configured.
+    echo         You can also open the pre-configured project in Android Studio:
+    echo         npx cap open android
     cd /d "%~dp0\.."
-    pause
+    if /i not "%~1"=="--no-pause" pause
     exit /b 1
 )
 
+echo [5/5] Copying Signed Release APK...
 cd /d "%~dp0\.."
 set "SIGNED_APK=devops\mobile\android\app\build\outputs\apk\release\app-release.apk"
 if exist "%SIGNED_APK%" (
@@ -72,9 +86,11 @@ if exist "%SIGNED_APK%" (
     echo     devops\install-android-auto-apk.bat
     echo ============================================================================
 ) else (
-    echo [INFO] Check devops\mobile\android\app\build\outputs\apk\release\ for the generated APK.
+    echo [ERROR] Expected signed APK was not found at: %SIGNED_APK%
+    if /i not "%~1"=="--no-pause" pause
+    exit /b 1
 )
 
-pause
+if /i not "%~1"=="--no-pause" pause
 endlocal
 
