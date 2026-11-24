@@ -1,4 +1,4 @@
-name: Tests
+name: Tests & iOS Build
 
 on:
   push:
@@ -15,4 +15,31 @@ jobs:
         with:
           node-version: "22"
       - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
       - run: npm test
+
+  build-ios:
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: Build iOS package (unsigned .ipa)
+        env:
+          IOS_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          chmod +x devops/script_helpers/build-ios-ipa.sh
+          bash devops/script_helpers/build-ios-ipa.sh --unsigned
+      - name: Upload iOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: navapp-ios-unsigned-${{ github.run_number }}
+          path: |
+            devops/dist/NavApp-Israel-*.ipa
+            devops/dist/NavApp-Israel-*.app.zip
+          if-no-files-found: error
+          retention-days: 14

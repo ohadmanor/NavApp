@@ -126,6 +126,7 @@ if [[ "${MODE}" == "simulator" ]]; then
     exit 1
   fi
   OUT_ZIP="${ROOT_DIR}/devops/dist/NavApp-Israel-Simulator.app.zip"
+  mkdir -p "$(dirname "${OUT_ZIP}")"
   (cd "$(dirname "${APP_PATH}")" && zip -r -q "${OUT_ZIP}" "App.app")
   echo ""
   echo "============================================================================"
@@ -156,6 +157,7 @@ elif [[ "${MODE}" == "unsigned" ]]; then
   mkdir -p "${PAYLOAD_DIR}"
   cp -R "${APP_PATH}" "${PAYLOAD_DIR}/App.app"
   OUT_IPA="${ROOT_DIR}/devops/dist/NavApp-Israel-Unsigned.ipa"
+  mkdir -p "$(dirname "${OUT_IPA}")"
   (cd "${BUILD_DIR}/ipa-stage" && zip -r -q "${OUT_IPA}" "Payload")
 
   echo ""
@@ -194,6 +196,7 @@ else
   fi
 
   OUT_IPA="${ROOT_DIR}/devops/dist/NavApp-Israel-Release.ipa"
+  mkdir -p "$(dirname "${OUT_IPA}")"
   cp -f "${BUILT_IPA}" "${OUT_IPA}"
   echo ""
   echo "============================================================================"

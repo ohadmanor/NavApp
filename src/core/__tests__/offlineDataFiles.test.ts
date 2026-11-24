@@ -51,6 +51,7 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     (globalThis as any).window = origWindow;
     globalThis.fetch = origFetch;
@@ -368,6 +369,7 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
   it('routes Android Capacitor Firebase Storage DEM URLs through same-origin /__remote_proxy__/ and unwraps for native downloads', async () => {
     const storageDemUrl =
       'https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media';
+    vi.stubEnv('VITE_DEM_PMTILES_URL', storageDemUrl);
 
     // Non-Android web keeps direct storage URL untouched
     (globalThis as any).window = {

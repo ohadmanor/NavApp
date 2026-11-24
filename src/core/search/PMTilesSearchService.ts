@@ -69,6 +69,8 @@ export interface SearchQueryOptions {
 interface TaxonomyCacheEntry {
   info: SearchTaxonomyInfo;
   normSynonyms: string;
+  synQuery: string;
+  synScore: number;
 }
 
 interface CompiledIndex {
@@ -94,7 +96,7 @@ interface CompiledIndex {
   dictSubclasses: string[];
   dictLocs: string[];
   dictNormLocs: string[];
-  taxCache: Map<string, TaxonomyCacheEntry>;
+  taxCache: Map<number, TaxonomyCacheEntry>;
 }
 
 const ELE_NULL_SENTINEL = -32768;
@@ -167,12 +169,12 @@ function compilePayload(payload: SearchIndexPayload): CompiledIndex {
     dictSubclasses: payload.subclasses,
     dictLocs: payload.localities,
     dictNormLocs,
-    taxCache: new Map<string, TaxonomyCacheEntry>(),
+    taxCache: new Map<number, TaxonomyCacheEntry>(),
   };
 }
 
 function getTaxonomyCached(compiled: CompiledIndex, lIdx: number, cIdx: number, sIdx: number): TaxonomyCacheEntry {
-  const key = `${lIdx}:${cIdx}:${sIdx}`;
+  const key = lIdx * 4294967296 + cIdx * 65536 + sIdx;
   let entry = compiled.taxCache.get(key);
   if (!entry) {
     const layer = compiled.dictLayers[lIdx] || 'poi';
@@ -182,10 +184,24 @@ function getTaxonomyCached(compiled: CompiledIndex, lIdx: number, cIdx: number, 
     entry = {
       info,
       normSynonyms: normalizeSearchText(info.synonyms),
+      synQuery: '',
+      synScore: 0,
     };
     compiled.taxCache.set(key, entry);
   }
   return entry;
+}
+
+function getTaxonomySynonymScore(entry: TaxonomyCacheEntry, normQuery: string): number {
+  if (entry.synQuery !== normQuery) {
+    entry.synQuery = normQuery;
+    entry.synScore = entry.normSynonyms.includes(normQuery)
+      ? hasWholeWord(entry.normSynonyms, normQuery)
+        ? 320
+        : 180
+      : 0;
+  }
+  return entry.synScore;
 }
 
 function hasWholeWord(haystack: string, word: string): boolean {
@@ -307,6 +323,10 @@ export class PMTilesSearchService {
   private loadPromise: Promise<void> | null = null;
   private activeExtractAbort: AbortController | null = null;
   private normalizedPoiCache = new WeakMap<PoiRecord, { nHe: string; nEn: string; nDesc: string }>();
+  private normalizedTrailCache = new WeakMap<
+    TrailAnnotationSearchItem,
+    { nName: string; nNumber: string; combined: string }
+  >();
 
   getStatus(): SearchIndexStatus {
     return { ...this.status };
@@ -576,9 +596,13 @@ export class PMTilesSearchService {
       const communityNumbers = new Set(
         trailAnnotations.map((t) => t.number.trim()).filter(Boolean)
       );
-      const israelTrailItems = getIsraelTrailSearchItems().filter(
-        (m) => !m.number || !m.number.split(',').some((n) => communityNumbers.has(n.trim()))
-      );
+      const baseIsraelTrails = getIsraelTrailSearchItems();
+      const israelTrailItems =
+        communityNumbers.size === 0
+          ? baseIsraelTrails
+          : baseIsraelTrails.filter(
+              (m) => !m.number || !m.number.split(',').some((n) => communityNumbers.has(n.trim()))
+            );
       candidates.push(...this.searchTrailAnnotations(normQuery, israelTrailItems, referenceCoord, 280));
     }
 
@@ -868,12 +892,24 @@ export class PMTilesSearchService {
     const out: SearchResultItem[] = [];
     const qTokens = normQuery.split(' ').filter(Boolean);
     for (const item of trailAnnotations) {
-      const nName = normalizeSearchText(item.name || '');
-      const nNumber = normalizeSearchText(item.number || '');
-      const nDesc = normalizeSearchText(item.description || '');
+      let cached = this.normalizedTrailCache.get(item);
+      if (!cached) {
+        const nName = normalizeSearchText(item.name || '');
+        const nNumber = normalizeSearchText(item.number || '');
+        const nDesc = normalizeSearchText(item.description || '');
+        cached = {
+          nName,
+          nNumber,
+          combined: `${nName} ${nNumber} ${nDesc}`.trim(),
+        };
+        this.normalizedTrailCache.set(item, cached);
+      }
+      const { nName, nNumber, combined } = cached;
+      if (!combined.includes(normQuery) && !(qTokens.length > 1 && qTokens.every((tk) => combined.includes(tk)))) {
+        continue;
+      }
       const directName = nName ? scoreSingleFieldMatch(nName, normQuery) : 0;
       const directNumber = nNumber ? scoreSingleFieldMatch(nNumber, normQuery) : 0;
-      const combined = `${nName} ${nNumber} ${nDesc}`.trim();
       const tokMatch =
         directName === 0 &&
         directNumber === 0 &&
@@ -953,6 +989,7 @@ export class PMTilesSearchService {
   ): SearchResultItem[] {
     const isSingleChar = normQuery.length === 1;
     const isSingleToken = tokens.length === 1;
+    const isNatbagQuery = normQuery === 'נתבג';
 
     // Track top K by score without allocating objects for non-top rows
     const scoredHits: Array<{ idx: number; score: number; distKm: number | null }> = [];
@@ -1002,7 +1039,7 @@ export class PMTilesSearchService {
           (layer === 'road' || layer === 'aerodrome_label') &&
           nRef &&
           hasWholeWord(nRef, roadRefQuery)) ||
-          (normQuery === 'נתבג' && layer === 'aerodrome_label' && nRef && hasWholeWord(nRef, 'llbg'))
+          (isNatbagQuery && layer === 'aerodrome_label' && nRef && hasWholeWord(nRef, 'llbg'))
       );
       if (exactRefHit) {
         matchScore = 2250;
@@ -1022,9 +1059,13 @@ export class PMTilesSearchService {
 
         if (bestDirect > 0) {
           matchScore = bestDirect;
-        } else if (normQuery.length >= 2 && taxEntry.normSynonyms.includes(normQuery)) {
-          // Allow category searches like "תצפית", "דלק", "חניון", "קפה", "מעיין"
-          matchScore = hasWholeWord(taxEntry.normSynonyms, normQuery) ? 320 : 180;
+        } else if (normQuery.length >= 2) {
+          const synScore = getTaxonomySynonymScore(taxEntry, normQuery);
+          if (synScore > 0) {
+            matchScore = synScore;
+          } else {
+            continue;
+          }
         } else {
           continue;
         }

@@ -582,11 +582,11 @@ describe('Private & User-Shared POIs (PRD-4)', () => {
     expect(hiddenFilter).toContain('private');
 
     const searchService = new PMTilesSearchService();
-    const hits = searchService.search('שלי', { pois: [mine, shared], limit: 10 });
+    const hits = searchService.search('שלי', { filter: 'pois', pois: [mine, shared], limit: 10 });
     expect(hits).toHaveLength(1);
     expect(hits[0].sourceLabel).toBe('נקודה פרטית');
 
-    const sharedHits = searchService.search('משותף', { pois: [mine, shared], limit: 10 });
+    const sharedHits = searchService.search('משותף', { filter: 'pois', pois: [mine, shared], limit: 10 });
     expect(sharedHits).toHaveLength(1);
     expect(sharedHits[0].sourceLabel).toBe('שותף ע״י Bob Trail');
   });
