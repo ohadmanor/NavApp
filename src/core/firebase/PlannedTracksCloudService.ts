@@ -17,6 +17,7 @@ import {
   where,
 } from 'firebase/firestore';
 import {
+  type RecordingTelemetryMeta,
   type RouteOwnership,
   type RouteShareRecipient,
   type SavedRouteRecord,
@@ -25,6 +26,7 @@ import {
   LEGACY_PLANNED_COLORS,
   RouteManager,
   computeRouteBounds,
+  isRecordedRouteFormat,
 } from '../navigation/RouteManager';
 import { PLANNING_ROUTE_COLOR } from '../routing/RoutingProfiles';
 import type { NavUser } from './AuthService';
@@ -228,6 +230,8 @@ export interface PlannedRouteJsonPayload {
   geojson: GeoJSON.FeatureCollection;
   elevationProfile: SavedRouteRecord['elevationProfile'];
   gpxXml: string;
+  recordingMeta?: RecordingTelemetryMeta;
+  recordingPointTimestamps?: number[];
   ownership?: RouteOwnership;
   ownerUid: string;
   ownerEmail: string | null;
@@ -287,6 +291,8 @@ export function buildPlannedRouteJsonPayload(
     geojson: route.geojson,
     elevationProfile: route.elevationProfile,
     gpxXml,
+    recordingMeta: route.recordingMeta,
+    recordingPointTimestamps: route.recordingPointTimestamps,
     ownership: 'mine',
     ownerUid: user.uid,
     ownerEmail: user.email,
@@ -386,7 +392,8 @@ export function deserializeFirestorePlannedRoute(
     data.sourceFormat === 'kml' ||
     data.sourceFormat === 'geojson' ||
     data.sourceFormat === 'drawn' ||
-    data.sourceFormat === 'planned'
+    data.sourceFormat === 'planned' ||
+    data.sourceFormat === 'recorded'
       ? data.sourceFormat
       : 'planned';
 
@@ -408,7 +415,12 @@ export function deserializeFirestorePlannedRoute(
     sourceFormat === 'planned'
       ? resolvePlannedColorFromData(data)
       : {
-          color: typeof data.color === 'string' && data.color ? data.color : '#e11d48',
+          color:
+            typeof data.color === 'string' && data.color
+              ? data.color
+              : isRecordedRouteFormat(sourceFormat)
+                ? '#0ea5e9'
+                : '#e11d48',
           colorCustomized: data.colorCustomized === true ? true : undefined,
         };
   parsedGeojson = normalizePlannedGeojsonColor(parsedGeojson, color);
@@ -439,6 +451,13 @@ export function deserializeFirestorePlannedRoute(
     geojson: parsedGeojson,
     elevationProfile: Array.isArray(data.elevationProfile) ? data.elevationProfile : [],
     gpxXml: data.gpxXml,
+    recordingMeta:
+      data.recordingMeta && typeof data.recordingMeta === 'object'
+        ? (data.recordingMeta as RecordingTelemetryMeta)
+        : undefined,
+    recordingPointTimestamps: Array.isArray(data.recordingPointTimestamps)
+      ? data.recordingPointTimestamps.filter((n: unknown) => typeof n === 'number' && Number.isFinite(n))
+      : undefined,
     ownership: 'mine',
     ownerUid: data.ownerUid || user.uid,
     ownerEmail: data.ownerEmail || user.email,
@@ -690,7 +709,9 @@ export class PlannedTracksCloudService {
       (r) =>
         !deletedIds.has(r.id) &&
         r.ownership !== 'shared' &&
-        (r.sourceFormat === 'planned' || Boolean(r.sharedWith && r.sharedWith.length > 0)) &&
+        (r.sourceFormat === 'planned' ||
+          isRecordedRouteFormat(r.sourceFormat) ||
+          Boolean(r.sharedWith && r.sharedWith.length > 0)) &&
         (r.cloudSyncStatus === 'pending' || r.cloudSyncStatus === 'error') &&
         (!r.ownerUid || r.ownerUid === user.uid)
     );
@@ -725,7 +746,7 @@ export class PlannedTracksCloudService {
     const localById = new Map(localRows.map((r) => [r.id, r]));
     const hasLocalUserPlanned = localRows.some(
       (r) =>
-        r.sourceFormat === 'planned' &&
+        (r.sourceFormat === 'planned' || isRecordedRouteFormat(r.sourceFormat)) &&
         r.ownership !== 'shared' &&
         (!r.ownerUid || r.ownerUid === user.uid)
     );
@@ -807,13 +828,33 @@ export class PlannedTracksCloudService {
             if (!res.ok) continue;
             const data = (await res.json()) as PlannedRouteJsonPayload;
             if (!data?.id) continue;
-            const { color, colorCustomized } = resolvePlannedColorFromData(data);
+            const srcFmt: SavedRouteRecord['sourceFormat'] =
+              data.sourceFormat === 'gpx' ||
+              data.sourceFormat === 'kml' ||
+              data.sourceFormat === 'geojson' ||
+              data.sourceFormat === 'drawn' ||
+              data.sourceFormat === 'planned' ||
+              data.sourceFormat === 'recorded'
+                ? data.sourceFormat
+                : 'planned';
+            const { color, colorCustomized } =
+              srcFmt === 'planned'
+                ? resolvePlannedColorFromData(data)
+                : {
+                    color:
+                      typeof data.color === 'string' && data.color
+                        ? data.color
+                        : isRecordedRouteFormat(srcFmt)
+                          ? '#0ea5e9'
+                          : '#e11d48',
+                    colorCustomized: data.colorCustomized === true ? true : undefined,
+                  };
             const normalizedGeojson = normalizePlannedGeojsonColor(data.geojson, color);
             considerRemoteRecord({
               id: data.id,
               name: data.name || 'מסלול מתוכנן',
-              sourceFormat: 'planned',
-              planningMode: data.planningMode || 'foot',
+              sourceFormat: srcFmt,
+              planningMode: data.planningMode || (srcFmt === 'planned' ? 'foot' : undefined),
               waypoints: data.waypoints || [],
               distanceKm: Number(data.distanceKm || 0),
               ascentMeters: Number(data.ascentMeters || 0),
@@ -828,6 +869,8 @@ export class PlannedTracksCloudService {
               geojson: normalizedGeojson,
               elevationProfile: data.elevationProfile || [],
               gpxXml: data.gpxXml,
+              recordingMeta: data.recordingMeta,
+              recordingPointTimestamps: data.recordingPointTimestamps,
               ownership: 'mine',
               ownerUid: data.ownerUid || user.uid,
               ownerEmail: data.ownerEmail || user.email,

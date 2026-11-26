@@ -3,11 +3,24 @@ import {
   db,
   type CloudSyncStatus,
   type PlannedWaypoint,
+  type RecordingTelemetryMeta,
   type RouteOwnership,
   type RoutePayloadRecord,
   type RouteShareRecipient,
   type SavedRouteRecord,
 } from '../db/NavDatabase';
+
+export function isRecordedRouteFormat(
+  sourceFormat?: SavedRouteRecord['sourceFormat'] | null
+): boolean {
+  return sourceFormat === 'recorded' || sourceFormat === 'drawn';
+}
+
+export function isRecordedRoute(
+  route: Pick<SavedRouteRecord, 'sourceFormat'> | null | undefined
+): boolean {
+  return isRecordedRouteFormat(route?.sourceFormat);
+}
 import {
   PLANNING_MODE_META,
   PLANNING_ROUTE_COLOR,
@@ -295,6 +308,7 @@ export class RouteManager {
       elevationProfile: record.elevationProfile || [],
       waypoints: record.waypoints,
       gpxXml: record.gpxXml,
+      recordingPointTimestamps: record.recordingPointTimestamps,
       updatedAt,
     };
 
@@ -307,6 +321,7 @@ export class RouteManager {
       elevationProfile: [],
       waypoints: undefined,
       gpxXml: undefined,
+      recordingPointTimestamps: undefined,
       updatedAt,
     };
 
@@ -419,6 +434,7 @@ export class RouteManager {
             elevationProfile: cached.elevationProfile,
             waypoints: cached.waypoints,
             gpxXml: cached.gpxXml,
+            recordingPointTimestamps: cached.recordingPointTimestamps,
             bounds: latestSummary.bounds || cached.bounds,
             ownership: latestSummary.ownership || cached.ownership || 'mine',
             hasFullPayload: true,
@@ -445,6 +461,8 @@ export class RouteManager {
       payload?.elevationProfile ?? dbSummary.elevationProfile ?? [];
     const waypoints = payload?.waypoints ?? dbSummary.waypoints;
     const gpxXml = payload?.gpxXml ?? dbSummary.gpxXml;
+    const recordingPointTimestamps =
+      payload?.recordingPointTimestamps ?? dbSummary.recordingPointTimestamps;
     const hasFull = Boolean(
       payload ||
         (geojson?.features && geojson.features.length > 0) ||
@@ -457,6 +475,7 @@ export class RouteManager {
       elevationProfile,
       waypoints,
       gpxXml,
+      recordingPointTimestamps,
       bounds: dbSummary.bounds || computeRouteBounds(geojson, elevationProfile),
       ownership: dbSummary.ownership || 'mine',
       hasFullPayload: hasFull,
@@ -638,6 +657,9 @@ export class RouteManager {
       })),
     };
 
+    const shouldSyncCloud =
+      full.sourceFormat === 'planned' ||
+      (isRecordedRouteFormat(full.sourceFormat) && Boolean(currentUser?.uid));
     const cloned: SavedRouteRecord = {
       ...full,
       id: nextId,
@@ -645,6 +667,10 @@ export class RouteManager {
       geojson: clonedGeojson,
       waypoints: full.waypoints ? full.waypoints.map((wp) => ({ ...wp })) : undefined,
       elevationProfile: (full.elevationProfile || []).map((pt) => ({ ...pt })),
+      recordingMeta: full.recordingMeta ? { ...full.recordingMeta } : undefined,
+      recordingPointTimestamps: full.recordingPointTimestamps
+        ? [...full.recordingPointTimestamps]
+        : undefined,
       ownership: 'mine',
       ownerUid: currentUser?.uid ?? null,
       ownerEmail: currentUser?.email ?? null,
@@ -659,14 +685,14 @@ export class RouteManager {
       cloudJsonPath: undefined,
       cloudDownloadUrl: undefined,
       cloudError: undefined,
-      cloudSyncStatus: full.sourceFormat === 'planned' ? 'pending' : 'local-only',
+      cloudSyncStatus: shouldSyncCloud ? 'pending' : 'local-only',
       visible: true,
       createdAt: nowIso,
       updatedAt: nowIso,
       hasFullPayload: true,
     };
 
-    if (cloned.sourceFormat === 'planned') {
+    if (cloned.sourceFormat === 'planned' || isRecordedRouteFormat(cloned.sourceFormat)) {
       cloned.gpxXml = this.exportRouteAsGpx(cloned);
     }
 
@@ -685,6 +711,8 @@ export class RouteManager {
     visible?: boolean;
     planningMode?: PlanningMode;
     waypoints?: PlannedWaypoint[];
+    recordingMeta?: RecordingTelemetryMeta;
+    recordingPointTimestamps?: number[];
     ownership?: RouteOwnership;
     ownerUid?: string | null;
     ownerEmail?: string | null;
@@ -774,6 +802,21 @@ export class RouteManager {
       })),
     };
 
+    const normalizedRecordingMeta =
+      params.recordingMeta &&
+      params.recordingMeta.durationSeconds > 0 &&
+      params.recordingMeta.avgSpeedKmh === undefined
+        ? {
+            ...params.recordingMeta,
+            avgSpeedKmh: Number(
+              (totalLengthKm / (params.recordingMeta.durationSeconds / 3600)).toFixed(1)
+            ),
+          }
+        : params.recordingMeta;
+
+    const shouldCloudSync =
+      params.sourceFormat === 'planned' ||
+      (isRecordedRouteFormat(params.sourceFormat) && Boolean(params.ownerUid));
     const record: SavedRouteRecord = {
       id: routeId,
       name: params.name,
@@ -792,6 +835,8 @@ export class RouteManager {
       hasFullPayload: true,
       geojson,
       elevationProfile,
+      recordingMeta: normalizedRecordingMeta,
+      recordingPointTimestamps: params.recordingPointTimestamps,
       ownership: params.ownership || 'mine',
       ownerUid: params.ownerUid ?? null,
       ownerEmail: params.ownerEmail ?? null,
@@ -802,17 +847,77 @@ export class RouteManager {
       sharedWith: params.sharedWith,
       sharedWithUids: params.sharedWithUids,
       sharedWithEmails: params.sharedWithEmails,
-      cloudSyncStatus:
-        params.cloudSyncStatus ?? (params.sourceFormat === 'planned' ? 'pending' : 'local-only'),
+      cloudSyncStatus: params.cloudSyncStatus ?? (shouldCloudSync ? 'pending' : 'local-only'),
       createdAt: nowIso,
       updatedAt: nowIso,
     };
 
-    if (params.sourceFormat === 'planned') {
+    if (params.sourceFormat === 'planned' || isRecordedRouteFormat(params.sourceFormat)) {
       record.gpxXml = this.exportRouteAsGpx(record);
     }
 
     return await this.persistFullRoute(record);
+  }
+
+  /**
+   * Saves a GPS-recorded navigation route strictly owned by a signed-in user, preserving
+   * timestamps, duration, average speed, and notes for debriefing, sharing, and GPX export.
+   */
+  static async createAndSaveRecordedRoute(params: {
+    id?: string;
+    name: string;
+    coordinates: Array<[number, number]>;
+    pointElevations?: Array<number | null>;
+    pointTimestamps?: number[];
+    startedAt: string;
+    endedAt: string;
+    durationSeconds: number;
+    notes?: string;
+    color?: string;
+    ownerUid: string;
+    ownerEmail?: string | null;
+    ownerDisplayName?: string | null;
+  }): Promise<SavedRouteRecord> {
+    if (!params.ownerUid) {
+      throw new Error('נדרשת התחברות עם Google לשמירת הקלטת ניווט');
+    }
+    const cleanName = params.name.trim() || 'הקלטת ניווט';
+    const cleanCoords = params.coordinates;
+    if (cleanCoords.length < 2) {
+      throw new Error('נדרשות לפחות 2 נקודות תנועה לשמירת הקלטה');
+    }
+    const line = turf.lineString(cleanCoords);
+    const totalKm = turf.length(line, { units: 'kilometers' });
+    const safeDurationSec = Math.max(0, Math.round(params.durationSeconds));
+    const avgSpeedKmh =
+      safeDurationSec > 0 ? Number((totalKm / (safeDurationSec / 3600)).toFixed(1)) : 0;
+
+    const recordingMeta: RecordingTelemetryMeta = {
+      startedAt: params.startedAt,
+      endedAt: params.endedAt,
+      durationSeconds: safeDurationSec,
+      avgSpeedKmh,
+      pointCount: cleanCoords.length,
+      ...(params.notes?.trim() ? { notes: params.notes.trim() } : {}),
+    };
+
+    return this.createAndSaveRoute({
+      id: params.id,
+      name: cleanName,
+      coordinates: cleanCoords,
+      segments: [cleanCoords],
+      segmentElevations: params.pointElevations ? [params.pointElevations] : undefined,
+      sourceFormat: 'recorded',
+      color: params.color || '#0ea5e9',
+      visible: true,
+      recordingMeta,
+      recordingPointTimestamps: params.pointTimestamps,
+      ownership: 'mine',
+      ownerUid: params.ownerUid,
+      ownerEmail: params.ownerEmail ?? null,
+      ownerDisplayName: params.ownerDisplayName ?? null,
+      cloudSyncStatus: 'pending',
+    });
   }
 
   static async createAndSavePlannedRoute(params: {
@@ -904,7 +1009,7 @@ export class RouteManager {
 
   static async updateRouteDetails(
     routeId: string,
-    patch: { name?: string; color?: string; visible?: boolean }
+    patch: { name?: string; color?: string; visible?: boolean; notes?: string }
   ): Promise<SavedRouteRecord | undefined> {
     const existing = await this.loadFullRoute(routeId);
     if (!existing) return undefined;
@@ -915,10 +1020,13 @@ export class RouteManager {
     const nextColor = hasColorChange ? patch.color! : existing.color;
     const nextColorCustomized = hasColorChange ? true : existing.colorCustomized;
     const nextVisible = typeof patch.visible === 'boolean' ? patch.visible : existing.visible;
+    const nextNotes = patch.notes !== undefined ? patch.notes.trim() : existing.recordingMeta?.notes;
+    const notesChanged = patch.notes !== undefined && nextNotes !== existing.recordingMeta?.notes;
     const contentEdited =
       nextName !== existing.name ||
       nextColor !== existing.color ||
-      nextColorCustomized !== existing.colorCustomized;
+      nextColorCustomized !== existing.colorCustomized ||
+      notesChanged;
 
     const updatedGeojson: GeoJSON.FeatureCollection = {
       ...existing.geojson,
@@ -932,20 +1040,44 @@ export class RouteManager {
       })),
     };
 
+    const nextRecordingMeta =
+      existing.recordingMeta || notesChanged
+        ? {
+            startedAt: existing.recordingMeta?.startedAt || existing.createdAt,
+            endedAt: existing.recordingMeta?.endedAt || existing.updatedAt || existing.createdAt,
+            durationSeconds: existing.recordingMeta?.durationSeconds ?? 0,
+            ...(existing.recordingMeta?.avgSpeedKmh !== undefined
+              ? { avgSpeedKmh: existing.recordingMeta.avgSpeedKmh }
+              : {}),
+            ...(existing.recordingMeta?.pointCount !== undefined
+              ? { pointCount: existing.recordingMeta.pointCount }
+              : {}),
+            ...(nextNotes ? { notes: nextNotes } : {}),
+          }
+        : undefined;
+
+    const supportsCloudSync =
+      existing.sourceFormat === 'planned' ||
+      (isRecordedRouteFormat(existing.sourceFormat) && Boolean(existing.ownerUid));
+
     const updated: SavedRouteRecord = {
       ...existing,
       name: nextName,
       color: nextColor,
       colorCustomized: nextColorCustomized,
       visible: nextVisible,
+      recordingMeta: nextRecordingMeta,
       geojson: updatedGeojson,
       updatedAt: new Date().toISOString(),
-      ...(existing.sourceFormat === 'planned' && contentEdited
+      ...(supportsCloudSync && contentEdited
         ? { cloudSyncStatus: 'pending' as CloudSyncStatus }
         : {}),
     };
 
-    if (updated.sourceFormat === 'planned' && contentEdited) {
+    if (
+      (updated.sourceFormat === 'planned' || isRecordedRouteFormat(updated.sourceFormat)) &&
+      contentEdited
+    ) {
       updated.gpxXml = this.exportRouteAsGpx(updated);
     }
 
@@ -1020,10 +1152,13 @@ export class RouteManager {
       },
       elevationProfile: reversedProfile,
       updatedAt: new Date().toISOString(),
-      ...(existing.sourceFormat === 'planned' ? { cloudSyncStatus: 'pending' as CloudSyncStatus } : {}),
+      ...(existing.sourceFormat === 'planned' ||
+      (isRecordedRouteFormat(existing.sourceFormat) && Boolean(existing.ownerUid))
+        ? { cloudSyncStatus: 'pending' as CloudSyncStatus }
+        : {}),
     };
 
-    if (updated.sourceFormat === 'planned') {
+    if (updated.sourceFormat === 'planned' || isRecordedRouteFormat(updated.sourceFormat)) {
       updated.gpxXml = this.exportRouteAsGpx(updated);
     }
 
@@ -1150,7 +1285,7 @@ export class RouteManager {
       updatedAt: fullRoute.updatedAt,
     };
 
-    if (fullRoute.sourceFormat === 'planned') {
+    if (fullRoute.sourceFormat === 'planned' || isRecordedRouteFormat(fullRoute.sourceFormat)) {
       merged.gpxXml = this.exportRouteAsGpx(merged);
     }
 
@@ -1274,9 +1409,14 @@ export class RouteManager {
 
   static exportRouteAsGpx(route: SavedRouteRecord): string {
     const safeName = this.escapeXml(route.name || 'NavApp Route');
-    const modeDesc = route.planningMode
+    const baseModeDesc = route.planningMode
       ? `Planned (${route.planningMode})`
-      : route.sourceFormat.toUpperCase();
+      : isRecordedRouteFormat(route.sourceFormat)
+        ? 'Navigation Recording'
+        : route.sourceFormat.toUpperCase();
+    const modeDesc = route.recordingMeta?.notes
+      ? `${baseModeDesc} — ${route.recordingMeta.notes}`
+      : baseModeDesc;
     const authorXml = route.ownerEmail
       ? `\n    <author><name>${this.escapeXml(route.ownerEmail)}</name></author>`
       : '';
@@ -1294,6 +1434,8 @@ export class RouteManager {
         : '';
 
     const lineFeatures = extractLineStringsFromRoute(route);
+    const pointTimestamps = route.recordingPointTimestamps;
+    let globalPtIdx = 0;
 
     const trksegsXml =
       lineFeatures.length > 0
@@ -1306,7 +1448,15 @@ export class RouteManager {
                   const lat = Number(c[1]);
                   const ele = this.lookupNearestElevation(lon, lat, route.elevationProfile);
                   const eleTag = ele !== null ? `<ele>${ele}</ele>` : '';
-                  return `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}">${eleTag}</trkpt>`;
+                  const ts =
+                    Array.isArray(pointTimestamps) &&
+                    typeof pointTimestamps[globalPtIdx] === 'number' &&
+                    Number.isFinite(pointTimestamps[globalPtIdx])
+                      ? pointTimestamps[globalPtIdx]
+                      : null;
+                  globalPtIdx++;
+                  const timeTag = ts !== null ? `<time>${new Date(ts).toISOString()}</time>` : '';
+                  return `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}">${eleTag}${timeTag}</trkpt>`;
                 })
                 .join('\n');
               return `    <trkseg>\n${ptsXml}\n    </trkseg>`;
@@ -1324,7 +1474,7 @@ export class RouteManager {
   <metadata>
     <name>${safeName}</name>
     <desc>${this.escapeXml(modeDesc)}</desc>${authorXml}
-    <time>${route.createdAt || new Date().toISOString()}</time>
+    <time>${route.recordingMeta?.startedAt || route.createdAt || new Date().toISOString()}</time>
   </metadata>
 ${wptsXml}  <trk>
     <name>${safeName}</name>

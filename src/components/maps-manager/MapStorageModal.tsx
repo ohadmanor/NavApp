@@ -29,6 +29,7 @@ import { OpfsStorageAdapter } from '../../core/pmtiles/OpfsStorageAdapter';
 import { NativeOfflineStorage } from '../../core/pmtiles/NativeOfflineStorage';
 import { CommunityPoiImporter } from '../../core/pois/CommunityPoiImporter';
 import { RouteManager } from '../../core/navigation/RouteManager';
+import { deriveRecordingMetaFromTimestamps } from '../../core/navigation/routeTelemetryHelpers';
 import type { NavUser } from '../../core/firebase/AuthService';
 import type { PoiRecord, SavedRouteRecord } from '../../core/db/NavDatabase';
 import { getSurfaceTheme, type MapTheme } from '../ui/themeTokens';
@@ -416,17 +417,33 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
           name?: string;
           segments: Array<Array<[number, number]>>;
           pointElevations?: Array<Array<number | null>>;
+          pointTimestamps?: Array<Array<number | null>>;
+          isRecordedTrack?: boolean;
         };
         const fallbackName =
           tracksToCreate.length > 1 ? `${baseName} #${i + 1}` : baseName;
         const routeName = track.name?.trim() || fallbackName;
+        const derivedMeta = deriveRecordingMetaFromTimestamps(track.pointTimestamps);
+        const targetFormat = track.isRecordedTrack ? 'recorded' : sourceFormat;
         const savedRoute = await RouteManager.createAndSaveRoute({
           name: routeName,
           coordinates: track.segments[0],
           segments: track.segments,
           segmentElevations: track.pointElevations,
-          sourceFormat,
-          color: '#ec4899',
+          sourceFormat: targetFormat,
+          color: track.isRecordedTrack ? '#0ea5e9' : '#ec4899',
+          ...(derivedMeta
+            ? {
+                recordingMeta: {
+                  startedAt: derivedMeta.startedAt,
+                  endedAt: derivedMeta.endedAt,
+                  durationSeconds: derivedMeta.durationSeconds,
+                  avgSpeedKmh: derivedMeta.avgSpeedKmh,
+                  pointCount: track.segments.reduce((sum, seg) => sum + seg.length, 0),
+                },
+                recordingPointTimestamps: derivedMeta.pointTimestamps,
+              }
+            : {}),
           ownerUid: currentUser?.uid ?? null,
           ownerEmail: currentUser?.email ?? null,
           ownerDisplayName: currentUser?.displayName ?? null,

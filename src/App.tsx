@@ -30,6 +30,7 @@ import {
   UploadCloud,
   ChevronDown,
   Pencil,
+  Activity,
   X,
 } from 'lucide-react';
 import { pmtilesRegistry, type MountedArchiveInfo } from './core/pmtiles/PMTilesRegistry';
@@ -65,7 +66,14 @@ import {
   buildPoiIconSizeExpression,
   buildPoiTextColorExpression,
 } from './core/pois/poiTaxonomy';
-import { RouteManager, resolveRouteDisplayColor } from './core/navigation/RouteManager';
+import {
+  RouteManager,
+  isRecordedRouteFormat,
+  resolveRouteDisplayColor,
+} from './core/navigation/RouteManager';
+import { GpxExportService } from './core/navigation/GpxExportService';
+import { deriveRecordingMetaFromTimestamps } from './core/navigation/routeTelemetryHelpers';
+import { CommunityPoiImporter } from './core/pois/CommunityPoiImporter';
 import {
   resolveMapRouteDisplay,
   type RouteDisplayContext,
@@ -158,6 +166,12 @@ const ElevationProfileDrawer = React.lazy(() =>
     default: m.ElevationProfileDrawer,
   }))
 );
+const NavigationRecordingsPanel = React.lazy(() =>
+  import('./components/navigation/NavigationRecordingsPanel').then((m) => ({
+    default: m.NavigationRecordingsPanel,
+  }))
+);
+import { SaveRecordingModal } from './components/navigation/SaveRecordingModal';
 const PlanningTrailDbDrawer = React.lazy(() =>
   import('./components/navigation/PlanningTrailDbDrawer').then((m) => ({
     default: m.PlanningTrailDbDrawer,
@@ -266,6 +280,7 @@ import {
 type DesktopDrawerMode =
   | 'poi'
   | 'routes'
+  | 'recordings'
   | 'planning-db'
   | 'record'
   | 'add-poi'
@@ -274,6 +289,7 @@ type DesktopDrawerMode =
 const DESKTOP_DRAWER_TITLES: Record<string, string> = {
   poi: 'נקודת עניין',
   routes: 'מסלולים',
+  recordings: 'הקלטות ניווט',
   'planning-db': 'מאגר תכנון מסלולים',
   'plan-route': 'תכנון מסלול',
   record: 'הקלטה',
@@ -290,7 +306,7 @@ const LAYER_SECTION_BUTTONS: Array<{
   { id: 'pois', title: 'נקודות עניין (POI)', Icon: MapPinned },
 ];
 
-type MobileTab = 'explore' | 'routes' | 'planning-db' | 'map-edit' | 'offline';
+type MobileTab = 'explore' | 'routes' | 'recordings' | 'planning-db' | 'map-edit' | 'offline';
 type MobileDisplayMode = 'planning' | 'navigating';
 type MobileOverlayMode =
   | 'poi'
@@ -311,6 +327,7 @@ const MOBILE_SHEET_TITLES: Record<string, string> = {
   'add-poi': 'נקודה חדשה',
   'plan-route': 'תכנון מסלול',
   routes: 'מסלולים',
+  recordings: 'הקלטות ניווט',
   'planning-db': 'מאגר תכנון מסלולים',
   'map-edit': 'עריכת מפה',
   offline: 'מפות אופליין וייבוא',
@@ -645,6 +662,28 @@ export const App: React.FC = () => {
   const [recordedDistanceKm, setRecordedDistanceKm] = useState(0);
   const [recordedAscentMeters, setRecordedAscentMeters] = useState(0);
   const lastRecordedEleRef = useRef<number | null>(null);
+  const recordedStartedAtRef = useRef<string | null>(null);
+  const recordedElevationsRef = useRef<Array<number | null>>([]);
+  const recordedTimestampsRef = useRef<number[]>([]);
+  const recordElapsedSecondsRef = useRef<number>(recordElapsedSeconds);
+  recordElapsedSecondsRef.current = recordElapsedSeconds;
+  const recordedDistanceKmRef = useRef<number>(recordedDistanceKm);
+  recordedDistanceKmRef.current = recordedDistanceKm;
+  const recordedAscentMetersRef = useRef<number>(recordedAscentMeters);
+  recordedAscentMetersRef.current = recordedAscentMeters;
+  const [pendingRecordingSave, setPendingRecordingSave] = useState<{
+    trigger: 'stop-recording' | 'stop-navigation';
+    defaultName: string;
+    coordinates: Array<[number, number]>;
+    pointElevations: Array<number | null>;
+    pointTimestamps: number[];
+    distanceKm: number;
+    ascentMeters: number;
+    durationSeconds: number;
+    startedAt: string;
+    endedAt: string;
+  } | null>(null);
+  const [isSavingRecording, setIsSavingRecording] = useState(false);
 
   // Route Planning & Firebase User Sync State
   const [currentUser, setCurrentUser] = useState<NavUser | null>(() => AuthService.getCurrentUser());
@@ -723,11 +762,14 @@ export const App: React.FC = () => {
     (isMobile && mobileDisplayMode === 'planning' && mobilePlanningOverlay === 'plan-route');
 
   const isRoutesUiOpen =
-    (!isMobile && (desktopDrawer === 'routes' || desktopDrawer === 'planning-db')) ||
+    (!isMobile &&
+      (desktopDrawer === 'routes' ||
+        desktopDrawer === 'recordings' ||
+        desktopDrawer === 'planning-db')) ||
     (isMobile &&
       mobileDisplayMode === 'planning' &&
       !mobilePlanningOverlay &&
-      (mobileTab === 'routes' || mobileTab === 'planning-db'));
+      (mobileTab === 'routes' || mobileTab === 'recordings' || mobileTab === 'planning-db'));
 
   const routeDisplayContext = useMemo<RouteDisplayContext>(
     () => ({
@@ -1961,6 +2003,17 @@ export const App: React.FC = () => {
     setPlanPreviewPoint(null);
     setPlanCursorCoord(null);
     setDisconnectedCandidate(null);
+    lastRecordedEleRef.current = null;
+    recordedStartedAtRef.current = null;
+    recordedElevationsRef.current = [];
+    recordedTimestampsRef.current = [];
+    setIsRecordingTrack(false);
+    setIsRecordingPaused(false);
+    setRecordedCoords([]);
+    setRecordedDistanceKm(0);
+    setRecordedAscentMeters(0);
+    setRecordElapsedSeconds(0);
+    setPendingRecordingSave(null);
   }, []);
 
   // Global POIs live sync (readable by all users, signed-in or anonymous)
@@ -2650,24 +2703,47 @@ export const App: React.FC = () => {
           const recLon = ingest.kalmanLon;
           const recLat = ingest.kalmanLat;
           const nextPt: [number, number] = [Number(recLon.toFixed(6)), Number(recLat.toFixed(6))];
-          setRecordedCoords((prev) => {
-            if (prev.length > 0) {
-              const last = prev[prev.length - 1];
-              const stepMeters = turf.distance(turf.point(last), turf.point(nextPt), {
-                units: 'meters',
-              });
-              if (stepMeters < 5) return prev;
-              setRecordedDistanceKm((d) => Number((d + stepMeters / 1000).toFixed(2)));
+          const prevCoords = recordedCoordsRef.current;
+          let shouldAppend = true;
+          let stepKm = 0;
+          if (prevCoords.length > 0) {
+            const last = prevCoords[prevCoords.length - 1];
+            const stepMeters = turf.distance(turf.point(last), turf.point(nextPt), {
+              units: 'meters',
+            });
+            if (stepMeters < 5) {
+              shouldAppend = false;
+            } else {
+              stepKm = stepMeters / 1000;
             }
-            return [...prev, nextPt];
-          });
+          }
 
-          const ele = await ElevationService.getElevationAt(recLon, recLat, 11, true);
-          if (ele !== null) {
-            if (lastRecordedEleRef.current !== null && ele > lastRecordedEleRef.current) {
-              setRecordedAscentMeters((a) => a + (ele - (lastRecordedEleRef.current ?? ele)));
+          if (shouldAppend) {
+            const ptIdx = prevCoords.length;
+            const nextCoords = [...prevCoords, nextPt];
+            const initialEle =
+              typeof fix.altitude === 'number' && Number.isFinite(fix.altitude)
+                ? Math.round(fix.altitude)
+                : null;
+            recordedCoordsRef.current = nextCoords;
+            recordedTimestampsRef.current = [...recordedTimestampsRef.current, Date.now()];
+            recordedElevationsRef.current = [...recordedElevationsRef.current, initialEle];
+            setRecordedCoords(nextCoords);
+            if (stepKm > 0) {
+              setRecordedDistanceKm((d) => Number((d + stepKm).toFixed(2)));
             }
-            lastRecordedEleRef.current = ele;
+
+            const ele = await ElevationService.getElevationAt(recLon, recLat, 11, true);
+            const resolvedEle = ele ?? initialEle;
+            if (resolvedEle !== null) {
+              if (ptIdx < recordedElevationsRef.current.length) {
+                recordedElevationsRef.current[ptIdx] = resolvedEle;
+              }
+              if (lastRecordedEleRef.current !== null && resolvedEle > lastRecordedEleRef.current) {
+                setRecordedAscentMeters((a) => a + (resolvedEle - (lastRecordedEleRef.current ?? resolvedEle)));
+              }
+              lastRecordedEleRef.current = resolvedEle;
+            }
           }
         }
       },
@@ -4992,7 +5068,7 @@ export const App: React.FC = () => {
     trailSearchItems,
   ]);
 
-  // Auto-select longest saved route when opening Routes drawer with none active
+  // Auto-select longest saved route when opening Routes drawer, or newest recording when opening Recordings
   useEffect(() => {
     const routesUiOpen =
       (!isMobile && desktopDrawer === 'routes') ||
@@ -5004,16 +5080,41 @@ export const App: React.FC = () => {
       );
       setActiveRoute(longest);
     }
-  }, [isMobile, desktopDrawer, mobileDisplayMode, mobileTab, activeRoute, routes]);
 
-  // Clear chart hover marker whenever the elevation drawer/tab closes
+    const recordingsUiOpen =
+      (!isMobile && desktopDrawer === 'recordings') ||
+      (isMobile && mobileDisplayMode === 'planning' && mobileTab === 'recordings');
+    if (
+      recordingsUiOpen &&
+      currentUser &&
+      (!activeRoute || !isRecordedRouteFormat(activeRoute.sourceFormat))
+    ) {
+      const userRecordings = routes.filter(
+        (r) =>
+          isRecordedRouteFormat(r.sourceFormat) &&
+          (r.ownership === 'shared'
+            ? !r.sharedForUid || r.sharedForUid === currentUser.uid
+            : r.ownerUid === currentUser.uid)
+      );
+      if (userRecordings.length > 0) {
+        const newest = [...userRecordings].sort((a, b) =>
+          (b.recordingMeta?.startedAt || b.createdAt).localeCompare(
+            a.recordingMeta?.startedAt || a.createdAt
+          )
+        )[0];
+        setActiveRoute(newest);
+      }
+    }
+  }, [isMobile, desktopDrawer, mobileDisplayMode, mobileTab, activeRoute, routes, currentUser]);
+
+  // Clear chart hover marker whenever the elevation / recordings drawer/tab closes
   useEffect(() => {
     const showingRoutes =
-      (!isMobile && desktopDrawer === 'routes') ||
+      (!isMobile && (desktopDrawer === 'routes' || desktopDrawer === 'recordings')) ||
       (isMobile &&
         mobileDisplayMode === 'planning' &&
         !mobilePlanningOverlay &&
-        mobileTab === 'routes');
+        (mobileTab === 'routes' || mobileTab === 'recordings'));
     if (!showingRoutes && hoverMarkerRef.current) {
       hoverMarkerRef.current.remove();
       hoverMarkerRef.current = null;
@@ -5031,6 +5132,7 @@ export const App: React.FC = () => {
       mobilePlanningOverlay === 'add-poi' ||
       mobilePlanningOverlay === 'plan-route' ||
       mobileTab === 'routes' ||
+      mobileTab === 'recordings' ||
       mobileTab === 'planning-db' ||
       mobileTab === 'map-edit' ||
       (mobileTab === 'offline' && Boolean(currentUser)));
@@ -5456,13 +5558,15 @@ export const App: React.FC = () => {
       }
       setSelectedPoi(null);
       void handleSelectRoute(item.routeRecord);
+      const openRecordings =
+        isRecordedRouteFormat(item.routeRecord.sourceFormat) && Boolean(currentUserRef.current);
       if (isMobile) {
         setMobileDisplayMode('planning');
-        setMobileTab('routes');
+        setMobileTab(openRecordings ? 'recordings' : 'routes');
         setMobilePlanningOverlay(null);
         setMobileSheetExpanded(true);
       } else {
-        setDesktopDrawer('routes');
+        setDesktopDrawer(openRecordings ? 'recordings' : 'routes');
       }
       return;
     }
@@ -5827,7 +5931,11 @@ export const App: React.FC = () => {
     }
 
     await RouteManager.deleteRoute(routeId);
-    if (target && currentUser && target.sourceFormat === 'planned') {
+    if (
+      target &&
+      currentUser &&
+      (target.sourceFormat === 'planned' || isRecordedRouteFormat(target.sourceFormat))
+    ) {
       void PlannedTracksCloudService.deleteRemotePlannedRoute(target, currentUser);
     }
     showToast('המסלול נמחק מהמכשיר');
@@ -5846,7 +5954,7 @@ export const App: React.FC = () => {
       if (successToast) showToast(successToast);
       if (
         updated.ownership !== 'shared' &&
-        updated.sourceFormat === 'planned' &&
+        (updated.sourceFormat === 'planned' || isRecordedRouteFormat(updated.sourceFormat)) &&
         updated.cloudSyncStatus === 'pending' &&
         currentUser &&
         isOnline &&
@@ -5956,7 +6064,7 @@ export const App: React.FC = () => {
       showToast(`נשמר עותק אישי "${cloned.name}" בהמסלולים שלי`);
 
       if (
-        cloned.sourceFormat === 'planned' &&
+        (cloned.sourceFormat === 'planned' || isRecordedRouteFormat(cloned.sourceFormat)) &&
         currentUser &&
         isOnline &&
         AuthService.isAvailable()
@@ -7043,6 +7151,11 @@ export const App: React.FC = () => {
       showToast('הקלטה פעילה רק בזמן ניווט');
       return;
     }
+    if (!currentUserRef.current) {
+      showToast('יש להתחבר עם Google כדי להקליט ולשמור מסלולי ניווט');
+      void handleSignInGoogle();
+      return;
+    }
     if (!isRecordingTrackRef.current) {
       const latestFrame = navSmootherRef.current?.getLatestFrame();
       const curLoc = userLocationRef.current;
@@ -7051,11 +7164,19 @@ export const App: React.FC = () => {
         : curLoc
           ? [curLoc.lon, curLoc.lat]
           : [Number(cursorCoords.lon.toFixed(5)), Number(cursorCoords.lat.toFixed(5))];
+      const startEle = curLoc?.altitude !== null && curLoc?.altitude !== undefined
+        ? Math.round(curLoc.altitude)
+        : cursorCoords.ele;
+      const startIso = new Date().toISOString();
+      recordedStartedAtRef.current = startIso;
+      recordedCoordsRef.current = [startPt];
+      recordedElevationsRef.current = [startEle];
+      recordedTimestampsRef.current = [Date.now()];
       setRecordedCoords([startPt]);
       setRecordedDistanceKm(0);
       setRecordedAscentMeters(0);
       setRecordElapsedSeconds(0);
-      lastRecordedEleRef.current = cursorCoords.ele;
+      lastRecordedEleRef.current = startEle;
       setIsRecordingTrack(true);
       setIsRecordingPaused(false);
       showToast('הקלטת מסלול GPS החלה');
@@ -7063,50 +7184,15 @@ export const App: React.FC = () => {
       setIsRecordingPaused(false);
       showToast('הקלטת מסלול נמשכת');
     }
-  }, [cursorCoords.ele, cursorCoords.lat, cursorCoords.lon, showToast]);
-
-  const handleSaveRecordedTrack = useCallback(
-    async (options?: { suppressDrawerOpen?: boolean; toastOverride?: string }) => {
-      const coordsSnapshot = recordedCoordsRef.current;
-      if (coordsSnapshot.length < 2) {
-        showToast('נדרשות לפחות 2 נקודות תנועה לשמירת מסלול');
-        return;
-      }
-      const user = currentUserRef.current;
-      const saved = await RouteManager.createAndSaveRoute({
-        name: `הקלטת שטח ${new Date().toLocaleTimeString('he-IL', {
-          hour: '2-digit',
-          minute: '2-digit',
-        })}`,
-        coordinates: coordsSnapshot,
-        sourceFormat: 'drawn',
-        color: '#0ea5e9',
-        ownerUid: user?.uid ?? null,
-        ownerEmail: user?.email ?? null,
-        ownerDisplayName: user?.displayName ?? null,
-      });
-      setRoutes((prev) => [...prev, RouteManager.splitRouteRecord(saved).summary]);
-      setActiveRoute(saved);
-      setIsRecordingTrack(false);
-      setIsRecordingPaused(false);
-      setRecordedCoords([]);
-      setRecordElapsedSeconds(0);
-      if (!options?.suppressDrawerOpen) {
-        if (isMobileRef.current) {
-          setMobileDisplayMode('planning');
-          setMobileTab('routes');
-        } else {
-          setDesktopDrawer('routes');
-        }
-      }
-      showToast(options?.toastOverride || `המסלול "${saved.name}" נשמר למכשיר!`);
-    },
-    [showToast]
-  );
+  }, [cursorCoords.ele, cursorCoords.lat, cursorCoords.lon, handleSignInGoogle, showToast]);
 
   const handleDiscardRecordedTrack = useCallback(
     (options?: { silent?: boolean }) => {
       lastRecordedEleRef.current = null;
+      recordedStartedAtRef.current = null;
+      recordedCoordsRef.current = [];
+      recordedElevationsRef.current = [];
+      recordedTimestampsRef.current = [];
       setIsRecordingTrack(false);
       setIsRecordingPaused(false);
       setRecordedCoords([]);
@@ -7120,22 +7206,178 @@ export const App: React.FC = () => {
     [showToast]
   );
 
-  // Enforce: track recording is active ONLY while navigation is active.
+  const openRecordingSavePrompt = useCallback(
+    (trigger: 'stop-recording' | 'stop-navigation') => {
+      const user = currentUserRef.current;
+      const coordsSnapshot = recordedCoordsRef.current;
+      if (!user) {
+        handleDiscardRecordedTrack({ silent: true });
+        showToast('הקלטת מסלולי ניווט זמינה למשתמשים מחוברים בלבד');
+        return;
+      }
+      if (coordsSnapshot.length < 2) {
+        if (trigger === 'stop-navigation') {
+          handleDiscardRecordedTrack({ silent: true });
+        } else {
+          showToast('נדרשות לפחות 2 נקודות תנועה לשמירת הקלטה');
+        }
+        return;
+      }
+
+      const startedIso = recordedStartedAtRef.current || new Date().toISOString();
+      const endedIso = new Date().toISOString();
+      const startedDate = new Date(startedIso);
+      const dateStr = Number.isNaN(startedDate.getTime())
+        ? ''
+        : startedDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit' });
+      const timeStr = Number.isNaN(startedDate.getTime())
+        ? ''
+        : startedDate.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+      const curActiveName = activeRouteRef.current?.name;
+      const defaultName = curActiveName
+        ? `${curActiveName} • הקלטה ${dateStr}`.trim()
+        : `הקלטת ניווט ${dateStr} ${timeStr}`.trim();
+
+      const snapshot = {
+        trigger,
+        defaultName,
+        coordinates: [...coordsSnapshot],
+        pointElevations: [...recordedElevationsRef.current],
+        pointTimestamps: [...recordedTimestampsRef.current],
+        distanceKm: recordedDistanceKmRef.current,
+        ascentMeters: recordedAscentMetersRef.current,
+        durationSeconds: recordElapsedSecondsRef.current,
+        startedAt: startedIso,
+        endedAt: endedIso,
+      };
+
+      if (trigger === 'stop-navigation') {
+        handleDiscardRecordedTrack({ silent: true });
+      } else {
+        setIsRecordingPaused(true);
+      }
+      setPendingRecordingSave(snapshot);
+    },
+    [handleDiscardRecordedTrack, showToast]
+  );
+
+  const handleConfirmSaveRecording = useCallback(
+    async ({ name, notes, exportGpx }: { name: string; notes: string; exportGpx: boolean }) => {
+      const draft = pendingRecordingSave;
+      const user = currentUserRef.current;
+      if (!draft || !user) {
+        setPendingRecordingSave(null);
+        return;
+      }
+      setIsSavingRecording(true);
+      try {
+        const saved = await RouteManager.createAndSaveRecordedRoute({
+          name,
+          coordinates: draft.coordinates,
+          pointElevations: draft.pointElevations,
+          pointTimestamps: draft.pointTimestamps,
+          startedAt: draft.startedAt,
+          endedAt: draft.endedAt,
+          durationSeconds: draft.durationSeconds,
+          notes,
+          color: '#0ea5e9',
+          ownerUid: user.uid,
+          ownerEmail: user.email ?? null,
+          ownerDisplayName: user.displayName ?? null,
+        });
+        setRoutes((prev) => [RouteManager.splitRouteRecord(saved).summary, ...prev]);
+        setActiveRoute(saved);
+        setPendingRecordingSave(null);
+        handleDiscardRecordedTrack({ silent: true });
+
+        if (isMobileRef.current) {
+          setMobileDisplayMode('planning');
+          setMobilePlanningOverlay(null);
+          setMobileTab('recordings');
+          setMobileSheetExpanded(true);
+        } else {
+          setDesktopDrawer('recordings');
+        }
+        fitBoundsToRoutes([saved]);
+
+        if (exportGpx) {
+          try {
+            const exportRes = await GpxExportService.exportAndSaveRouteGpx(saved);
+            showToast(`ההקלטה "${saved.name}" נשמרה ויוצאה: ${exportRes.locationLabelHe}`);
+          } catch (err: any) {
+            showToast(err?.message || `ההקלטה "${saved.name}" נשמרה בהקלטות ניווט`);
+          }
+        } else {
+          showToast(`ההקלטה "${saved.name}" נשמרה בהקלטות ניווט!`);
+        }
+
+        if (isOnline && AuthService.isAvailable()) {
+          void PlannedTracksCloudService.savePlannedRouteToFirebase(saved, user).then(
+            (cloudRes) => {
+              if (deletedRouteIdsRef.current.has(saved.id)) return;
+              const syncedRec = cloudRes.route;
+              const syncedSummary = RouteManager.splitRouteRecord(syncedRec).summary;
+              setRoutes((prev) => prev.map((r) => (r.id === syncedRec.id ? syncedSummary : r)));
+              setActiveRoute((cur) =>
+                cur?.id === syncedRec.id
+                  ? {
+                      ...cur,
+                      ...syncedRec,
+                      geojson: cur.geojson,
+                      elevationProfile: cur.elevationProfile,
+                      waypoints: cur.waypoints,
+                      gpxXml: cur.gpxXml,
+                      recordingPointTimestamps: cur.recordingPointTimestamps,
+                    }
+                  : cur
+              );
+            }
+          );
+        }
+      } catch (err: any) {
+        showToast(err?.message || 'שגיאה בשמירת ההקלטה');
+      } finally {
+        setIsSavingRecording(false);
+      }
+    },
+    [fitBoundsToRoutes, handleDiscardRecordedTrack, isOnline, pendingRecordingSave, showToast]
+  );
+
+  // Enforce: track recording is active ONLY while navigation is active; prompt user on nav stop.
   useEffect(() => {
     if (isNavigationActive) return;
     setDesktopDrawer((prev) => (prev === 'record' ? null : prev));
     setMobileNavOverlay((prev) => (prev === 'record' ? null : prev));
     if (isRecordingTrackRef.current) {
-      if (recordedCoordsRef.current.length >= 2) {
-        void handleSaveRecordedTrack({
-          suppressDrawerOpen: true,
-          toastOverride: 'הניווט הופסק — הקלטת המסלול נשמרה אוטומטית',
-        });
-      } else {
-        handleDiscardRecordedTrack({ silent: true });
-      }
+      openRecordingSavePrompt('stop-navigation');
     }
-  }, [isNavigationActive, handleDiscardRecordedTrack, handleSaveRecordedTrack]);
+  }, [isNavigationActive, openRecordingSavePrompt]);
+
+  const openNavigationRecordings = useCallback(() => {
+    setDesktopTopMenu(null);
+    if (isMobileRef.current) {
+      setMobileDisplayMode('planning');
+      setMobilePlanningOverlay(null);
+      setMobileNavOverlay(null);
+      setMobileTab('recordings');
+      setMobileSheetExpanded(true);
+    } else {
+      setDesktopDrawer((prev) => (prev === 'recordings' ? null : 'recordings'));
+    }
+  }, []);
+
+  const handleUpdateRecordingNotes = useCallback(
+    async (routeId: string, notes: string) => {
+      const target = routesRef.current.find((r) => r.id === routeId) || activeRouteRef.current;
+      if (target?.ownership === 'shared') {
+        showToast('הקלטה משותפת היא לקריאה בלבד — לחץ "שמור עותק אצלי" כדי לערוך');
+        return;
+      }
+      const updated = await RouteManager.updateRouteDetails(routeId, { notes });
+      syncMutatedRouteState(updated, 'הערות התחקור עודכנו');
+    },
+    [showToast, syncMutatedRouteState]
+  );
 
   const openMapEditRoadMode = useCallback(
     (subMode: 'edit-road' | 'add-road') => {
@@ -7157,6 +7399,93 @@ export const App: React.FC = () => {
       switchTrailSubMode(subMode);
     },
     [handleSignInGoogle, showToast, switchTrailSubMode]
+  );
+
+  const handleUseRecordingForMapEdit = useCallback(
+    (route: SavedRouteRecord, subMode: 'add-road' | 'edit-road' = 'add-road') => {
+      setPinnedBackgroundRouteIds((prev) => (prev.includes(route.id) ? prev : [...prev, route.id]));
+      if (!RouteManager.getCachedFullRoute(route.id)) {
+        void RouteManager.loadFullRoute(route.id).then((loaded) => {
+          if (loaded) setBgHydrationSeq((s) => s + 1);
+        });
+      }
+      fitBoundsToRoutes([route]);
+      openMapEditRoadMode(subMode);
+      showToast(`ההקלטה "${route.name}" נעוצה על המפה — ניתן לעדכן דרכים ונקודות עניין מעליה`);
+    },
+    [fitBoundsToRoutes, openMapEditRoadMode, showToast]
+  );
+
+  const handleImportRecordingFile = useCallback(
+    async (file: File) => {
+      const user = currentUserRef.current;
+      if (!user) {
+        showToast('יש להתחבר עם Google כדי לטעון קבצי הקלטות');
+        void handleSignInGoogle();
+        return;
+      }
+      try {
+        const { extractedLineCoordinates, extractedRoutes } =
+          await CommunityPoiImporter.importWaypointsAndRoutesFromFile(file);
+        const tracksToCreate =
+          extractedRoutes.length > 0
+            ? extractedRoutes
+            : extractedLineCoordinates.map((coords) => ({ segments: [coords] }));
+        if (tracksToCreate.length === 0) {
+          showToast(`לא נמצא מסלול תקין בקובץ ${file.name}`);
+          return;
+        }
+        const baseName = file.name.replace(/\.[^.]+$/, '');
+        const createdList: SavedRouteRecord[] = [];
+        for (let i = 0; i < tracksToCreate.length; i++) {
+          const track = tracksToCreate[i] as {
+            name?: string;
+            segments: Array<Array<[number, number]>>;
+            pointElevations?: Array<Array<number | null>>;
+            pointTimestamps?: Array<Array<number | null>>;
+          };
+          const flatCoords = track.segments.flat();
+          if (flatCoords.length < 2) continue;
+          const flatEles = track.pointElevations ? track.pointElevations.flat() : undefined;
+          const derived = deriveRecordingMetaFromTimestamps(track.pointTimestamps);
+          const nowIso = new Date().toISOString();
+          const saved = await RouteManager.createAndSaveRecordedRoute({
+            name:
+              track.name?.trim() ||
+              (tracksToCreate.length > 1 ? `${baseName} #${i + 1}` : baseName),
+            coordinates: flatCoords,
+            pointElevations: flatEles,
+            pointTimestamps: derived?.pointTimestamps,
+            startedAt: derived?.startedAt || nowIso,
+            endedAt: derived?.endedAt || nowIso,
+            durationSeconds: derived?.durationSeconds ?? 0,
+            ownerUid: user.uid,
+            ownerEmail: user.email ?? null,
+            ownerDisplayName: user.displayName ?? null,
+          });
+          createdList.push(saved);
+          if (isOnline && AuthService.isAvailable()) {
+            void PlannedTracksCloudService.savePlannedRouteToFirebase(saved, user);
+          }
+        }
+        if (createdList.length === 0) {
+          showToast(`לא נמצאו מקטעי נסיעה/הליכה תקינים בקובץ ${file.name}`);
+          return;
+        }
+        const summaries = createdList.map((c) => RouteManager.splitRouteRecord(c).summary);
+        setRoutes((prev) => [...summaries, ...prev]);
+        setActiveRoute(createdList[0]);
+        fitBoundsToRoutes(createdList);
+        showToast(
+          createdList.length === 1
+            ? `ההקלטה "${createdList[0].name}" נטענה להקלטות ניווט`
+            : `נטענו ${createdList.length} הקלטות מתוך ${file.name}`
+        );
+      } catch (err: any) {
+        showToast(err?.message || `שגיאה בטעינת ${file.name}`);
+      }
+    },
+    [fitBoundsToRoutes, handleSignInGoogle, isOnline, showToast]
   );
 
   const openTrailsPlanningDb = useCallback(() => {
@@ -8205,6 +8534,7 @@ export const App: React.FC = () => {
                         handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
                       }
                       onFlyToRoute={handleFlyToRoute}
+                      onNotify={showToast}
                       onFitAllRoutes={() => {
                         const visibleTargets = [
                           ...(resolvedRouteDisplay.activeRouteToDisplay
@@ -8215,6 +8545,48 @@ export const App: React.FC = () => {
                         fitBoundsToRoutes(visibleTargets.length > 0 ? visibleTargets : routes);
                       }}
                     />
+                    </Suspense>
+                  )}
+
+                  {desktopDrawer === 'recordings' && (
+                    <Suspense fallback={null}>
+                      <NavigationRecordingsPanel
+                        theme={theme}
+                        hideCloseButton
+                        currentUser={currentUser}
+                        isAuthBusy={isAuthBusy}
+                        onSignInGoogle={handleSignInGoogle}
+                        routes={routes}
+                        selectedRoute={activeRoute}
+                        pois={pois}
+                        routeDisplayMode={resolvedRouteDisplay.mode}
+                        backgroundRouteIds={pinnedBackgroundRouteIds}
+                        unseenSharedCount={unseenSharedCount}
+                        onSelectRoute={handleSelectRoute}
+                        onStartNavigation={handleStartRouteNavigation}
+                        onDeleteRoute={handleDeleteRoute}
+                        onShareRoute={handleOpenShareModal}
+                        onViewSharedTab={() => setUnseenSharedCount(0)}
+                        onDuplicateSharedRoute={handleDuplicateSharedRoute}
+                        onDismissSharedRoute={handleDismissSharedRoute}
+                        onRenameRoute={handleRenameRoute}
+                        onUpdateNotes={handleUpdateRecordingNotes}
+                        onChangeRouteColor={handleChangeRouteColor}
+                        onToggleBackgroundRoute={handleToggleBackgroundRoute}
+                        onReverseRoute={handleReverseRoute}
+                        onUseForMapEdit={handleUseRecordingForMapEdit}
+                        onSendToPlanningDb={
+                          currentUser ? (r) => setSendToPlanningRouteTarget(r) : undefined
+                        }
+                        onImportRecordingFile={handleImportRecordingFile}
+                        onFlyToRoute={handleFlyToRoute}
+                        onHoverPoint={handleHoverElevationChart}
+                        onSelectPoint={(pt) =>
+                          handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
+                        }
+                        onNotify={showToast}
+                        onClose={() => setDesktopDrawer(null)}
+                      />
                     </Suspense>
                   )}
 
@@ -8263,6 +8635,10 @@ export const App: React.FC = () => {
                     <TrackRecorderPanel
                       theme={theme}
                       hideCloseButton
+                      currentUser={currentUser}
+                      isAuthBusy={isAuthBusy}
+                      onSignInGoogle={handleSignInGoogle}
+                      onOpenRecordings={openNavigationRecordings}
                       isRecording={isRecordingTrack}
                       isPaused={isRecordingPaused}
                       elapsedSeconds={recordElapsedSeconds}
@@ -8272,7 +8648,7 @@ export const App: React.FC = () => {
                       pointsCount={recordedCoords.length}
                       onStartOrResume={handleStartOrResumeRecording}
                       onPause={() => setIsRecordingPaused(true)}
-                      onSaveRoute={() => void handleSaveRecordedTrack()}
+                      onSaveRoute={() => openRecordingSavePrompt('stop-recording')}
                       onDiscard={() => handleDiscardRecordedTrack()}
                       onDropWaypoint={() => openAddPoiPanelAt({ lon: cursorCoords.lon, lat: cursorCoords.lat, ele: cursorCoords.ele })}
                       onClose={() => setDesktopDrawer(null)}
@@ -8328,6 +8704,7 @@ export const App: React.FC = () => {
                   const isTrailsActive =
                     desktopTopMenu === 'trails' ||
                     desktopDrawer === 'routes' ||
+                    desktopDrawer === 'recordings' ||
                     desktopDrawer === 'planning-db' ||
                     desktopDrawer === 'plan-route';
                   return (
@@ -8403,6 +8780,38 @@ export const App: React.FC = () => {
                                 +{unseenSharedCount}
                               </span>
                             )}
+                          </button>
+
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="menu-recordings-btn"
+                            onClick={() => openNavigationRecordings()}
+                            className={`w-full text-right px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition-colors ${
+                              desktopDrawer === 'recordings'
+                                ? 'bg-rose-600 text-white'
+                                : t.hoverRow
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <Activity
+                                className={`w-4 h-4 shrink-0 ${
+                                  desktopDrawer === 'recordings' ? 'text-white' : 'text-rose-500'
+                                }`}
+                              />
+                              <span className="min-w-0">
+                                <span className="font-bold block">הקלטות ניווט</span>
+                                <span
+                                  className={`text-[11px] block truncate ${
+                                    desktopDrawer === 'recordings' ? 'text-rose-100' : t.muted
+                                  }`}
+                                >
+                                  {currentUser
+                                    ? 'תחקור, שיתוף, עדכון מפה וייצוא GPX'
+                                    : 'דורש התחברות Google'}
+                                </span>
+                              </span>
+                            </span>
                           </button>
 
                           <button
@@ -9539,19 +9948,29 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               )
-            ) : mobileTab === 'routes' || mobileTab === 'planning-db' ? (
+            ) : mobileTab === 'routes' || mobileTab === 'recordings' || mobileTab === 'planning-db' ? (
               <div className="max-h-[60vh] flex flex-col">
-                {/* Unified מסלולים Sub-Menu: המסלולים שלי / תכנון מסלול / מאגר תכנון */}
-                <div className="px-3 py-2 border-b border-current/10 flex items-center gap-1.5 shrink-0">
+                {/* Unified מסלולים Sub-Menu: המסלולים שלי / הקלטות ניווט / תכנון מסלול / מאגר תכנון */}
+                <div className="px-3 py-2 border-b border-current/10 grid grid-cols-2 gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => setMobileTab('routes')}
-                    className={`flex-1 min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
+                    className={`min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
                       mobileTab === 'routes' ? 'bg-emerald-600 text-white' : t.subCard
                     }`}
                   >
                     <RouteIcon className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate">המסלולים שלי</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileTab('recordings')}
+                    className={`min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
+                      mobileTab === 'recordings' ? 'bg-rose-600 text-white' : t.subCard
+                    }`}
+                  >
+                    <Activity className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">הקלטות ניווט</span>
                   </button>
                   <button
                     type="button"
@@ -9561,7 +9980,7 @@ export const App: React.FC = () => {
                       exitTrailMarkingMode();
                       setMobileSheetExpanded(true);
                     }}
-                    className={`flex-1 min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${t.subCard}`}
+                    className={`min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${t.subCard}`}
                   >
                     <PenTool className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                     <span className="truncate">תכנון מסלול</span>
@@ -9569,7 +9988,7 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => openTrailsPlanningDb()}
-                    className={`flex-1 min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
+                    className={`min-w-0 justify-center px-2 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 whitespace-nowrap transition-colors ${
                       mobileTab === 'planning-db' ? 'bg-emerald-600 text-white' : t.subCard
                     }`}
                   >
@@ -9578,7 +9997,49 @@ export const App: React.FC = () => {
                   </button>
                 </div>
 
-                {mobileTab === 'planning-db' && currentUser ? (
+                {mobileTab === 'recordings' ? (
+                  <div className="overflow-y-auto flex-1">
+                    <Suspense fallback={null}>
+                      <NavigationRecordingsPanel
+                        theme={theme}
+                        hideCloseButton
+                        currentUser={currentUser}
+                        isAuthBusy={isAuthBusy}
+                        onSignInGoogle={handleSignInGoogle}
+                        routes={routes}
+                        selectedRoute={activeRoute}
+                        pois={pois}
+                        routeDisplayMode={resolvedRouteDisplay.mode}
+                        backgroundRouteIds={pinnedBackgroundRouteIds}
+                        unseenSharedCount={unseenSharedCount}
+                        onSelectRoute={handleSelectRoute}
+                        onStartNavigation={handleStartRouteNavigation}
+                        onDeleteRoute={handleDeleteRoute}
+                        onShareRoute={handleOpenShareModal}
+                        onViewSharedTab={() => setUnseenSharedCount(0)}
+                        onDuplicateSharedRoute={handleDuplicateSharedRoute}
+                        onDismissSharedRoute={handleDismissSharedRoute}
+                        onRenameRoute={handleRenameRoute}
+                        onUpdateNotes={handleUpdateRecordingNotes}
+                        onChangeRouteColor={handleChangeRouteColor}
+                        onToggleBackgroundRoute={handleToggleBackgroundRoute}
+                        onReverseRoute={handleReverseRoute}
+                        onUseForMapEdit={handleUseRecordingForMapEdit}
+                        onSendToPlanningDb={
+                          currentUser ? (r) => setSendToPlanningRouteTarget(r) : undefined
+                        }
+                        onImportRecordingFile={handleImportRecordingFile}
+                        onFlyToRoute={handleFlyToRoute}
+                        onHoverPoint={handleHoverElevationChart}
+                        onSelectPoint={(pt) =>
+                          handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
+                        }
+                        onNotify={showToast}
+                        onClose={() => setMobileTab('explore')}
+                      />
+                    </Suspense>
+                  </div>
+                ) : mobileTab === 'planning-db' && currentUser ? (
                   <div className="overflow-y-auto flex-1">
                     <Suspense fallback={null}>
                       <PlanningTrailDbDrawer
@@ -9644,6 +10105,7 @@ export const App: React.FC = () => {
                           handleFlyTo(pt.lon, pt.lat, Math.max(14, mapRef.current?.getZoom() || 14))
                         }
                         onFlyToRoute={handleFlyToRoute}
+                        onNotify={showToast}
                         onFitAllRoutes={() => {
                           const visibleTargets = [
                             ...(resolvedRouteDisplay.activeRouteToDisplay
@@ -9778,7 +10240,9 @@ export const App: React.FC = () => {
               ].map((tab) => {
                 const active =
                   (tab.id === 'routes'
-                    ? mobileTab === 'routes' || mobileTab === 'planning-db'
+                    ? mobileTab === 'routes' ||
+                      mobileTab === 'recordings' ||
+                      mobileTab === 'planning-db'
                     : mobileTab === tab.id) && !mobilePlanningOverlay;
                 return (
                   <button
@@ -9786,7 +10250,9 @@ export const App: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setMobileTab((prev) =>
-                        prev === tab.id || (tab.id === 'routes' && prev === 'planning-db')
+                        prev === tab.id ||
+                        (tab.id === 'routes' &&
+                          (prev === 'recordings' || prev === 'planning-db'))
                           ? 'explore'
                           : tab.id
                       );
@@ -9986,6 +10452,10 @@ export const App: React.FC = () => {
               <TrackRecorderPanel
                 theme={theme}
                 hideCloseButton
+                currentUser={currentUser}
+                isAuthBusy={isAuthBusy}
+                onSignInGoogle={handleSignInGoogle}
+                onOpenRecordings={openNavigationRecordings}
                 isRecording={isRecordingTrack}
                 isPaused={isRecordingPaused}
                 elapsedSeconds={recordElapsedSeconds}
@@ -9995,7 +10465,7 @@ export const App: React.FC = () => {
                 pointsCount={recordedCoords.length}
                 onStartOrResume={handleStartOrResumeRecording}
                 onPause={() => setIsRecordingPaused(true)}
-                onSaveRoute={() => void handleSaveRecordedTrack()}
+                onSaveRoute={() => openRecordingSavePrompt('stop-recording')}
                 onDiscard={() => handleDiscardRecordedTrack()}
                 onDropWaypoint={() =>
                   openAddPoiPanelAt({
@@ -10116,6 +10586,36 @@ export const App: React.FC = () => {
           )}
           </div>
         </div>
+      )}
+
+      {/* Prompt User to Name & Save Navigation Recording on Stop Recording / Stop Navigating */}
+      {pendingRecordingSave && (
+        <SaveRecordingModal
+          isOpen
+          theme={theme}
+          trigger={pendingRecordingSave.trigger}
+          initialName={pendingRecordingSave.defaultName}
+          distanceKm={pendingRecordingSave.distanceKm}
+          ascentMeters={pendingRecordingSave.ascentMeters}
+          durationSeconds={pendingRecordingSave.durationSeconds}
+          pointsCount={pendingRecordingSave.coordinates.length}
+          startedAt={pendingRecordingSave.startedAt}
+          isSaving={isSavingRecording}
+          onConfirmSave={handleConfirmSaveRecording}
+          onContinueRecording={
+            pendingRecordingSave.trigger === 'stop-recording' && isNavigationActive
+              ? () => {
+                  setPendingRecordingSave(null);
+                  setIsRecordingPaused(false);
+                  showToast('הקלטת המסלול נמשכת');
+                }
+              : undefined
+          }
+          onDiscard={() => {
+            setPendingRecordingSave(null);
+            handleDiscardRecordedTrack();
+          }}
+        />
       )}
 
       {/* Desktop Modal: Offline Maps Manager & KML/GPX Importer (Logged-in users only) */}

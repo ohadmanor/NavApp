@@ -105,19 +105,29 @@ export interface RouteShareRecipient {
   sharedAt: string;
 }
 
+export interface RecordingTelemetryMeta {
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  avgSpeedKmh?: number;
+  pointCount?: number;
+  notes?: string;
+}
+
 export interface RoutePayloadRecord {
   id: string;
   geojson: GeoJSON.FeatureCollection;
   elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
   waypoints?: PlannedWaypoint[];
   gpxXml?: string;
+  recordingPointTimestamps?: number[];
   updatedAt: string;
 }
 
 export interface SavedRouteRecord {
   id: string;
   name: string;
-  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn' | 'planned';
+  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn' | 'planned' | 'recorded';
   planningMode?: PlanningMode;
   waypoints?: PlannedWaypoint[];
   distanceKm: number;
@@ -133,6 +143,8 @@ export interface SavedRouteRecord {
   geojson: GeoJSON.FeatureCollection;
   elevationProfile: Array<{ distKm: number; ele: number; lon: number; lat: number }>;
   gpxXml?: string;
+  recordingMeta?: RecordingTelemetryMeta;
+  recordingPointTimestamps?: number[];
   ownership?: RouteOwnership;
   ownerUid?: string | null;
   ownerEmail?: string | null;
@@ -186,7 +198,7 @@ export interface PlanningTrailRecord {
   customCategoryLabel?: string;
   difficulty: TrailDifficulty;
   planningMode?: PlanningMode;
-  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn' | 'planned';
+  sourceFormat: 'gpx' | 'kml' | 'geojson' | 'drawn' | 'planned' | 'recorded';
   distanceKm: number;
   ascentMeters: number;
   descentMeters: number;

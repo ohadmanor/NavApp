@@ -819,8 +819,8 @@ export class PMTilesSearchService {
       const formatLabel =
         r.sourceFormat === 'planned'
           ? 'מסלול מתוכנן'
-          : r.sourceFormat === 'drawn'
-            ? 'מסלול מוקלט'
+          : r.sourceFormat === 'drawn' || r.sourceFormat === 'recorded'
+            ? 'הקלטת ניווט'
             : `מסלול ${r.sourceFormat.toUpperCase()}`;
 
       let score = 600;

@@ -8,12 +8,15 @@ export interface ExtractedRouteTrack {
   name?: string;
   segments: Array<Array<[number, number]>>;
   pointElevations?: Array<Array<number | null>>;
+  pointTimestamps?: Array<Array<number | null>>;
+  isRecordedTrack?: boolean;
 }
 
 interface RawTrackVertex {
   lon: number;
   lat: number;
   ele: number | null;
+  timeMs?: number | null;
 }
 
 const VALID_ELE_MIN = -500;
@@ -260,12 +263,20 @@ export class CommunityPoiImporter {
       .replace(/&apos;/g, "'");
   }
 
+  private static parseValidTimestampMs(rawValue: unknown): number | null {
+    if (typeof rawValue !== 'string' || !rawValue.trim()) return null;
+    const ms = Date.parse(rawValue.trim());
+    return Number.isFinite(ms) ? ms : null;
+  }
+
   private static cleanTrackCoordinatesWithElevations(raw: RawTrackVertex[]): {
     coords: Array<[number, number]>;
     elevations: Array<number | null>;
+    timestamps: Array<number | null>;
   } {
     const coords: Array<[number, number]> = [];
     const elevations: Array<number | null> = [];
+    const timestamps: Array<number | null> = [];
 
     for (const pt of raw) {
       if (!this.isValidLatLon(pt.lon, pt.lat)) continue;
@@ -273,18 +284,24 @@ export class CommunityPoiImporter {
       if (!prev || Math.abs(prev[0] - pt.lon) > 1e-6 || Math.abs(prev[1] - pt.lat) > 1e-6) {
         coords.push([pt.lon, pt.lat]);
         elevations.push(pt.ele);
-      } else if (elevations[elevations.length - 1] === null && pt.ele !== null) {
-        elevations[elevations.length - 1] = pt.ele;
+        timestamps.push(pt.timeMs ?? null);
+      } else {
+        if (elevations[elevations.length - 1] === null && pt.ele !== null) {
+          elevations[elevations.length - 1] = pt.ele;
+        }
+        if (timestamps[timestamps.length - 1] === null && pt.timeMs != null) {
+          timestamps[timestamps.length - 1] = pt.timeMs;
+        }
       }
     }
     if (coords.length < 2) {
-      return { coords: [], elevations: [] };
+      return { coords: [], elevations: [], timestamps: [] };
     }
     const distKm = turf.length(turf.lineString(coords), { units: 'kilometers' });
     if (distKm < 0.005) {
-      return { coords: [], elevations: [] };
+      return { coords: [], elevations: [], timestamps: [] };
     }
-    return { coords, elevations };
+    return { coords, elevations, timestamps };
   }
 
   private static getDirectChildName(el: Element): string | undefined {
@@ -362,10 +379,12 @@ export class CommunityPoiImporter {
         const lon = this.extractAttrValue(pm[1] || '', 'lon');
         if (!this.isValidLatLon(lon, lat)) continue;
         const eleMatch = pm[2] ? /<ele>([\s\S]*?)<\/ele>/i.exec(pm[2]) : null;
+        const timeMatch = pm[2] ? /<time>([\s\S]*?)<\/time>/i.exec(pm[2]) : null;
         out.push({
           lon,
           lat,
           ele: eleMatch ? this.parseValidElevation(eleMatch[1]) : null,
+          timeMs: timeMatch ? this.parseValidTimestampMs(timeMatch[1]) : null,
         });
       }
       return out;
@@ -375,30 +394,45 @@ export class CommunityPoiImporter {
     for (const tb of trkBlocks) {
       const trkNameMatch = /<name>([\s\S]*?)<\/name>/i.exec(tb);
       const trkName = trkNameMatch ? this.decodeXmlEntities(trkNameMatch[1]).trim() : undefined;
+      const trkTypeMatch = /<type>([\s\S]*?)<\/type>/i.exec(tb);
+      const trkType = trkTypeMatch ? this.decodeXmlEntities(trkTypeMatch[1]).trim().toLowerCase() : '';
+      const isRecordedTrack = trkType === 'recorded' || trkType === 'drawn';
       const segMatches = tb.match(/<trkseg\b[\s\S]*?(?:<\/trkseg>|$)/gi) || [tb];
       const segments: Array<Array<[number, number]>> = [];
       const pointElevations: Array<Array<number | null>> = [];
+      const pointTimestamps: Array<Array<number | null>> = [];
 
       for (const sb of segMatches) {
         const raw = extractPtTag(sb, 'trkpt');
-        const { coords, elevations } = this.cleanTrackCoordinatesWithElevations(raw);
+        const { coords, elevations, timestamps } = this.cleanTrackCoordinatesWithElevations(raw);
         if (coords.length >= 2) {
           segments.push(coords);
           pointElevations.push(elevations);
+          pointTimestamps.push(timestamps);
           extractedLineCoordinates.push(coords);
         }
       }
       if (segments.length > 0) {
-        extractedRoutes.push({ name: trkName, segments, pointElevations });
+        extractedRoutes.push({
+          name: trkName,
+          segments,
+          pointElevations,
+          pointTimestamps,
+          isRecordedTrack,
+        });
       }
     }
 
     if (trkBlocks.length === 0) {
       const raw = extractPtTag(xmlText, 'trkpt');
-      const { coords, elevations } = this.cleanTrackCoordinatesWithElevations(raw);
+      const { coords, elevations, timestamps } = this.cleanTrackCoordinatesWithElevations(raw);
       if (coords.length >= 2) {
         extractedLineCoordinates.push(coords);
-        extractedRoutes.push({ segments: [coords], pointElevations: [elevations] });
+        extractedRoutes.push({
+          segments: [coords],
+          pointElevations: [elevations],
+          pointTimestamps: [timestamps],
+        });
       }
     }
   }
@@ -453,13 +487,16 @@ export class CommunityPoiImporter {
       importedPois.push(record);
     }
 
-    // 2. Parse <trk> tracks (combining <trkseg> segments within each <trk> while preserving track name & elevations)
+    // 2. Parse <trk> tracks (combining <trkseg> segments within each <trk> while preserving track name, elevations & timestamps)
     const trks = this.queryByLocalName(doc, 'trk');
     for (const trk of trks) {
       const trkName = this.getDirectChildName(trk);
+      const trkType = this.queryByLocalName(trk, 'type')[0]?.textContent?.trim().toLowerCase() || '';
+      const isRecordedTrack = trkType === 'recorded' || trkType === 'drawn';
       const segEls = this.queryByLocalName(trk, 'trkseg');
       const segments: Array<Array<[number, number]>> = [];
       const pointElevations: Array<Array<number | null>> = [];
+      const pointTimestamps: Array<Array<number | null>> = [];
 
       const containers = segEls.length > 0 ? segEls : [trk];
       for (const seg of containers) {
@@ -470,22 +507,31 @@ export class CommunityPoiImporter {
           const lon = parseFloat(pt.getAttribute('lon') || '');
           if (!this.isValidLatLon(lon, lat)) continue;
           const eleText = this.queryByLocalName(pt, 'ele')[0]?.textContent;
+          const timeText = this.queryByLocalName(pt, 'time')[0]?.textContent;
           raw.push({
             lon,
             lat,
             ele: this.parseValidElevation(eleText),
+            timeMs: this.parseValidTimestampMs(timeText),
           });
         }
-        const { coords, elevations } = this.cleanTrackCoordinatesWithElevations(raw);
+        const { coords, elevations, timestamps } = this.cleanTrackCoordinatesWithElevations(raw);
         if (coords.length >= 2) {
           segments.push(coords);
           pointElevations.push(elevations);
+          pointTimestamps.push(timestamps);
           extractedLineCoordinates.push(coords);
         }
       }
 
       if (segments.length > 0) {
-        extractedRoutes.push({ name: trkName, segments, pointElevations });
+        extractedRoutes.push({
+          name: trkName,
+          segments,
+          pointElevations,
+          pointTimestamps,
+          isRecordedTrack,
+        });
       }
     }
 
