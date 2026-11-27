@@ -11,7 +11,13 @@ import {
   type RangeResponse,
 } from 'pmtiles';
 import { db, type MapArchiveRecord } from '../db/NavDatabase';
-import { pmtilesUrl, REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN } from '../dataUrls';
+import {
+  getDemCandidateUrls,
+  pmtilesUrl,
+  REMOTE_DATA_FALLBACK_ORIGIN,
+  REMOTE_DATA_ORIGIN,
+  REMOTE_DEM_HOSTING_ORIGIN,
+} from '../dataUrls';
 import { OpfsStorageAdapter } from './OpfsStorageAdapter';
 import { NativeOfflineStorage } from './NativeOfflineStorage';
 import { CachedFetchSource } from './CachedFetchSource';
@@ -74,6 +80,7 @@ class TransientSafePromiseCache extends SharedPromiseCache {
     } catch (err) {
       const cacheKey = `${source.getKey()}|${header.etag || ''}|${offset}|${length}`;
       this.cache.delete(cacheKey);
+      (this as any).pendingFetches?.delete?.(cacheKey);
       throw err;
     }
   }
@@ -160,11 +167,15 @@ function decodeRgbaElevationGrid(
   const data = new Float32Array(width * height);
   if (encoding === 'mapbox') {
     for (let i = 0; i < rgba.length; i += 4) {
-      data[i >> 2] = -10000 + (rgba[i] * 256 * 256 + rgba[i + 1] * 256 + rgba[i + 2]) * 0.1;
+      data[i >> 2] =
+        rgba[i + 3] === 0
+          ? NaN
+          : -10000 + (rgba[i] * 256 * 256 + rgba[i + 1] * 256 + rgba[i + 2]) * 0.1;
     }
   } else {
     for (let i = 0; i < rgba.length; i += 4) {
-      data[i >> 2] = rgba[i] * 256 + rgba[i + 1] + rgba[i + 2] / 256 - 32768;
+      data[i >> 2] =
+        rgba[i + 3] === 0 ? NaN : rgba[i] * 256 + rgba[i + 1] + rgba[i + 2] / 256 - 32768;
     }
   }
   return { width, height, data };
@@ -278,6 +289,8 @@ export class PMTilesRegistry {
   private migrationQueue: Promise<void> = Promise.resolve();
   private migratingArchives = new Set<string>();
   private demRemoteUnavailable = false;
+  private defaultDemSource: CachedFetchSource | null = null;
+  private demRetryPromise: Promise<MountedArchiveInfo | null> | null = null;
   private defaultInitPromise: Promise<{
     dem: MountedArchiveInfo | null;
     osm: MountedArchiveInfo | null;
@@ -370,6 +383,28 @@ export class PMTilesRegistry {
     }
   }
 
+  private isRemoteArchiveUrl(url: string): boolean {
+    return (
+      url.includes('/__remote_proxy__/') ||
+      url.startsWith(REMOTE_DATA_ORIGIN) ||
+      url.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
+      url.startsWith(REMOTE_DEM_HOSTING_ORIGIN) ||
+      (url.startsWith('https://') &&
+        (typeof window === 'undefined' || !url.startsWith(window.location?.origin || 'https://__none__')))
+    );
+  }
+
+  private createDemRemoteSource(primaryUrl: string): CachedFetchSource {
+    const fallbackUrls = getDemCandidateUrls().filter((u) => u !== primaryUrl);
+    return new CachedFetchSource(primaryUrl, {
+      immutable: true,
+      fallbackUrls,
+      cacheKey: 'immutable:Israel.dem.pmtiles',
+      requestTimeoutMs: 8000,
+      headerTimeoutMs: 3500,
+    });
+  }
+
   initProtocols(): void {
     if (this.isProtocolRegistered) return;
     const rawTileHandler = this.protocol.tile.bind(this.protocol) as any;
@@ -390,10 +425,7 @@ export class PMTilesRegistry {
 
     // Pre-register default local (/data on localhost) or remote Firebase sources so MapLibre can stream immediately
     const defaultOsmUrl = pmtilesUrl('Israel.osm.pmtiles');
-    const osmIsRemote =
-      defaultOsmUrl.startsWith(REMOTE_DATA_ORIGIN) ||
-      defaultOsmUrl.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
-      defaultOsmUrl.startsWith('https://');
+    const osmIsRemote = this.isRemoteArchiveUrl(defaultOsmUrl);
     const defaultOsmSource = osmIsRemote
       ? new CachedFetchSource(defaultOsmUrl, { immutable: false })
       : new FetchSource(defaultOsmUrl);
@@ -406,13 +438,11 @@ export class PMTilesRegistry {
     }
 
     const defaultDemUrl = pmtilesUrl('Israel.dem.pmtiles');
-    const demIsRemote =
-      defaultDemUrl.startsWith(REMOTE_DATA_ORIGIN) ||
-      defaultDemUrl.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
-      defaultDemUrl.startsWith('https://');
+    const demIsRemote = this.isRemoteArchiveUrl(defaultDemUrl);
     const defaultDemSource = demIsRemote
-      ? new CachedFetchSource(defaultDemUrl, { immutable: true })
+      ? this.createDemRemoteSource(defaultDemUrl)
       : new FetchSource(defaultDemUrl);
+    this.defaultDemSource = defaultDemSource instanceof CachedFetchSource ? defaultDemSource : null;
     const defaultDemPmtiles = new PMTiles(defaultDemSource, new TransientSafePromiseCache(1000));
     this.attachInMemoryTileCache(defaultDemPmtiles, 500);
     this.protocol.add(defaultDemPmtiles);
@@ -536,13 +566,17 @@ export class PMTilesRegistry {
       );
     }
 
-    // 3. Not stored locally -> check if hosted on Firebase
+    // 3. Not stored locally -> check if hosted on Firebase (Storage / hosting:dem / hosting:data)
     console.log(`[PMTilesRegistry] Checking Firebase for ${fileName}...`);
 
     try {
       const remote = await this.probeRemote(fileName);
       if (!remote) {
         if (id === 'israel-dem') {
+          const cachedDem = await this.tryMountCachedRemoteDem();
+          if (cachedDem) {
+            return cachedDem;
+          }
           this.demRemoteUnavailable = true;
         }
         console.warn(
@@ -553,17 +587,77 @@ export class PMTilesRegistry {
 
       if (id === 'israel-dem') {
         this.demRemoteUnavailable = false;
+        const defaultDemPmtiles = this.archives.get('israel-dem');
+        if (
+          defaultDemPmtiles &&
+          this.defaultDemSource &&
+          this.defaultDemSource.supportsUrl(remote.url)
+        ) {
+          this.defaultDemSource.preferUrl(remote.url);
+          console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remote.url}`);
+          return await this.registerArchiveSource(
+            id,
+            fileName,
+            this.defaultDemSource,
+            'remote-url',
+            remote.url,
+            remote.size,
+            true,
+            defaultDemPmtiles
+          );
+        }
       }
       console.log(`[PMTilesRegistry] Streaming ${fileName} from Firebase: ${remote.url}`);
       const mounted = await this.mountFromUrl(id, fileName, remote.url, isConstant, remote.size);
       return mounted;
     } catch (err) {
       if (id === 'israel-dem') {
+        const cachedDem = await this.tryMountCachedRemoteDem();
+        if (cachedDem) {
+          return cachedDem;
+        }
         this.demRemoteUnavailable = true;
       }
       console.warn(`[PMTilesRegistry] Could not mount ${fileName} from Firebase:`, err);
       return null;
     }
+  }
+
+  private async tryMountCachedRemoteDem(): Promise<MountedArchiveInfo | null> {
+    const defaultDemPmtiles = this.archives.get('israel-dem');
+    if (!defaultDemPmtiles || !this.defaultDemSource) return null;
+    if (!(await this.defaultDemSource.hasCachedHeader())) return null;
+    try {
+      const mounted = await this.registerArchiveSource(
+        'israel-dem',
+        'Israel.dem.pmtiles',
+        this.defaultDemSource,
+        'remote-url',
+        this.defaultDemSource.getActiveUrl(),
+        0,
+        true,
+        defaultDemPmtiles
+      );
+      this.demRemoteUnavailable = false;
+      console.log('[PMTilesRegistry] Mounted cached Israel.dem.pmtiles ranges for offline viewing.');
+      return mounted;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Re-attempts remote DEM mounting after an offline/blocked boot once connectivity returns. */
+  async retryDemIfUnavailable(): Promise<MountedArchiveInfo | null> {
+    const existing = this.mountedInfo.get('israel-dem');
+    if (existing) return existing;
+    if (!this.demRemoteUnavailable) return null;
+    if (this.demRetryPromise) return this.demRetryPromise;
+    this.demRetryPromise = this.resolveArchive('israel-dem', 'Israel.dem.pmtiles', true)
+      .catch(() => null)
+      .finally(() => {
+        this.demRetryPromise = null;
+      });
+    return this.demRetryPromise;
   }
 
   /** Reads the real archive size/etag from Firebase with a 1-byte range request (checks primary & fallback sites). */
@@ -747,17 +841,14 @@ export class PMTilesRegistry {
     knownSizeBytes = 0
   ): Promise<MountedArchiveInfo> {
     this.initProtocols();
-    const isRemote =
-      url.includes('/__remote_proxy__/') ||
-      url.startsWith(REMOTE_DATA_ORIGIN) ||
-      url.startsWith(REMOTE_DATA_FALLBACK_ORIGIN) ||
-      (url.startsWith('https://') &&
-        (typeof window === 'undefined' || !url.startsWith(window.location?.origin || 'https://__none__')));
+    const isRemote = this.isRemoteArchiveUrl(url);
     const existingPmtiles = this.protocol.get(url);
     const source = existingPmtiles
       ? existingPmtiles.source
       : isRemote
-        ? new CachedFetchSource(url, { immutable: isConstant })
+        ? id === 'israel-dem'
+          ? this.createDemRemoteSource(url)
+          : new CachedFetchSource(url, { immutable: isConstant })
         : new FetchSource(url);
     return this.registerArchiveSource(
       id,
@@ -1176,13 +1267,17 @@ export class PMTilesRegistry {
             }
             const activeDem = this.activeDemPmtiles || demPmtiles;
             let tileRes: RangeResponse | undefined;
-            try {
-              tileRes = await activeDem.getZxy(z, x, y, sig);
-            } catch {
-              if (sig?.aborted) throw new Error('aborted');
-              await new Promise((r) => setTimeout(r, 250));
-              if (sig?.aborted) throw new Error('aborted');
-              tileRes = await activeDem.getZxy(z, x, y, sig);
+            const retryDelays = [200, 600];
+            for (let attempt = 0; ; attempt++) {
+              try {
+                tileRes = await activeDem.getZxy(z, x, y, sig);
+                break;
+              } catch (err) {
+                if (sig?.aborted) throw new Error('aborted');
+                if (attempt >= retryDelays.length) throw err;
+                await new Promise((r) => setTimeout(r, retryDelays[attempt]));
+                if (sig?.aborted) throw new Error('aborted');
+              }
             }
             if (sig?.aborted) {
               throw new Error('aborted');

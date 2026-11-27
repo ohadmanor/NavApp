@@ -1,10 +1,9 @@
 import {
   getCustomDataOrigin,
-  getCustomDemPmtilesUrl,
+  getDemCandidateUrls,
   isLocalDevServer,
   REMOTE_DATA_FALLBACK_ORIGIN,
   REMOTE_DATA_ORIGIN,
-  wrapAndroidRemoteProxyUrl,
 } from '../dataUrls';
 
 export interface LocalDataServerProbe {
@@ -62,6 +61,8 @@ export function clearDataFileMeta(fileName: string): void {
 
 const LOCAL_PROBE_TIMEOUT_MS = 4000;
 const REMOTE_PROBE_TIMEOUT_MS = 10000;
+const DEM_PROBE_TIMEOUT_MS = 4000;
+const DEM_PRIMARY_GRACE_MS = 1500;
 
 export async function probeLocalDataServer(
   fileName: string
@@ -119,11 +120,14 @@ async function tryHeadProbe(targetUrl: string): Promise<RemoteDataProbe | null> 
   };
 }
 
-async function tryRangeProbe(targetUrl: string): Promise<RemoteDataProbe | null> {
+async function tryRangeProbe(
+  targetUrl: string,
+  timeoutMs = REMOTE_PROBE_TIMEOUT_MS
+): Promise<RemoteDataProbe | null> {
   const res = await fetch(targetUrl, {
     headers: { Range: 'bytes=0-0' },
     cache: 'no-store',
-    signal: AbortSignal.timeout(REMOTE_PROBE_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) return null;
   const contentType = res.headers.get('content-type') || '';
@@ -142,8 +146,81 @@ async function tryRangeProbe(targetUrl: string): Promise<RemoteDataProbe | null>
   };
 }
 
+async function safeRangeProbe(targetUrl: string, timeoutMs: number): Promise<RemoteDataProbe | null> {
+  try {
+    return await tryRangeProbe(targetUrl, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Probes Firebase Hosting for a data file's true uncompressed size & ETag.
+ * Probes DEM candidate mirrors concurrently so a blocked/blackholed Storage firewall fails over
+ * to dedicated `hosting:dem` within ~1.5s while open networks still prefer Storage.
+ */
+async function probeDemCandidates(candidateUrls: readonly string[]): Promise<RemoteDataProbe | null> {
+  if (candidateUrls.length === 0) return null;
+  if (candidateUrls.length === 1) {
+    return safeRangeProbe(candidateUrls[0], DEM_PROBE_TIMEOUT_MS);
+  }
+
+  const [primaryUrl, secondaryUrl, ...restUrls] = candidateUrls;
+  const primaryPromise = safeRangeProbe(primaryUrl, DEM_PROBE_TIMEOUT_MS);
+  const secondaryPromise = safeRangeProbe(secondaryUrl, DEM_PROBE_TIMEOUT_MS);
+
+  let primarySettled = false;
+  let primaryResult: RemoteDataProbe | null = null;
+  let secondarySettled = false;
+  let secondaryResult: RemoteDataProbe | null = null;
+
+  const firstWinner = await new Promise<RemoteDataProbe | null>((resolve) => {
+    let resolved = false;
+    let graceElapsed = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (probe: RemoteDataProbe | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (graceTimer) clearTimeout(graceTimer);
+      resolve(probe);
+    };
+
+    graceTimer = setTimeout(() => {
+      graceElapsed = true;
+      if (secondarySettled && secondaryResult) {
+        finish(secondaryResult);
+      }
+    }, DEM_PRIMARY_GRACE_MS);
+
+    void primaryPromise.then((res) => {
+      primarySettled = true;
+      primaryResult = res;
+      if (res) {
+        finish(res);
+      } else if (secondarySettled) {
+        finish(secondaryResult);
+      }
+    });
+
+    void secondaryPromise.then((res) => {
+      secondarySettled = true;
+      secondaryResult = res;
+      if ((primarySettled && !primaryResult) || (graceElapsed && res)) {
+        finish(res);
+      }
+    });
+  });
+
+  if (firstWinner) return firstWinner;
+
+  for (const fallbackUrl of restUrls) {
+    const res = await safeRangeProbe(fallbackUrl, DEM_PROBE_TIMEOUT_MS);
+    if (res) return res;
+  }
+  return null;
+}
+
+/**
+ * Probes Firebase Hosting/Storage for a data file's true uncompressed size & ETag.
  * Uses HEAD first for compressed text formats (.geojson/.idx) so CDN gzip Content-Range
  * doesn't report the compressed byte length instead of the decoded byte length.
  */
@@ -155,13 +232,11 @@ export async function probeRemoteDataFile(
   const isPmtiles = fileName.toLowerCase().endsWith('.pmtiles');
   const preferHead = options.preferHead ?? !isPmtiles;
 
-  const candidateUrls: string[] = [];
   if (fileName === 'Israel.dem.pmtiles') {
-    const customDemUrl = getCustomDemPmtilesUrl();
-    if (customDemUrl) {
-      candidateUrls.push(wrapAndroidRemoteProxyUrl(fileName, customDemUrl));
-    }
+    return probeDemCandidates(getDemCandidateUrls());
   }
+
+  const candidateUrls: string[] = [];
   const customOrigin = getCustomDataOrigin();
   const origins = customOrigin
     ? [customOrigin]

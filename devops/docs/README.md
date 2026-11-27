@@ -9,6 +9,7 @@
 - **[`docs/`](./)** — All project documentation, implementation plans, and architecture diagrams:
   - [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) — Full architectural & implementation blueprint.
   - [`decoupled-storage-implementation-plan.md`](./decoupled-storage-implementation-plan.md) — Decoupling code deployments (`deploy-firebase.bat`) from Firebase map data storage.
+  - [`dem-dedicated-hosting-fallback-implementation-plan.md`](./dem-dedicated-hosting-fallback-implementation-plan.md) — Dedicated static `hosting:dem` target and multi-mirror DEM failover for restricted networks & elevation stability.
   - [`route-planning-implementation-plan.md`](./route-planning-implementation-plan.md) — Client-side route planning (4x4, Foot, Bicycle) & Firebase `planing_tracks` sync design.
   - [`trail-annotations-implementation-plan.md`](./trail-annotations-implementation-plan.md) — Community highway/trail colors, numbers, descriptions, authenticated editing, audit history, and persistence across PMTiles updates.
   - [`community-roads-implementation-plan.md`](./community-roads-implementation-plan.md) — Adding or editing any OSM highway type inside `סימון שבילים` with live road snapping, T-junction routing graph integration, Firestore/Dexie sync, and Phase 5 OpenStreetMap (OSM) sync for signed-in users.
@@ -144,14 +145,18 @@ Compiling an `.ipa` requires macOS + Xcode:
 
 ## Data pipeline
 
-Map data (4 files: DEM, OSM tiles, the single merged `Israel.pois.geojson` (OSM + Off-Road, Off-Road ids prefixed `or-`), `Israel.search.idx`) lives in `data/` (git-ignored) and is published to a **separate Firebase Hosting site** (`navapp-israel-topo-data`, target `data`, staging folder `deploy_data/data/`). The app is a second site (target `app`, folder `devops/dist/`).
+Map data lives in `data/` (git-ignored) and is split across two dedicated Firebase Hosting data sites plus Firebase Storage:
+- **`hosting:data` (`navapp-israel-topo-data`, staging folder `deploy_data/data/`)**: `Israel.osm.pmtiles`, `Israel.pois.geojson` (merged OSM + Off-Road, Off-Road ids prefixed `or-`), `Israel.search.idx`, and `Israel.trails.json`.
+- **Static DEM (`hosting:dem` -> `navapp-israel-topo-dem`, staging folder `deploy_dem/data/` + Firebase Storage `map_data/Israel.dem.pmtiles`)**: `Israel.dem.pmtiles` (1.40 GB, immutable). Storage is primary on open networks, and `hosting:dem` is the automatic `*.web.app` fallback for restricted networks that block `firebasestorage.googleapis.com`.
+- **App (`hosting:app` -> `navapp-israel-topo`, folder `devops/dist/`)**: web shell and service worker.
 
 | Step | Command |
 |---|---|
 | Build search index | `npm run build-search-index` |
 | Verify data files | `npm run verify-data` |
-| Stage + publish data | `devops\upload-map-data.bat` (separate from `deploy-firebase.bat`) |
-| Pull data from hosting | `node devops/download-map-data.mjs` |
+| Stage + publish data (no DEM) | `devops\upload-map-data.bat` (separate from `deploy-firebase.bat` and never touches DEM) |
+| One-time DEM Hosting upload | `devops\upload-dem-once.bat` (publishes ONLY `hosting:dem` once; refuses re-upload if size matches unless `--force`) |
+| Pull data from hosting | `node devops/script_helpers/download-map-data.mjs` |
 
 `Israel.osm.pmtiles` and `Israel.dem.pmtiles` are produced outside this repo (Tilemaker, OpenMapTiles schema; see [tilemaker-nature-reserves-fix.md](./tilemaker-nature-reserves-fix.md)). File names are case-sensitive on Linux/macOS: always use `Israel.*`.
 
@@ -159,8 +164,8 @@ Map data (4 files: DEM, OSM tiles, the single merged `Israel.pois.geojson` (OSM 
 
 | File | Lifecycle | How it is updated |
 |---|---|---|
-| `Israel.pois.geojson` | **Source of truth = Firebase.** Pulled before every edit, auto-uploaded after. | `npm run poi:pull` / `poi:push`; edit scripts should use `withPoiFile()` from `devops/poi-sync.mjs`. Push refuses if the remote changed since your last pull. |
+| `Israel.pois.geojson` | **Source of truth = Firebase.** Pulled before every edit, auto-uploaded after. | `npm run poi:pull` / `poi:push`; edit scripts should use `withPoiFile()` from `devops/script_helpers/poi-sync.mjs`. Push refuses if the remote changed since your last pull. |
 | `Israel.osm.pmtiles` (+ `Israel.search.idx`) | Updated from time to time; clients holding a copy re-download when the ETag changes. | Build externally, then `devops/upload-map-data.bat` (rebuilds the search index if stale). |
-| `Israel.dem.pmtiles` | **Static, never changes, never deleted.** Clients never re-download it. | Uploaded once. `upload-map-data` refuses to replace it unless `--replace-dem`, and `--allow-delete` never removes it. |
+| `Israel.dem.pmtiles` | **Static, never changes, never deleted.** Clients never re-download it. | Uploaded once to Storage and once to `hosting:dem` via `devops/upload-dem-once.bat`. `upload-map-data.bat` never touches or downloads it. |
 
 Backups are manual: `devops/download-map-data.bat` pulls every file, including the POI file, into `data/`. On a fresh machine the app streams the PMTiles from Firebase into the browser range cache. The full archive is saved on the device only when the user downloads it manually, or when an already-saved copy has an update.

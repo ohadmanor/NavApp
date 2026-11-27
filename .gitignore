@@ -21,6 +21,7 @@ src/public/data/*.pmtiles
 src/public/data/*.geojson
 src/public/data/*.idx
 deploy_data/
+deploy_dem/
 backups/
 tools/pbf-to-pmtiles/workspace/
 tools/pbf-to-pmtiles/bin/

@@ -2397,9 +2397,17 @@ export const App: React.FC = () => {
     };
   }, [showToast, refreshOfflineDataConsumers]);
 
-  // Monitor Online / Offline connectivity
+  // Monitor Online / Offline connectivity (and retry DEM automatically if boot occurred offline)
   useEffect(() => {
-    const onOnline = () => setIsOnline(true);
+    const onOnline = () => {
+      setIsOnline(true);
+      void pmtilesRegistry.retryDemIfUnavailable().then((dem) => {
+        if (dem) {
+          setDemInfo(dem);
+          setIsDemUnavailable(false);
+        }
+      });
+    };
     const onOffline = () => setIsOnline(false);
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);

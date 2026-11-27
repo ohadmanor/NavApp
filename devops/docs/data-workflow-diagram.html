@@ -180,23 +180,23 @@
       <div class="card">
         <div class="card-header">
           <span class="file-name">Israel.dem.pmtiles</span>
-          <span class="badge b-storage">Firebase Storage · 1.31 GiB</span>
+          <span class="badge b-storage">Storage + hosting:dem · 1.31 GiB</span>
         </div>
         <div class="meta">Immutable Terrarium 256px PNG elevation pyramid (z0–z14). Powers Hillshade, 3D Terrain, 10m/50m Contours (<code>maplibre-contour</code>), and <code>ElevationService</code>.</div>
         <div class="flow-row">
           <span class="flow-label lbl-online">Online Mode</span>
-          Streamed via <code>VITE_DEM_PMTILES_URL</code> from Firebase Storage (<code>map_data/Israel.dem.pmtiles</code>) using HTTP <code>206 Partial Content</code> byte-range requests + CORS. <code>CachedFetchSource</code> (<code>pmtiles-range-cache-v3</code>, <code>immutable: true</code>) caches every fetched range on disk with an 8s timeout.
+          Primary stream via <code>VITE_DEM_PMTILES_URL</code> (Firebase Storage <code>map_data/Israel.dem.pmtiles</code>) with fast automatic failover to dedicated static <code>hosting:dem</code> (<code>navapp-israel-topo-dem.web.app/data/Israel.dem.pmtiles</code>) for restricted networks that block cloud storage downloads. <code>CachedFetchSource</code> (<code>pmtiles-range-cache-v4</code>, <code>immutable: true</code>, shared cache key) preserves cached ranges across both mirrors.
         </div>
         <div class="flow-row">
           <span class="flow-label lbl-offline">Offline Mode</span>
           <ul>
-            <li><strong>Partial offline:</strong> Previously viewed tiles &amp; headers load from <code>pmtiles-range-cache-v3</code> with zero revalidation.</li>
+            <li><strong>Partial offline:</strong> Previously viewed tiles &amp; headers load from <code>pmtiles-range-cache-v4</code> with zero revalidation even when booting offline.</li>
             <li><strong>Full offline:</strong> User downloads full archive in <em>Offline Maps</em> into OPFS (Web) or <code>filesDir/maps/</code> (Android).</li>
           </ul>
         </div>
         <div class="flow-row">
           <span class="flow-label lbl-devops">DevOps</span>
-          Excluded from <code>hosting:data</code> (too large for Hosting CDN). Upload to Firebase Storage bucket <code>map_data/</code>; <code>download-map-data.bat</code> pulls from Storage.
+          Excluded from <code>hosting:data</code> (<code>upload-map-data.bat</code> never touches it). Uploaded once to Storage and once to <code>hosting:dem</code> via <code>devops/upload-dem-once.bat</code>.
         </div>
       </div>
 
@@ -322,15 +322,21 @@
           <td><span class="warn">Excludes</span> <code>Israel.dem.pmtiles</code> automatically.</td>
         </tr>
         <tr>
+          <td><code>devops/upload-dem-once.bat</code></td>
+          <td><code>hosting:dem</code> (<code>navapp-israel-topo-dem.web.app</code>)</td>
+          <td><code>Israel.dem.pmtiles</code></td>
+          <td>One-time static deploy for restricted-network fallback; skips upload if remote size matches unless <code>--force</code>.</td>
+        </tr>
+        <tr>
           <td>Firebase Console / <code>gcloud storage cp</code></td>
           <td>Firebase Storage (<code>gs://navapp-israel-topo.firebasestorage.app/map_data/</code>)</td>
           <td><code>Israel.dem.pmtiles</code></td>
-          <td>Bucket CORS must allow <code>GET, HEAD, OPTIONS</code> + <code>Range</code> header.</td>
+          <td>Primary DEM mirror; bucket CORS must allow <code>GET, HEAD, OPTIONS</code> + <code>Range</code> header.</td>
         </tr>
         <tr>
           <td><code>devops/download-map-data.bat</code></td>
           <td>Local <code>data/</code></td>
-          <td>All 5 files (DEM from Storage; others from <code>hosting:data</code>)</td>
+          <td>All 5 files (DEM from Storage / <code>hosting:dem</code>; others from <code>hosting:data</code>)</td>
           <td>Syncs local dev workspace with cloud source of truth.</td>
         </tr>
       </tbody>

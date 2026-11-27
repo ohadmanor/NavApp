@@ -11,6 +11,7 @@
  */
 export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo-data.web.app';
 export const REMOTE_DATA_FALLBACK_ORIGIN = 'https://navapp-israel-topo.web.app';
+export const REMOTE_DEM_HOSTING_ORIGIN = 'https://navapp-israel-topo-dem.web.app';
 
 export function getCustomDataOrigin(): string {
   try {
@@ -108,12 +109,43 @@ export function remoteDataUrl(fileName: string): string {
 }
 
 /**
- * Large PMTiles archives: served from the dedicated Firebase data site (HTTP 206 Byte-Range streaming).
+ * Returns the ordered, deduplicated list of candidate URLs for `Israel.dem.pmtiles`.
+ * Primary: explicit `VITE_DEM_PMTILES_URL` (Firebase Storage) when set;
+ * Fallback: dedicated static `hosting:dem` (`navapp-israel-topo-dem.web.app`) for restricted networks,
+ * followed by `hosting:data` and `hosting:app` origins.
+ */
+export function getDemCandidateUrls(): string[] {
+  if (isLocalDevServer()) {
+    return [`${window.location.origin}/data/Israel.dem.pmtiles`];
+  }
+  const candidates: string[] = [];
+  const customDemUrl = getCustomDemPmtilesUrl();
+  if (customDemUrl) {
+    candidates.push(wrapAndroidRemoteProxyUrl('Israel.dem.pmtiles', customDemUrl));
+  }
+  const customOrigin = getCustomDataOrigin();
+  if (customOrigin) {
+    candidates.push(`${customOrigin}/data/Israel.dem.pmtiles`);
+  } else {
+    candidates.push(
+      `${REMOTE_DEM_HOSTING_ORIGIN}/data/Israel.dem.pmtiles`,
+      `${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`,
+      `${REMOTE_DATA_FALLBACK_ORIGIN}/data/Israel.dem.pmtiles`
+    );
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+/**
+ * Large PMTiles archives: served from the dedicated Firebase data/DEM sites (HTTP 206 Byte-Range streaming).
  */
 export function pmtilesUrl(fileName: string): string {
   if (!isLocalDevServer() && fileName === 'Israel.dem.pmtiles') {
     const customDemUrl = getCustomDemPmtilesUrl();
     if (customDemUrl) return wrapAndroidRemoteProxyUrl(fileName, customDemUrl);
+    if (!getCustomDataOrigin()) {
+      return `${REMOTE_DEM_HOSTING_ORIGIN}/data/Israel.dem.pmtiles`;
+    }
   }
   return remoteDataUrl(fileName);
 }

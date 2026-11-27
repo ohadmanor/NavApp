@@ -1,4 +1,4 @@
-import { pmtilesRegistry } from '../pmtiles/PMTilesRegistry';
+import { decodeDemPngSafely, pmtilesRegistry } from '../pmtiles/PMTilesRegistry';
 
 /**
  * Offline Elevation Service powered directly by C:\dev\NavApp\data\Israel.dem.pmtiles.
@@ -6,10 +6,8 @@ import { pmtilesRegistry } from '../pmtiles/PMTilesRegistry';
  *   elevation (meters) = (R * 256 + G + B / 256) - 32768
  */
 export class ElevationService {
-  private static tilePixelCache = new Map<string, Uint8ClampedArray>();
-  private static inFlightRequests = new Map<string, Promise<Uint8ClampedArray | null>>();
-  private static sharedCanvas: HTMLCanvasElement | null = null;
-  private static sharedCtx: CanvasRenderingContext2D | null = null;
+  private static tilePixelCache = new Map<string, Float32Array>();
+  private static inFlightRequests = new Map<string, Promise<Float32Array | null>>();
 
   private static lonLatToTilePixel(lon: number, lat: number, zoom: number) {
     const n = Math.pow(2, zoom);
@@ -26,17 +24,7 @@ export class ElevationService {
     return { tileX, tileY, pixelX, pixelY };
   }
 
-  private static getCanvasContext(): CanvasRenderingContext2D | null {
-    if (!this.sharedCanvas && typeof document !== 'undefined') {
-      this.sharedCanvas = document.createElement('canvas');
-      this.sharedCanvas.width = 256;
-      this.sharedCanvas.height = 256;
-      this.sharedCtx = this.sharedCanvas.getContext('2d', { willReadFrequently: true });
-    }
-    return this.sharedCtx;
-  }
-
-  private static async getDemTilePixels(z: number, x: number, y: number): Promise<Uint8ClampedArray | null> {
+  private static async getDemTileElevations(z: number, x: number, y: number): Promise<Float32Array | null> {
     const key = `${z}/${x}/${y}`;
     const cached = this.tilePixelCache.get(key);
     if (cached) return cached;
@@ -49,28 +37,23 @@ export class ElevationService {
 
     const requestPromise = (async () => {
       try {
-        const tileResult = await demPmtiles.getZxy(z, x, y);
+        let tileResult = await demPmtiles.getZxy(z, x, y).catch(() => undefined);
+        if (!tileResult || !tileResult.data) {
+          await new Promise((r) => setTimeout(r, 250));
+          tileResult = await demPmtiles.getZxy(z, x, y);
+        }
         if (!tileResult || !tileResult.data) return null;
 
         const blob = new Blob([tileResult.data], { type: 'image/png' });
-        const bitmap = await createImageBitmap(blob);
-        const ctx = this.getCanvasContext();
-        if (!ctx) {
-          bitmap.close?.();
-          return null;
-        }
-
-        ctx.clearRect(0, 0, 256, 256);
-        ctx.drawImage(bitmap, 0, 0);
-        bitmap.close?.();
-        const pixels = new Uint8ClampedArray(ctx.getImageData(0, 0, 256, 256).data);
+        const decoded = await decodeDemPngSafely(blob, 'terrarium');
+        if (!decoded?.data) return null;
 
         if (this.tilePixelCache.size > 80) {
           const oldestKey = this.tilePixelCache.keys().next().value;
           if (oldestKey) this.tilePixelCache.delete(oldestKey);
         }
-        this.tilePixelCache.set(key, pixels);
-        return pixels;
+        this.tilePixelCache.set(key, decoded.data);
+        return decoded.data;
       } catch {
         return null;
       } finally {
@@ -94,19 +77,14 @@ export class ElevationService {
   ): Promise<number | null> {
     const { tileX, tileY, pixelX, pixelY } = this.lonLatToTilePixel(lon, lat, zoom);
     const key = `${zoom}/${tileX}/${tileY}`;
-    const pixels = onlyIfCached
+    const elevations = onlyIfCached
       ? this.tilePixelCache.get(key) ?? null
-      : await this.getDemTilePixels(zoom, tileX, tileY);
-    if (!pixels) return null;
+      : await this.getDemTileElevations(zoom, tileX, tileY);
+    if (!elevations) return null;
 
-    const idx = (pixelY * 256 + pixelX) * 4;
-    const r = pixels[idx];
-    const g = pixels[idx + 1];
-    const b = pixels[idx + 2];
-    const a = pixels[idx + 3];
-    if (a === 0) return null;
+    const elevation = elevations[pixelY * 256 + pixelX];
+    if (!Number.isFinite(elevation) || elevation <= -12000) return null;
 
-    const elevation = r * 256 + g + b / 256 - 32768;
     return Math.round(elevation);
   }
 }

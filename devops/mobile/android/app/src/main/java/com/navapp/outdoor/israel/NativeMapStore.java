@@ -61,6 +61,7 @@ public final class NativeMapStore {
 
     public static final String REMOTE_DATA_ORIGIN = "https://navapp-israel-topo-data.web.app";
     public static final String REMOTE_DATA_FALLBACK_ORIGIN = "https://navapp-israel-topo.web.app";
+    public static final String REMOTE_DEM_HOSTING_ORIGIN = "https://navapp-israel-topo-dem.web.app";
     public static final String REMOTE_DEM_STORAGE_URL =
         "https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media";
     private static final String REMOTE_STORAGE_BUCKET_PREFIX =
@@ -438,6 +439,7 @@ public final class NativeMapStore {
                 return path.startsWith("/navapp-israel-topo.firebasestorage.app/");
             }
             return "navapp-israel-topo-data.web.app".equals(lowerHost)
+                || "navapp-israel-topo-dem.web.app".equals(lowerHost)
                 || "navapp-israel-topo.web.app".equals(lowerHost);
         } catch (Exception ex) {
             return false;

@@ -10,10 +10,12 @@ const __dirname = path.dirname(__filename);
 export const ROOT_DIR = path.resolve(__dirname, '..', '..');
 export const DATA_DIR = path.join(ROOT_DIR, 'data');
 export const DEPLOY_DATA_DIR = path.join(ROOT_DIR, 'deploy_data', 'data');
+export const DEPLOY_DEM_DIR = path.join(ROOT_DIR, 'deploy_dem', 'data');
 export const SYNC_META_PATH = path.join(DATA_DIR, '.firebase-sync-meta.json');
 
 export const REMOTE_DATA_ORIGIN = 'https://navapp-israel-topo-data.web.app';
 export const REMOTE_DATA_FALLBACK_ORIGIN = 'https://navapp-israel-topo.web.app';
+export const REMOTE_DEM_HOSTING_ORIGIN = 'https://navapp-israel-topo-dem.web.app';
 export const DEFAULT_DEM_STORAGE_URL =
   'https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media';
 
@@ -164,6 +166,7 @@ export async function probeRemoteDataFile(fileName) {
   if (fileName === 'Israel.dem.pmtiles') {
     const customDem = getCustomDemUrlFromEnv();
     if (customDem) candidateUrls.push(customDem);
+    candidateUrls.push(`${REMOTE_DEM_HOSTING_ORIGIN}/data/${encodeURIComponent(fileName)}`);
   }
   for (const origin of [REMOTE_DATA_ORIGIN, REMOTE_DATA_FALLBACK_ORIGIN]) {
     candidateUrls.push(`${origin}/data/${encodeURIComponent(fileName)}`);

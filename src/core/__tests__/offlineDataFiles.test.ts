@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   REMOTE_DATA_FALLBACK_ORIGIN,
   REMOTE_DATA_ORIGIN,
+  REMOTE_DEM_HOSTING_ORIGIN,
   bundledDataUrl,
+  getDemCandidateUrls,
   isAndroidNativePlatform,
   isLocalDevServer,
   pmtilesUrl,
@@ -614,5 +616,114 @@ describe('Firebase data source (GeoJSON POIs + search index + PMTiles)', () => {
     await expect(registry.mountLocalDemArchive(badHtmlFile, undefined, true)).rejects.toThrow(
       'PMTiles'
     );
+  });
+
+  it('falls back to dedicated hosting:dem when Firebase Storage is blocked and preserves cached DEM offline', async () => {
+    const storageDemUrl =
+      'https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media';
+    const hostingDemUrl = `${REMOTE_DEM_HOSTING_ORIGIN}/data/Israel.dem.pmtiles`;
+    vi.stubEnv('VITE_DEM_PMTILES_URL', storageDemUrl);
+
+    (globalThis as any).window = {
+      location: { origin: 'https://navapp-israel-topo.web.app', hostname: 'navapp-israel-topo.web.app' },
+    };
+
+    expect(getDemCandidateUrls()).toEqual([
+      storageDemUrl,
+      hostingDemUrl,
+      `${REMOTE_DATA_ORIGIN}/data/Israel.dem.pmtiles`,
+      `${REMOTE_DATA_FALLBACK_ORIGIN}/data/Israel.dem.pmtiles`,
+    ]);
+
+    // Simulate restricted network blocking firebasestorage.googleapis.com with 403 while hosting:dem responds
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === storageDemUrl) {
+        return { ok: false, status: 403, headers: new Headers() } as unknown as Response;
+      }
+      if (url === hostingDemUrl) {
+        return {
+          ok: true,
+          status: 206,
+          headers: new Headers({
+            'content-type': 'application/octet-stream',
+            'content-range': 'bytes 0-0/1402183369',
+            'content-length': '1',
+            etag: '"dem-hosting"',
+          }),
+        } as unknown as Response;
+      }
+      return { ok: false, status: 404, headers: new Headers() } as unknown as Response;
+    });
+
+    const probe = await probeRemoteDataFile('Israel.dem.pmtiles');
+    expect(probe).toEqual({
+      url: hostingDemUrl,
+      size: 1402183369,
+      etag: '"dem-hosting"',
+    });
+
+    // When offline and probeRemote returns null, cached DEM header keeps DEM mounted instead of disabling elevation
+    const origCaches = (globalThis as any).caches;
+    try {
+      const headerBuf = new Uint8Array(16384);
+      headerBuf.set([0x50, 0x4d, 0x54, 0x69, 0x6c, 0x65, 0x73, 0x03], 0); // PMTiles v3 magic
+      const store = new Map<string, Response>([
+        [
+          `https://pmtiles-range-cache.invalid/${encodeURIComponent('immutable:Israel.dem.pmtiles')}/0-16384`,
+          new Response(headerBuf, { headers: { 'x-etag': '"cached-dem"' } }),
+        ],
+      ]);
+      (globalThis as any).caches = {
+        open: async () => ({
+          match: async (req: Request) => store.get(req.url)?.clone(),
+          put: async (req: Request, res: Response) => {
+            store.set(req.url, res.clone());
+          },
+          delete: async (req: Request) => store.delete(req.url),
+        }),
+        delete: async () => true,
+      };
+
+      vi.spyOn(OpfsStorageAdapter, 'getStoredFile').mockResolvedValue(null);
+      const registry = new PMTilesRegistry();
+      vi.spyOn(registry, 'probeRemote').mockResolvedValue(null);
+      registry.initProtocols();
+      const defaultDem = registry.getArchive('israel-dem')!;
+      vi.spyOn(defaultDem, 'getHeader').mockResolvedValue({
+        specVersion: 3,
+        rootDirectoryOffset: 127,
+        rootDirectoryLength: 256,
+        jsonMetadataOffset: 383,
+        jsonMetadataLength: 0,
+        leafDirectoryOffset: 0,
+        leafDirectoryLength: 0,
+        tileDataOffset: 1024,
+        tileDataLength: 1402182345,
+        numAddressedTiles: 1,
+        numTileEntries: 1,
+        numTileContents: 1,
+        clustered: true,
+        internalCompression: 2,
+        tileCompression: 1,
+        tileType: 2,
+        minZoom: 0,
+        maxZoom: 14,
+        minLon: 34.11,
+        minLat: 29.41,
+        maxLon: 36.01,
+        maxLat: 33.39,
+        centerZoom: 8,
+        centerLon: 35.0,
+        centerLat: 31.5,
+      });
+      vi.spyOn(defaultDem, 'getMetadata').mockResolvedValue({});
+
+      const mounted = await registry.resolveArchive('israel-dem', 'Israel.dem.pmtiles', true);
+      expect(mounted).not.toBeNull();
+      expect(registry.isDemUnavailable()).toBe(false);
+    } finally {
+      (globalThis as any).caches = origCaches;
+    }
   });
 });

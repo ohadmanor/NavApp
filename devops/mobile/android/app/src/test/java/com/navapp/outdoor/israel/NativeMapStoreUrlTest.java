@@ -14,6 +14,9 @@ public class NativeMapStoreUrlTest {
             "https://navapp-israel-topo-data.web.app/data/Israel.osm.pmtiles"
         ));
         assertTrue(NativeMapStore.isAllowedRemoteUrl(
+            "https://navapp-israel-topo-dem.web.app/data/Israel.dem.pmtiles"
+        ));
+        assertTrue(NativeMapStore.isAllowedRemoteUrl(
             "https://navapp-israel-topo.web.app/data/Israel.osm.pmtiles"
         ));
 

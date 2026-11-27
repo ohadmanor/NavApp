@@ -81,6 +81,14 @@ if (typeof caches !== 'undefined') {
 export interface CachedFetchSourceOptions {
   /** Immutable archives (e.g. Israel.dem.pmtiles) skip online header revalidation when already cached. */
   immutable?: boolean;
+  /** Optional ordered mirror URLs tried automatically if the active URL fails or times out. */
+  fallbackUrls?: readonly string[];
+  /** Optional canonical Cache Storage namespace shared across mirrors of the same immutable archive. */
+  cacheKey?: string;
+  /** Optional per-request timeout in ms (defaults to REMOTE_FETCH_TIMEOUT_MS). */
+  requestTimeoutMs?: number;
+  /** Optional short timeout in ms for offset-0 header checks when fallback mirrors exist. */
+  headerTimeoutMs?: number;
 }
 
 export class CachedFetchSource implements Source {
@@ -91,14 +99,51 @@ export class CachedFetchSource implements Source {
   >();
   private cachePromise: Promise<Cache | null> | null = null;
   private immutable: boolean;
+  private readonly urls: string[];
+  private activeUrlIndex = 0;
+  private readonly cacheNamespace: string;
+  private readonly requestTimeoutMs: number;
+  private readonly headerTimeoutMs: number;
+  private expectedTotalBytes: number | null = null;
 
   constructor(private url: string, options: CachedFetchSourceOptions = {}) {
     this.inner = new FetchSource(url);
     this.immutable = Boolean(options.immutable);
+    this.urls = Array.from(new Set([url, ...(options.fallbackUrls ?? [])].filter(Boolean)));
+    this.cacheNamespace = options.cacheKey || url;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REMOTE_FETCH_TIMEOUT_MS;
+    this.headerTimeoutMs =
+      options.headerTimeoutMs ?? (this.urls.length > 1 ? 3500 : this.requestTimeoutMs);
   }
 
   getKey(): string {
     return this.url;
+  }
+
+  supportsUrl(targetUrl: string): boolean {
+    return this.urls.includes(targetUrl);
+  }
+
+  preferUrl(targetUrl: string): void {
+    const idx = this.urls.indexOf(targetUrl);
+    if (idx >= 0) {
+      this.activeUrlIndex = idx;
+    }
+  }
+
+  getActiveUrl(): string {
+    return this.urls[this.activeUrlIndex] ?? this.url;
+  }
+
+  async hasCachedHeader(): Promise<boolean> {
+    const cache = await this.getCache();
+    if (!cache) return false;
+    try {
+      const hit = await cache.match(this.cacheRequest(0, 16384));
+      return Boolean(hit);
+    } catch {
+      return false;
+    }
   }
 
   private getCache(): Promise<Cache | null> {
@@ -113,26 +158,38 @@ export class CachedFetchSource implements Source {
 
   private cacheRequest(offset: number, length: number): Request {
     return new Request(
-      `https://pmtiles-range-cache.invalid/${encodeURIComponent(this.url)}/${offset}-${length}`
+      `https://pmtiles-range-cache.invalid/${encodeURIComponent(this.cacheNamespace)}/${offset}-${length}`
     );
   }
 
-  private async fetchDirectRange(
+  private parseContentRangeTotal(headers: Headers): number | null {
+    const cr = headers.get('content-range');
+    if (!cr) return null;
+    const slash = cr.lastIndexOf('/');
+    if (slash < 0) return null;
+    const total = Number(cr.slice(slash + 1).trim());
+    return Number.isFinite(total) && total > 0 ? total : null;
+  }
+
+  private async fetchDirectRangeForUrl(
+    targetUrl: string,
     offset: number,
     length: number,
     signal: AbortSignal,
-    etag?: string
+    etag?: string,
+    cacheModeOverride?: RequestCache
   ): Promise<RangeResponse> {
-    const customRange = usesCustomAndroidRangeHeader(this.url);
+    const customRange = usesCustomAndroidRangeHeader(targetUrl);
     const cacheMode: RequestCache | undefined =
-      customRange || (this.inner as any).mustReload || (this.inner as any).chromeWindowsNoCache
+      cacheModeOverride ??
+      (customRange || (this.inner as any).mustReload || (this.inner as any).chromeWindowsNoCache
         ? 'no-store'
-        : undefined;
+        : undefined);
 
-    let resp = await fetch(this.url, {
+    let resp = await fetch(targetUrl, {
       signal,
       cache: cacheMode,
-      headers: buildRangeHeaders(this.url, offset, offset + length - 1),
+      headers: buildRangeHeaders(targetUrl, offset, offset + length - 1),
     });
 
     if (offset === 0 && resp.status === 416) {
@@ -141,10 +198,10 @@ export class CachedFetchSource implements Source {
         throw new Error('Missing content-length on 416 response');
       }
       const actualLength = +contentRange.slice(8);
-      resp = await fetch(this.url, {
+      resp = await fetch(targetUrl, {
         signal,
         cache: 'no-store',
-        headers: buildRangeHeaders(this.url, 0, Math.max(0, actualLength - 1)),
+        headers: buildRangeHeaders(targetUrl, 0, Math.max(0, actualLength - 1)),
       });
     }
 
@@ -153,7 +210,7 @@ export class CachedFetchSource implements Source {
       newEtag = null;
     }
 
-    if (resp.status === 416 || (etag && newEtag && newEtag !== etag)) {
+    if (resp.status === 416 || (etag && newEtag && newEtag !== etag && !this.immutable)) {
       this.inner.mustReload = true;
       throw new EtagMismatch(
         `Server returned non-matching ETag ${etag} after one retry.`
@@ -179,6 +236,18 @@ export class CachedFetchSource implements Source {
       }
     }
 
+    const mirrorTotal = this.parseContentRangeTotal(resp.headers);
+    if (mirrorTotal !== null) {
+      if (this.expectedTotalBytes !== null && mirrorTotal !== this.expectedTotalBytes) {
+        throw new Error(
+          `Mirror archive size mismatch for ${targetUrl}: ${mirrorTotal} !== ${this.expectedTotalBytes}`
+        );
+      }
+      if (this.expectedTotalBytes === null) {
+        this.expectedTotalBytes = mirrorTotal;
+      }
+    }
+
     const data = await resp.arrayBuffer();
     if (!isValidRangeLength(offset, length, data.byteLength)) {
       throw new Error(
@@ -195,6 +264,92 @@ export class CachedFetchSource implements Source {
       cacheControl: resp.headers.get('Cache-Control') || undefined,
       expires: resp.headers.get('Expires') || undefined,
     };
+  }
+
+  private getOrderedUrlIndices(): number[] {
+    const start = this.activeUrlIndex;
+    const indices = [start];
+    for (let i = 0; i < this.urls.length; i++) {
+      if (i !== start) indices.push(i);
+    }
+    return indices;
+  }
+
+  private async fetchWithMirrorFailover(
+    offset: number,
+    length: number,
+    sharedSignal: AbortSignal,
+    etag?: string,
+    cacheModeOverride?: RequestCache
+  ): Promise<RangeResponse> {
+    const perAttemptTimeoutMs =
+      offset === 0 && !etag ? this.headerTimeoutMs : this.requestTimeoutMs;
+    const orderedIndices = this.getOrderedUrlIndices();
+    let lastError: unknown;
+
+    for (let pass = 0; pass < 2; pass++) {
+      if (pass === 1) {
+        await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAY_MS));
+        if (sharedSignal.aborted) {
+          throw lastError ?? new DOMException('The operation was aborted.', 'AbortError');
+        }
+      }
+
+      for (const idx of orderedIndices) {
+        if (sharedSignal.aborted) {
+          throw lastError ?? new DOMException('The operation was aborted.', 'AbortError');
+        }
+        const targetUrl = this.urls[idx];
+        const useInnerSingle =
+          this.urls.length === 1 &&
+          !usesCustomAndroidRangeHeader(targetUrl) &&
+          cacheModeOverride === undefined;
+        const timeoutSignal = createTimeoutSignal(sharedSignal, perAttemptTimeoutMs);
+
+        try {
+          let res: RangeResponse;
+          if (useInnerSingle) {
+            res = await this.inner.getBytes(offset, length, timeoutSignal, etag);
+            if (!res?.data || !isValidRangeLength(offset, length, res.data.byteLength)) {
+              throw new Error(
+                `Unexpected range byte length (${res?.data?.byteLength ?? 0} for ${offset}+${length})`
+              );
+            }
+            if (offset === 0) {
+              validatePmtilesMagicAtOffset0(res.data);
+            }
+          } else {
+            res = await this.fetchDirectRangeForUrl(
+              targetUrl,
+              offset,
+              length,
+              timeoutSignal,
+              etag,
+              pass > 0 ? 'no-store' : cacheModeOverride
+            );
+          }
+
+          if (idx !== this.activeUrlIndex) {
+            this.activeUrlIndex = idx;
+          }
+          return res;
+        } catch (err: any) {
+          lastError = err;
+          if (sharedSignal.aborted) {
+            throw err;
+          }
+          const msg = String(err?.message || '');
+          if (!this.immutable && (err instanceof EtagMismatch || /ETagMismatch/i.test(err?.name || msg))) {
+            throw err;
+          }
+          if (this.urls.length === 1 && /Bad response code: 40[0134]/i.test(msg)) {
+            throw err;
+          }
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Range fetch failed'));
   }
 
   private awaitEntryForCaller(
@@ -305,63 +460,31 @@ export class CachedFetchSource implements Source {
         (typeof navigator === 'undefined' || navigator.onLine !== false);
 
       if (shouldRevalidateHeader) {
-        const reqSignal = createTimeoutSignal(sharedSignal);
         try {
-          const customRange = usesCustomAndroidRangeHeader(this.url);
-          const freshResp = await fetch(this.url, {
-            signal: reqSignal,
-            cache: 'no-store',
-            headers: buildRangeHeaders(this.url, 0, length - 1),
-          });
-          const rawCl = freshResp.headers.get('content-length');
-          const respLen = rawCl ? Number(rawCl) : NaN;
-          if (
-            freshResp.ok &&
-            (freshResp.status === 206 ||
-              (freshResp.status === 200 &&
-                (customRange || (Number.isFinite(respLen) && respLen > 0 && respLen <= length))))
-          ) {
-            const contentType = freshResp.headers.get('content-type') || '';
-            if (contentType.includes('text/html')) {
-              throw new Error('Server returned HTML instead of PMTiles binary');
-            }
-            const data = await freshResp.arrayBuffer();
-            if (!isValidRangeLength(0, length, data.byteLength)) {
-              throw new Error(
-                `Unexpected header byte length (${data.byteLength} for requested ${length})`
-              );
-            }
-            validatePmtilesMagicAtOffset0(data);
-            let newEtag = freshResp.headers.get('etag') || undefined;
-            if (newEtag?.startsWith('W/')) newEtag = undefined;
-            const prevEtag = cachedHit?.headers.get('x-etag') || undefined;
+          const fresh = await this.fetchWithMirrorFailover(0, length, sharedSignal, undefined, 'no-store');
+          const prevEtag = cachedHit?.headers.get('x-etag') || undefined;
 
-            if (cachedHit && newEtag && prevEtag !== newEtag) {
-              // Remote archive changed — drop all cached directory/tile ranges before writing new header
-              await CachedFetchSource.clear();
-              this.cachePromise = null;
-              cache = cacheable ? await this.getCache() : null;
-            }
-            if (cache && data.byteLength > 0) {
-              cache
-                .put(
-                  req,
-                  new Response(data.slice(0), {
-                    headers: newEtag ? { 'x-etag': newEtag } : {},
-                  })
-                )
-                .catch(() => {});
-            }
-            return { data, etag: newEtag };
+          if (!this.immutable && cachedHit && fresh.etag && prevEtag !== fresh.etag) {
+            // Remote archive changed — drop all cached directory/tile ranges before writing new header
+            await CachedFetchSource.clear();
+            this.cachePromise = null;
+            cache = cacheable ? await this.getCache() : null;
           }
-          if (freshResp.status >= 500) {
-            throw new Error(`HTTP ${freshResp.status} from ${this.url}`);
+          if (cache && fresh.data.byteLength > 0) {
+            cache
+              .put(
+                req,
+                new Response(fresh.data.slice(0), {
+                  headers: fresh.etag ? { 'x-etag': fresh.etag } : {},
+                })
+              )
+              .catch(() => {});
           }
+          return fresh;
         } catch (err: any) {
           if (err?.name === 'AbortError' && sharedSignal.aborted) throw err;
           const validHit = await readValidCachedHit();
           if (validHit) return validHit;
-          // Do not double-retry a timed-out or 5xx offset-0 header fetch via inner.getBytes
           throw err;
         }
       }
@@ -369,37 +492,7 @@ export class CachedFetchSource implements Source {
       const validHit = await readValidCachedHit();
       if (validHit) return validHit;
 
-      const fetchOnce = async (): Promise<RangeResponse> => {
-        const timeoutSignal = createTimeoutSignal(sharedSignal);
-        if (usesCustomAndroidRangeHeader(this.url)) {
-          return this.fetchDirectRange(offset, length, timeoutSignal, etag);
-        }
-        const innerRes = await this.inner.getBytes(offset, length, timeoutSignal, etag);
-        if (!innerRes?.data || !isValidRangeLength(offset, length, innerRes.data.byteLength)) {
-          throw new Error(
-            `Unexpected range byte length (${innerRes?.data?.byteLength ?? 0} for ${offset}+${length})`
-          );
-        }
-        if (offset === 0) {
-          validatePmtilesMagicAtOffset0(innerRes.data);
-        }
-        return innerRes;
-      };
-
-      let res: RangeResponse;
-      try {
-        res = await fetchOnce();
-      } catch (firstErr: any) {
-        const msg = String(firstErr?.message || '');
-        const nonTransient =
-          sharedSignal.aborted ||
-          /Bad response code: 40[0134]/i.test(msg) ||
-          /ETagMismatch/i.test(firstErr?.name || msg);
-        if (nonTransient) throw firstErr;
-        await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAY_MS));
-        if (sharedSignal.aborted) throw firstErr;
-        res = await fetchOnce();
-      }
+      const res = await this.fetchWithMirrorFailover(offset, length, sharedSignal, etag);
 
       if (cache && res.data && isValidRangeLength(offset, length, res.data.byteLength)) {
         cache

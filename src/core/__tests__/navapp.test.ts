@@ -1029,6 +1029,118 @@ describe('NavApp Military 1:50k Topographic, 10m Contours & Hebrew RTL Engine Ve
     }
   });
 
+  it('CachedFetchSource fails over across DEM mirrors, rejects mismatched mirror sizes, and shares canonical cacheKey', async () => {
+    const { CachedFetchSource } = await import('../pmtiles/CachedFetchSource');
+
+    const origCaches = (globalThis as any).caches;
+    const origFetch = globalThis.fetch;
+    try {
+      const store = new Map<string, Response>();
+      (globalThis as any).caches = {
+        open: async () => ({
+          match: async (req: Request) => store.get(req.url)?.clone(),
+          put: async (req: Request, res: Response) => {
+            store.set(req.url, res.clone());
+          },
+          delete: async (req: Request) => store.delete(req.url),
+        }),
+        delete: async () => true,
+      };
+
+      const storageUrl =
+        'https://firebasestorage.googleapis.com/v0/b/navapp-israel-topo.firebasestorage.app/o/map_data%2FIsrael.dem.pmtiles?alt=media';
+      const hostingDemUrl = 'https://navapp-israel-topo-dem.web.app/data/Israel.dem.pmtiles';
+      const mismatchedFallbackUrl = 'https://navapp-israel-topo-data.web.app/data/Israel.dem.pmtiles';
+      const requestedUrls: string[] = [];
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        const range = (init?.headers as Record<string, string>)?.range || '';
+        if (url === storageUrl) {
+          return new Response(null, { status: 403 });
+        }
+        if (url === mismatchedFallbackUrl) {
+          return new Response(new Uint8Array(100), {
+            status: 206,
+            headers: {
+              'content-range': 'bytes 200-299/999999',
+              'content-length': '100',
+            },
+          });
+        }
+        if (url === hostingDemUrl) {
+          if (range === 'bytes=0-16383') {
+            const hdr = new Uint8Array(16384);
+            hdr.set([0x50, 0x4d, 0x54, 0x69, 0x6c, 0x65, 0x73, 0x03], 0);
+            return new Response(hdr, {
+              status: 206,
+              headers: {
+                'content-range': 'bytes 0-16383/1402183369',
+                'content-length': '16384',
+              },
+            });
+          }
+          return new Response(new Uint8Array(100).fill(7), {
+            status: 206,
+            headers: {
+              'content-range': 'bytes 200-299/1402183369',
+              'content-length': '100',
+            },
+          });
+        }
+        return new Response(null, { status: 404 });
+      }) as any;
+
+      const src = new CachedFetchSource(storageUrl, {
+        immutable: true,
+        fallbackUrls: [hostingDemUrl],
+        cacheKey: 'immutable:Israel.dem.pmtiles',
+        requestTimeoutMs: 4000,
+        headerTimeoutMs: 2000,
+      });
+
+      const hdrRes = await src.getBytes(0, 16384);
+      expect(hdrRes.data.byteLength).toBe(16384);
+      expect(src.getActiveUrl()).toBe(hostingDemUrl);
+
+      // Subsequent tile range goes straight to promoted hostingDemUrl (skips blocked Storage)
+      const beforeTileCalls = requestedUrls.length;
+      const tileRes = await src.getBytes(200, 100);
+      expect(tileRes.data.byteLength).toBe(100);
+      expect(requestedUrls.slice(beforeTileCalls)).toEqual([hostingDemUrl]);
+      expect(await src.hasCachedHeader()).toBe(true);
+
+      // Canonical cacheKey shares cached tiles across a fresh source instance pointed at a different primary URL
+      const otherInstance = new CachedFetchSource(mismatchedFallbackUrl, {
+        immutable: true,
+        fallbackUrls: [hostingDemUrl],
+        cacheKey: 'immutable:Israel.dem.pmtiles',
+      });
+      const cachedCallsBefore = requestedUrls.length;
+      const cachedTile = await otherInstance.getBytes(200, 100);
+      expect(cachedTile.data.byteLength).toBe(100);
+      expect(requestedUrls.length).toBe(cachedCallsBefore);
+
+      // Size mismatch guard rejects a mirror whose Content-Range total differs from expected archive size
+      await expect(
+        (async () => {
+          const mismatchSrc = new CachedFetchSource(hostingDemUrl, {
+            immutable: true,
+            fallbackUrls: [mismatchedFallbackUrl],
+            cacheKey: 'immutable:mismatch-test',
+          });
+          await mismatchSrc.getBytes(0, 16384); // establishes expectedTotalBytes = 1402183369
+          mismatchSrc.preferUrl(mismatchedFallbackUrl);
+          return mismatchSrc.getBytes(200, 100); // mismatchedFallbackUrl returns /999999 -> rejected, fails over to hostingDemUrl
+        })()
+      ).resolves.toMatchObject({ data: expect.any(ArrayBuffer) });
+    } finally {
+      (globalThis as any).caches = origCaches;
+      globalThis.fetch = origFetch;
+    }
+  });
+
   it('controls master POI visibility and all 6 POI category sub-toggles cleanly in Layers', () => {
     expect(DEFAULT_LAYER_VISIBILITY.pois).toBe(true);
     expect(DEFAULT_LAYER_VISIBILITY.poiWater).toBe(true);
